@@ -1,0 +1,7 @@
+# Node / opencode runtime (never commit anything machine-specific)
+node_modules/
+*.log
+.thumbs/
+.graft/
+.superpowers/
+!docs/superpowers/specs/
