@@ -343,7 +343,52 @@ Pipeline-level tests:
 - Windows store-patch script correctness against junctioned pnpm store dirs
   (verified fact from the current machine's install history).
 
-## 13. Success criteria
+## 13. Prior art: software factories and harness design (research grounding)
+
+This design is deliberately convergent with what the current (2026) literature on
+harness engineering and agent factories reports as the working shape. The
+sources below informed the gates, state model, context economy, and enforcement
+decisions in this spec.
+
+### 13.1 Sources
+
+1. Addy Osmani, *Software Factories, Light and Dark* —
+   https://addyosmani.com/blog/software-factories/
+2. Michael Mueller (re:cinq), *Building Software Factories: The Blueprint for
+   AI-Native Delivery* — https://www.re-cinq.com/blog/building-agent-factories/
+3. Martin C. Richards, *Building Your Own Agent Harness* (the Atelier project) —
+   https://martinrichards.me/ (Atelier installs via `npx skills add martinffx/atelier`)
+4. Ryan Lopopolo (OpenAI), *Harness engineering: leveraging Codex in an
+   agent-first world* — https://openai.com/index/harness-engineering/
+5. Dex Horthy (HumanLayer), *12-Factor Agents* —
+   https://github.com/humanlayer/12-factor-agents
+
+### 13.2 What they agree on, and where this spec takes it
+
+| Finding (source) | Implication adopted here |
+|---|---|
+| Factory = many harnessed loops, drained through a review gate, humans owning it from above (1) | The `factory` conductor wraps the phase pipeline; gates A/B/C are the review gates; humans stay the outer loop |
+| "You can only hand a loop as much autonomy as you can cheaply and reliably verify" — verification is the narrow neck (1) | Gates are required before (B) and after (C) autonomy spans; the pipeline never ships without a verified+reviewed gate |
+| Lit factory moves judgment upstream: a reviewed plan beats fixing generated code (1); "never let the agent write code until a written plan is reviewed and approved" (3, Boris Tane) | Spec gate A and plan gate B are hard human gates before any implementation; the plan is shared mutable state between human and agent |
+| Agents are deterministic code with LLM steps at the right points; owning control flow as a graph makes failures legible (1, 5: factors 8/12) | The conductor is a deterministic phase state machine; beads stores the phase; each phase entry invokes exactly one skill |
+| Short loops: agents hold 3–10 steps, lose the thread past 20 (1, 5: factor 10) | Implementation runs as one focused task per subagent; no sprawling in-session loops |
+| Human gates as tool calls; execution state unified with business state; resume/pause via simple APIs (5: factors 7, 5, 6) | Gates are genuine stops in the pipeline; the beads issue carries both the feature and its `phase:`; resumes from `bd show` |
+| AGENTS.md as a table of contents + `docs/` as system of record, enforced mechanically, repo-local and versioned (4) | The conductor SKILL.md is thin; logic lives in bundled docs loaded on demand (progressive disclosure); the bundle is one committed repo |
+| Harness = "a set of skills, workflows, and methodology" (3); harness alone moved a coding agent ~14 points (3) | The factory skill is the harness: it teaches the agent how this project thinks and builds |
+| Enforce invariants, not implementations; taste captured once, enforced continuously (4) | `factory selfcheck` + phase-skill audit enforce the invariant "right skill ran at the right phase"; gates cannot pass with a skipped skill |
+| Spec quality is the bottleneck for agents (2) | Gates A/B are on spec and plan artifacts, not on code volume |
+| Dolt used to federate agent work via git-semantics database (2, Wasteland) | beads (Dolt-backed) as durable phase state |
+
+### 13.3 What this spec deliberately does NOT adopt
+
+- **Lights-out shipping** (dark factories, source 1): out of scope. Gate C keeps a
+  human at ship; per criterion 2 above this is a core requirement, not a sliding
+  preference.
+- **Big-investment orchestration frameworks**: validation, not orchestration, is
+  the load-bearing part (sources 1, 2). The factory stays "fewer random pieces",
+  with the conductor as the only new component.
+
+## 14. Success criteria
 
 1. On a fresh machine: `bd`, `graft`, 3 plugins, 29 commands, task agent, MCP,
    and the factory skill are installed by one command and pass `selfcheck`.
@@ -356,4 +401,5 @@ Pipeline-level tests:
 5. A dogfooded trivial feature lands with a verified, reviewed, closed flow.
 6. The brainstorm phase pairs the human's vision with the system's own research
    (run only with the user's permission), and the spec cites the sources that
-   informed it.
+   informed it — including the prior-art grounding in §13, which must stay in
+   sync with any design change it justifies.
