@@ -27,6 +27,9 @@ managed, idempotently-installable package.
 - Mandatory, enforced skill usage per phase (superpowers set) with audit trails.
 - Durable, restart-proof phase state via beads (Dolt-backed), injected into every
   agent-loop model call.
+- Brainstorming = human vision questions **plus** the system's own research
+  (web, docs, ecosystem, prior art) feeding sharper questions and informed
+  design options — research tools are used only after the user says yes.
 - Code-graph context (graft) powering plan / implement / debug.
 - On-demand project skill discovery (skills.sh) that is deduped, lockfile-pinned,
   and context-cheap.
@@ -100,7 +103,7 @@ are allowed (no ad-hoc fixes).
 
 ```
 factory <feature-name>            # create beads issue, start phase 1
-  → 1 brainstorm                   # brainstorming skill
+  → 1 brainstorm                   # brainstorming skill: vision questions + own research
   → 2 spec                         # spec doc → docs/superpowers/specs/
   → GATE A                         # human approves spec  ── STOP, wait
   → 3 plan                         # writing-plans → plan doc, task breakdown
@@ -114,7 +117,33 @@ factory <feature-name>            # create beads issue, start phase 1
   → 8 close                        # bd update, session-close protocol
 ```
 
-## 6. The conductor (`factory` skill)
+### 5.4 Brainstorm in detail: vision questions + self-research
+
+Phase 1 runs two tracks that feed each other:
+
+- **Intent/vision elicitation** — the `brainstorming` skill's question flow: one
+  focused question at a time draws out the feature's purpose, who it serves, and
+  what success looks like. The answers become the design brief.
+- **Autonomous research** — the system researches on its own, before and during
+  the questions: web/technology search and fetch (official docs, ecosystem and
+  similar projects, alternatives, prior art, current version landscape), plus
+  in-repo exploration. The goal is that questions are sharper and design options
+  are *informed*, not guessed.
+- **Permission gate** — research tools are never used silently. Before the first
+  external research action (web search/fetch) the conductor asks the human for
+  permission ("may I research this?"). A yes covers the feature's brainstorm; a
+  no keeps research to in-repo context only and the phase still runs.
+
+Interaction model (iterative, but outward-facing one question at a time):
+
+1. Light research first → sharper opening questions.
+2. Answers shape deeper research (follow-ups, docs, comparisons).
+3. Research produces informed options, presented alongside the remaining
+   questions and carried into the spec phase with sources.
+
+Token discipline: research is summarized, never dumped raw; sources are noted and
+kept with the design brief for the spec phase. The human-facing cadence is still
+exactly one question per message — the research works underneath it.
 
 Commands implemented by the conductor (thin wrappers over existing tools):
 
@@ -325,3 +354,6 @@ Pipeline-level tests:
 4. Project skills install deduped, locked, and context-cheap; nothing unused is
    loaded.
 5. A dogfooded trivial feature lands with a verified, reviewed, closed flow.
+6. The brainstorm phase pairs the human's vision with the system's own research
+   (run only with the user's permission), and the spec cites the sources that
+   informed it.
