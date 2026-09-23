@@ -1,0 +1,15 @@
+# opencode-factory skill catalog — DATA, not an engine.
+# Discovery looks up the feature's keywords here first; nothing else reads this.
+# rank: 1 = best fit for the actual work, 2 = official/verified, 3 = most-used.
+version: 1
+topics:
+  brainstorming:
+    - name: brainstorming
+      source: obra/superpowers
+      rank: 1
+      why: enforcing mandatory skill for phase 1 (project's superpowers set)
+  skill-discovery:
+    - name: find-skills
+      source: vercel-labs/skills
+      rank: 1
+      why: official Vercel skill; leaderboard-first search with skills.sh
