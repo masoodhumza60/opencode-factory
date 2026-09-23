@@ -171,7 +171,7 @@ merge_config() {
     if [ "$DRY_RUN" = 1 ]; then
         dry "node --print process.execPath => $node_path"
         dry "write temp snippet: bundle snippet + mcp.servers.graft = {type:local, command:[$node_path, ${graft_cli_js:-<resolved-graft-cli.js>}, mcp], disabled:false} + plugins += [$pin]"
-        if [ -f "$user_cfg" ]; then dry "user config: $user_cfg (read-only, preserved except drop/own rules)"
+        if [ -f "$user_cfg" ]; then dry "user config: $user_cfg (read-only; purely additive merge)"
         else dry "echo '{}' > \"$user_cfg\"   (no existing config)"; fi
         dry "node \"$bundle/scripts/merge-config.mjs\" --snippet <resolved-snippet> --user \"$user_cfg\" --out \"$user_cfg\""
         return

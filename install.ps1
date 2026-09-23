@@ -178,7 +178,7 @@ function Merge-Config {
     if ($DryRun) {
         Say "[dry-run] node --print process.execPath => $script:NodePath"
         Say "[dry-run] write temp snippet: bundle snippet + mcp.servers.graft = {type:local, command:[$script:NodePath, $graftCliJs, mcp], disabled:false} + plugins += [$pin]"
-        if (Test-Path $userCfg) { Say "[dry-run] user config: $userCfg (read-only, preserved except drop/own rules)" }
+        if (Test-Path $userCfg) { Say "[dry-run] user config: $userCfg (read-only; purely additive merge)" }
         else                    { Say "[dry-run] echo '{}' > '$userCfg'   (no existing config)" }
         Say "[dry-run] & node '$script:NodePath' '$bundle\scripts\merge-config.mjs' --snippet <resolved-snippet> --user '$userCfg' --out '$userCfg'"
         return
