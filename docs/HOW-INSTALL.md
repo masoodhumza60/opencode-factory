@@ -89,9 +89,9 @@ Both installers run the same steps in the same order:
    existing keys are preserved except where the bundle owns them. The bundle
    adds the DCP plugin pin (`plugins/dcp.pin`) to `plugins` and owns
    `mcp.servers.graft` (`{type: local, command: [node, <graft>/dist/cli.js,
-   mcp]}`, enabled). The disabled demo servers from the source environment
-   (`chrome-devtools`, `github`, `nuxt`, `nuxt-ui`, `nuxt-hub`) are dropped
-   only when your own entry for them is disabled — an enabled one survives.
+   mcp]}`, enabled). The merge is purely additive: every MCP server you
+   already have — enabled or disabled — is preserved exactly as configured;
+   nothing is ever removed.
 7. **Install the factory skill** — copy `skills/factory/SKILL.md` to
    `~/.agents/skills/factory/`, plus `docs/conductor.md` and
    `docs/how-factory-works.md` to `~/.agents/skills/factory/docs/`. The
