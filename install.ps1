@@ -13,6 +13,16 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# node >= 20 prereq: checked before any node-dependent work (also under -DryRun)
+if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+    Write-Host 'node >= 20 is required. Install from https://nodejs.org and re-run.' -ForegroundColor Red
+    exit 1
+}
+if ((& node -p "process.versions.node.split('.')[0]*1 >= 20") -ne 'true') {
+    Write-Host "node >= 20 is required (found $(& node --version)). Install from https://nodejs.org and re-run." -ForegroundColor Red
+    exit 1
+}
+
 $bundle       = $PSScriptRoot
 $ocConfig     = Join-Path $env:USERPROFILE ".config\opencode"
 $agentsSkills = Join-Path $env:USERPROFILE ".agents\skills"
@@ -92,6 +102,9 @@ function Install-Graft {
         return
     }
     if (-not $found) {
+        if (-not (Get-Command pnpm -ErrorAction SilentlyContinue)) {
+            throw 'pnpm is required for graft. Install pnpm (npm i -g pnpm) and re-run, or run: pnpm add -g @nanonets/graft@0.18.0'
+        }
         & pnpm add -g @nanonets/graft@0.18.0
         if ($LASTEXITCODE -ne 0) { throw 'pnpm add -g @nanonets/graft@0.18.0 failed' }
     }
@@ -196,8 +209,21 @@ function Merge-Config {
 function Install-Skills {
     $srcSk = Join-Path $bundle 'skills\factory\SKILL.md'
     $dstSk = Join-Path $agentsSkills 'factory\SKILL.md'
-    if ($DryRun) { Say "[dry-run] Copy-Item '$srcSk' -> '$dstSk'" }
-    elseif (Test-Path $srcSk) { Copy-Item $srcSk $dstSk -Force; Say "factory skill installed -> $dstSk" }
+    $srcDocs = @(
+        (Join-Path $bundle 'docs\conductor.md'),
+        (Join-Path $bundle 'docs\how-factory-works.md')
+    )
+    $dstDocs = Join-Path (Split-Path $dstSk) 'docs'
+    if ($DryRun) {
+        Say "[dry-run] Copy-Item '$srcSk' -> '$dstSk'"
+        Say "[dry-run] Copy-Item '$bundle\docs\conductor.md', '$bundle\docs\how-factory-works.md' -> '$dstDocs'"
+    }
+    elseif (Test-Path $srcSk) {
+        Copy-Item $srcSk $dstSk -Force
+        New-Item -ItemType Directory -Force -Path $dstDocs | Out-Null
+        Copy-Item $srcDocs $dstDocs -Force
+        Say "factory skill installed -> $dstSk (self-contained: docs/ ships conductor + how-factory-works)"
+    }
     else { SayErr "warning: $srcSk not in bundle yet (conductor skill lands with the docs/discovery task); skip - re-run install once it is present." }
     # NOTE: .agents/skills/skills.lock.json is created by `factory discover`, not by install.
 }

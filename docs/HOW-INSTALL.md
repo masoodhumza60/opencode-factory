@@ -12,15 +12,16 @@ installers' success summary points back to this file.
 ## Prerequisites
 
 - **Windows 10/11** with **PowerShell 5.1+** (ships with Windows), **or** Linux/
-  macOS with **bash** and **node ≥ 20**. The Unix installer refuses to start
-  without node ≥ 20 (both installers need it to render plugins and run the
-  merge/selfcheck scripts).
+  macOS with **bash**.
+- **node ≥ 20** (nodejs.org) — both installers check at startup and refuse to
+  run without it. Every installer step needs node: plugin rendering, config
+  merge, and the selfcheck.
 - **git** (required by `executables/install-bd.sh` on Unix; harmless elsewhere).
 - **opencode already installed.** The installer merges plugins and config into
   opencode's user directory, and needs `opencode-pty` available in opencode's
   npm cache — run `opencode` once before installing so it installs its
   dependencies.
-- **pnpm** (only needed for the graft step; `install.sh` will stop with a clear
+- **pnpm** (only needed for the graft step; both installers stop with a clear
   message if it's missing).
 
 One note on the two non-opencode CLIs:
@@ -50,8 +51,13 @@ Both installers accept the same flags:
 | Flag | Effect |
 |---|---|
 | `-SkipBd` | skip installing/verifying the beads CLI |
-| `-SkipGraft` | skip installing/patching graft (plugins + config merge still happen) |
+| `-SkipGraft` | skip installing/patching graft. An existing graft install is still required — the config merge needs its `cli.js`, and the installer fail-stops rather than fabricate a broken MCP entry. |
 | `-DryRun` | print every step without changing anything (exits 0) |
+
+`install.ps1 -DryRun` / `install.sh -DryRun` always exit 0 (preview only). The
+bd sub-script is a semantic signal on its own: `executables/install-bd.ps1
+-DryRun` prints the same preview, but exits 1 when bd is absent at the managed
+path (a real run would have to install it).
 
 `./install.sh -DryRun` on Unix (or `-SkipBd -DryRun`) is a good first taste of
 what a real install will do on your machine. Re-running the installer is safe:
@@ -81,12 +87,16 @@ Both installers run the same steps in the same order:
 6. **Merge config** — seed `~/.config/opencode/opencode.json` with `{}` if
    absent, then `scripts/merge-config.mjs` performs a **union merge**: your
    existing keys are preserved except where the bundle owns them. The bundle
-   adds the DCP plugin pin (`plugins/dcp.pin`) to `plugins`, owns
+   adds the DCP plugin pin (`plugins/dcp.pin`) to `plugins` and owns
    `mcp.servers.graft` (`{type: local, command: [node, <graft>/dist/cli.js,
-   mcp]}`, enabled), and drops a fixed set of disabled demo servers
-   (`chrome-devtools`, `github`, `nuxt`, `nuxt-ui`, `nuxt-hub`).
+   mcp]}`, enabled). The disabled demo servers from the source environment
+   (`chrome-devtools`, `github`, `nuxt`, `nuxt-ui`, `nuxt-hub`) are dropped
+   only when your own entry for them is disabled — an enabled one survives.
 7. **Install the factory skill** — copy `skills/factory/SKILL.md` to
-   `~/.agents/skills/factory/`.
+   `~/.agents/skills/factory/`, plus `docs/conductor.md` and
+   `docs/how-factory-works.md` to `~/.agents/skills/factory/docs/`. The
+   installed skill is self-contained: its `docs/` subdir ships the conductor
+   and how-it-works docs next to the reference.
 8. **Selfcheck** — run `node scripts/factory-selfcheck.mjs`. Any failed check
    aborts the install (`factory selfcheck failed - install incomplete.`).
 
@@ -139,9 +149,11 @@ The installer runs the selfcheck itself; to re-check on demand:
 - **Bare**: `node scripts/factory-selfcheck.mjs` (`--tokens` flag works here
   too).
 
-Checks covered: all three plugins load with zero failures (from the last 80
-lines of the opencode log), `bd` and `graft` respond, the factory skill is
-deployed to `~/.agents/skills/factory/SKILL.md`, and a beads store is present.
+Checks covered: all three plugins loaded with zero failures in the latest
+opencode run that loaded plugins (run-scoped evidence taken from the structured
+`msg="loading plugin"` / `message="failed to load plugin"` lines of the
+opencode log), `bd` and `graft` respond, the factory skill is deployed to
+`~/.agents/skills/factory/SKILL.md`, and a beads store is present.
 Failure output says `N check(s) failed. Re-run install.ps1/install.sh.`
 
 ## Troubleshooting

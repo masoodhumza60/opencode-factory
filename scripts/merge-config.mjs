@@ -19,14 +19,25 @@ const merged = { ...user };
 // plugins: union, dedupe, bundle plugin list wins on duplicates
 const bundlePlugins = snippet.plugins ?? [];
 merged.plugins = [...new Set([...(user.plugins ?? []), ...bundlePlugins])];
-// mcp.servers: bundle owns `graft`; bundle disables these servers; else user keeps theirs
+// mcp.servers: bundle owns `graft`; the disabled demo servers are dropped only
+// when the user's own entry is disabled: an enabled one survives as the
+// user's entry (bundle wins only where it explicitly owns a value). Else user
+// keeps theirs.
 const owns = new Set(["graft"]);
 const disabledDrops = new Set(["chrome-devtools", "github", "nuxt", "nuxt-ui", "nuxt-hub"]);
-const servers = { ...(user.mcp?.servers ?? {}) };
+const userServers = user.mcp?.servers ?? {};
+const servers = { ...userServers };
 for (const [name, s] of Object.entries(snippet.mcp?.servers ?? {})) servers[name] = s;
 const finalServers = {};
 for (const [name, cfg] of Object.entries(servers)) {
-  if (owns.has(name) || !disabledDrops.has(name)) finalServers[name] = cfg;
+  if (owns.has(name) || !disabledDrops.has(name)) {
+    finalServers[name] = cfg;
+    continue;
+  }
+  const userCfg = userServers[name];
+  const userDisabled = !!userCfg && (userCfg.disabled === true || userCfg.enabled === false);
+  if (userDisabled) continue; // bundle drops disabled demo servers only
+  finalServers[name] = cfg;
 }
 merged.mcp = { ...(user.mcp ?? {}), servers: finalServers };
 writeFileSync(outPath, JSON.stringify(merged, null, 2) + "\n", "utf8");

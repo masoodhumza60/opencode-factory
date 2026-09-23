@@ -50,7 +50,8 @@ elseif ($winget) {
 
 # --- fallback: copy a known-good bd from PATH --------------------------------
 $bdOnPath = Get-Command bd -ErrorAction SilentlyContinue
-if (-not (Test-Path $bdExe)) {
+if ($bdOnPath -and $bdOnPath.Source -eq $bdExe) { $bdOnPath = $null }  # the managed exe itself is the broken one; never copy it onto itself
+if ((-not (Test-Path $bdExe)) -or (-not (Test-BdWorking $bdExe))) {
     if ($DryRun) {
         if ($bdOnPath) { Write-Host "[dry-run] Copy-Item '$($bdOnPath.Source)' -> '$bdExe'"; Write-Host "[dry-run] ensure '$bdDir' on user PATH" }
         else { Write-Host "[dry-run] bd not found on PATH; referencing bd elsewhere in PATH (no install step run)" }

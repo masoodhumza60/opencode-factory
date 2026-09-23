@@ -19,7 +19,14 @@ for arg in "$@"; do
     esac
 done
 
-command -v node >/dev/null 2>&1 || { echo "install: node >= 20 is required" >&2; exit 1; }
+if ! command -v node >/dev/null 2>&1; then
+    echo "install: node >= 20 is required (install from https://nodejs.org)" >&2
+    exit 1
+fi
+if [ "$(node -p 'process.versions.node.split(".")[0]*1 >= 20' 2>/dev/null)" != "true" ]; then
+    echo "install: node >= 20 is required (found $(node --version 2>/dev/null || echo unknown); install from https://nodejs.org)" >&2
+    exit 1
+fi
 
 say() { printf '%s\n' "$*"; }
 dry() { say "[dry-run] $*"; }
@@ -86,11 +93,11 @@ install_graft() {
             dry "pnpm add -g @nanonets/graft@0.18.0 (then re-resolve the package dir)"
         fi
         local patch_dir="${found:-<resolved-graft-dir>}"
-        dry "node \"$bundle/scripts/graft-patch-extract.mjs\" --dir \"$patch_dir\""
         if command -v powershell >/dev/null 2>&1; then
+            dry "node \"$bundle/scripts/graft-patch-extract.mjs\" --dir \"$patch_dir\""
             dry "powershell -NoProfile -ExecutionPolicy Bypass -File \"$bundle/scripts/graft-patch-store.ps1\""
         else
-            dry "skip graft-patch-store.ps1 (Windows-only win32-x64 prebuild rename; no PowerShell here)"
+            dry "skip graft patches (Windows-only kotlin-optional extract + win32-x64 prebuild rename; no PowerShell here)"
         fi
         dry "verify: graft --version"
         graft_pkg="$found"
@@ -102,11 +109,11 @@ install_graft() {
         found="$(find_graft_dir)" || { echo "install: graft not found after pnpm add -g" >&2; exit 1; }
     fi
     graft_pkg="$found"
-    node "$bundle/scripts/graft-patch-extract.mjs" --dir "$graft_pkg"
     if command -v powershell >/dev/null 2>&1; then
+        node "$bundle/scripts/graft-patch-extract.mjs" --dir "$graft_pkg"
         powershell -NoProfile -ExecutionPolicy Bypass -File "$bundle/scripts/graft-patch-store.ps1"
     else
-        say "note: graft-patch-store.ps1 skipped (Windows-only win32-x64 prebuild rename)."
+        say "note: graft patches skipped (Windows-only kotlin-optional extract + win32-x64 prebuild rename; no PowerShell here)."
     fi
     if graft --version >/dev/null 2>&1; then :; else echo "install: graft --version check failed" >&2; exit 1; fi
     say "graft ready ($graft_pkg/dist/cli.js)."
@@ -195,13 +202,17 @@ EOF
 # --- skills ---------------------------------------------------------------------
 install_skills() {
     local src_sk="$bundle/skills/factory/SKILL.md"
+    local docs=(conductor.md how-factory-works.md)
     if [ "$DRY_RUN" = 1 ]; then
         dry "cp \"$src_sk\" \"$agents_skills/factory/\""
+        dry "cp \"$bundle/docs/conductor.md\" \"$bundle/docs/how-factory-works.md\" \"$agents_skills/factory/docs/\""
         return
     fi
     if [ -f "$src_sk" ]; then
         cp "$src_sk" "$agents_skills/factory/"
-        say "factory skill installed -> $agents_skills/factory/SKILL.md"
+        mkdir -p "$agents_skills/factory/docs"
+        for d in "${docs[@]}"; do cp "$bundle/docs/$d" "$agents_skills/factory/docs/"; done
+        say "factory skill installed -> $agents_skills/factory/SKILL.md (self-contained: docs/ ships conductor + how-factory-works)"
     else
         say "warning: $src_sk not in bundle yet (conductor skill lands with the docs/discovery task); skip - re-run install once it is present."
     fi
