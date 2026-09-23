@@ -4,7 +4,7 @@
 // usage: node merge-config.mjs --snippet <path> --user <path> --out <path>
 import { readFileSync, writeFileSync } from "node:fs";
 
-const get = (argv, key) => argv[argv.indexOf(key) + 1];
+const get = (argv, key) => { const i = argv.indexOf(key); return i === -1 ? undefined : argv[i + 1]; };
 const snippetPath = get(process.argv, "--snippet");
 const userPath = get(process.argv, "--user");
 const outPath = get(process.argv, "--out");
