@@ -8,7 +8,9 @@ review → ship) with human gates at spec, plan, and ship.
   `install.ps1` / `install.sh`).
 - **Let an AI agent set up a new machine:** paste the prompt from
   [`AI-AGENT-SETUP.md`](AI-AGENT-SETUP.md) into any AI coding agent (OpenCode)
-  on that machine — it installs everything itself.
+  on that machine — it installs everything itself. The prompt is
+  self-contained: the agent needs no prior knowledge of any of these tools,
+  it just runs the installer and checks the result.
 - **Let an AI agent use it in a project (new or existing):** paste the prompt
   from [`AI-AGENT-PROJECT.md`](AI-AGENT-PROJECT.md) into a session opened in
   that project — it verifies the machine, runs `/factory onboard`, and drives
