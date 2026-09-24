@@ -25,20 +25,9 @@ review → ship) with human gates at spec, plan, and ship.
 Paste this into an AI coding agent (OpenCode) running on the new machine:
 
 ```
-Set up opencode-factory on this machine:
+Install opencode-factory on this machine:
 1. git clone https://github.com/masoodhumza60/opencode-factory && cd opencode-factory
-2. Read AI-AGENT-SETUP.md — the full self-contained prompt (rules, error
-   handling, fresh-session notes). Follow it end-to-end from here.
-3. Check `node --version` is 20 or newer — if not, STOP and tell me.
-4. Install:
-   - Windows:  powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
-   - macOS/Linux: ./install.sh   (or: bash install.sh)
-5. Check it: node scripts/factory-selfcheck.mjs --tokens — all 6 checks must
-   print PASS.
-6. Report the results. Say OK only when every check PASSes.
-
-Note for later: AI-AGENT-PROJECT.md is the prompt for building features in a
-new project — use it when I open a session in a project folder.
+2. Read https://raw.githubusercontent.com/masoodhumza60/opencode-factory/master/AI-AGENT-SETUP.md and follow it end-to-end.
 ```
 
 Prompts: [`AI-AGENT-SETUP.md`](AI-AGENT-SETUP.md) — full machine setup ·
