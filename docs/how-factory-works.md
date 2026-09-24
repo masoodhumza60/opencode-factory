@@ -79,8 +79,12 @@ The factory deliberately does not try to become:
   bootstrap scripts (`install.ps1` / `install.sh`) install beads; re-run them
   — they are idempotent. `factory selfcheck` verifies CLIs resolve.
 - **No graft graph / graft navigation silent.** `factory onboard` runs
-  `graft build` when no graph exists. Reinstalls or upgrades can reset graft's
-  native patches; the bootstrap re-applies them as part of install, and
+  `graft build` when no graph exists, and the conductor **re-runs it** at
+  implement/debug entry whenever the graph is empty or stale (it never relies
+  on an empty graph silently — check "Graft context freshness" in
+  `docs/conductor.md`). `factory selfcheck` prints a `WARN graft graph has 0
+  nodes` line when a repo's graph is empty. Reinstalls or upgrades can reset
+  graft's native patches; the bootstrap re-applies them as part of install, and
   `install.ps1` / `install.sh` re-running is the fix.
 - **Graft MCP not connecting.** `factory selfcheck` asserts the graft server
   handshake (it should return its tools). If it fails, re-run the installer
@@ -91,7 +95,7 @@ The factory deliberately does not try to become:
   in-session. Re-invoke the skill and actually load its content; re-run the
   phase entry ("Invoke skill X now and follow it") before recording it. At any
   gate, a skipped skill forces the phase to re-run — the audit
-  (`bd update <feature-id> --note "phase:<name> ✓ <skill>"`) shows what ran.
+  (`bd update <feature-id> --append-notes "phase:<name> ✓ <skill>"`) shows what ran.
 - **Resume after a restart or a different device.** Beads is the durable
   source of truth. At every entry the conductor reads `bd show <id>`; a fresh
   session starts with `factory <feature>` (existing issue) or

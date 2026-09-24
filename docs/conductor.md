@@ -77,7 +77,7 @@ For every phase after onboard:
    verify the model actually has the skill content, not just the name.
 4. **Run the skill's procedure** for this phase.
 5. **Record the transition in beads**, the audit format:
-   `bd update <feature-id> --note "phase:<name> ✓ <skill>"`
+   `bd update <feature-id> --append-notes "phase:<name> ✓ <skill>"`
    (the audit survives restarts and device moves — Dolt).
 6. At each human gate, **report which mandatory skills ran per phase**. Any
    skipped skill forces the phase to re-run before the gate can pass.
@@ -140,6 +140,25 @@ and kept with the design brief for the spec phase.
 - The conductor reads phase state from beads (`bd show <id>`) at every entry,
   so a restarted session or a different device resumes where it left off.
 
+## Graft context freshness (enforced)
+
+Graft is the code-structure context for phases 4 (implement) and 4' (debug).
+A stale or empty graph is never trusted silently:
+
+1. On entry to phase 4 or 4': **check freshness first** — `graft_check_freshness`
+   when the MCP tool is available; otherwise compare the graph's build time
+   against the newest file mtime, or treat a missing/empty graph as stale.
+2. Graph empty or stale → run `graft build`, then record:
+   `bd update <id> --append-notes "graft: rebuilt (N nodes)"`.
+3. Graph fresh → record: `bd update <id> --append-notes "graft: fresh"`.
+4. Rebuild fails → **degrade loudly, never silently**: record
+   `bd update <id> --append-notes "graft: degraded <reason>"`, fall back to
+   direct file navigation for that phase, and surface the note at the next gate.
+   An empty graph is never treated as "no context needed".
+
+Selfcheck warns on an empty graph (`WARN graft graph has 0 nodes`), so the gap
+is visible in the repo before a phase relies on it.
+
 ## Command reference (spec §5.4, §7, §8)
 
 | Command | What it does |
@@ -147,16 +166,18 @@ and kept with the design brief for the spec phase.
 | `factory <feature>` | New feature: creates the beads issue, records `phase:brainstorm`, invokes `brainstorming`. |
 | `factory phase <name>` | Advance phase, enforce the skill gate, record the transition in beads. |
 | `factory discover` | Run the skill-discovery flow (below); idempotent. |
-| `factory onboard` | Per-repo one-time check: `bd init` if no beads DB, `graft build` if no graph, then `factory discover`. Auto-offered when the conductor starts in a repo without state. |
+| `factory onboard` | Per-repo one-time check: `bd init` if no beads DB, `graft build` if no graph, then `factory discover`. Auto-offered when the conductor starts in a repo without state. The graph is rebuilt again whenever phases 4/4' find it empty or stale (see "Graft context freshness"). |
 | `factory selfcheck` | Environment health (from the spec's verification section): plugins load, graft MCP handshake returns its tools, `bd version` and `graft --version` resolve, and every mandatory phase skill is discoverable. `--tokens` adds a per-skill description-size + total loaded-footprint report — the **required** flag for keeping the loaded footprint visible (spec §8). |
 
 ## Skill discovery — `factory discover` (spec §7)
 
 Pull-only, on demand, deduped, and locked. Idempotent.
 
-1. **Detect context** — the need arises from (a) the repo stack (graft
-   `find_all` on `package.json`/`go.mod`/imports → stack keywords) or (b)
-   feature-request keywords at `factory <feature>` time.
+1. **Detect context** — read the repo stack directly: `package.json` /
+   `go.mod` / top import lines for language/ecosystem terms. Graft `find_all`
+   may AUGMENT these keywords only when its graph is known non-empty (check
+   freshness first — an empty graph contributes nothing). Feature-request
+   keywords at `factory <feature>` time are always considered.
 2. **Find candidates** — query skills.sh for matching skills. Fallback: the
    `find-skills` skill or web search; the same ranking applies.
 3. **Rank** — 1. best keyword fit for the *actual* work, 2. official/verified
@@ -164,10 +185,20 @@ Pull-only, on demand, deduped, and locked. Idempotent.
 4. **Install project-locally** — `.agents/skills/<name>/`. Project-installed
    skills are **committed to the repository** (they travel with the project).
 5. **Record the choice** —
-   `bd update <id> --note "skills: <name>@<version> <source>"`.
+   `bd update <id> --append-notes "skills: <name>@<version> <source>"`.
 6. **Dedupe** — skip if already in global or project skills, below the
    relevance threshold, or not expected to be invoked; `skills.lock.json` is
-   the dedupe authority and enables deterministic reinstalls.
+   the dedupe authority and enables deterministic reinstalls. **Every run —
+   including one that installs nothing — must end by writing/updating
+   `.agents/skills/skills.lock.json`** with an `installed` array and a `run`
+   record (`at`, `keywords`, `sources`, `degraded`, `note`); see
+   `docs/discovery.md` for the schema.
+7. **Fail loudly** — if EVERY candidate source fails (skills.sh CLI absent,
+   API/site unreachable, search unavailable, catalog empty), the run is
+   `DISCOVERY_DEGRADED`: record it in the lockfile (`degraded: true` + reason)
+   and as `bd update <id> --append-notes "skills: DISCOVERY_DEGRADED <reason>"`.
+   Never default to "no project skill needed" as a silent fallback — that
+   verdict is only valid after a non-degraded run.
 
 Install modes:
 

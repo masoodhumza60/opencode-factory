@@ -99,6 +99,22 @@ ok("factory skill deployed", existsSync(factorySkill), factorySkill);
 // 4. Beads state accessible (git repo has .beads store)
 const beadsMarker = existsSync(join(homedir(), ".beads")) || existsSync(".beads") || existsSync(".agit");
 ok("beads store present", beadsMarker, "in cwd tree");
+// 5. Repo-scoped warnings (informational — these never affect the exit code,
+//    so installers stay green on healthy machines).
+const warn = (name, msg) => console.log(`WARN ${name} — ${msg}`);
+try {
+  const wiring = join(process.cwd(), "graft", ".graph", "wiring.json");
+  if (existsSync(wiring)) {
+    const w = JSON.parse(readFileSync(wiring, "utf8"));
+    if ((w.nodeCount ?? 0) === 0)
+      warn("graft graph has 0 nodes", "run `graft build`; the conductor rebuilds at implement/debug entry");
+  }
+} catch { /* not a graft repo or unreadable graph — skip */ }
+try {
+  if (existsSync(join(process.cwd(), ".agents", "skills")) &&
+      !existsSync(join(process.cwd(), ".agents", "skills", "skills.lock.json")))
+    warn("skills.lock.json missing", "run `factory discover` to record the (possibly empty) outcome");
+} catch { /* subdirs unreadable — skip */ }
 // 5. Token footprint (--tokens only)
 if (process.argv.includes("--tokens")) {
   const beadsCtx = (readFileSync(join(homedir(), ".config", "opencode", "plugins", "opencode-beads.ts"), "utf8").length);
