@@ -37,6 +37,7 @@ function Ensure-Dirs {
     $dirs = @(
         (Join-Path $ocConfig 'plugins'),
         (Join-Path $ocConfig 'commands\beads'),
+        (Join-Path $ocConfig 'commands\factory'),
         (Join-Path $ocConfig 'agents'),
         (Join-Path $agentsSkills 'factory'),
         $projectSkills
@@ -151,12 +152,18 @@ function Install-Plugins {
 function Install-Commands {
     $beadsSrc = Join-Path $bundle 'commands\beads'
     $beadsDst = Join-Path $ocConfig 'commands\beads'
+    $factorySrc = Join-Path $bundle 'commands\factory'
+    $factoryDst = Join-Path $ocConfig 'commands\factory'
     $agentSrc = Join-Path $bundle 'agents\beads-task-agent.md'
     $agentDst = Join-Path $ocConfig 'agents\beads-task-agent.md'
 
     foreach ($f in Get-ChildItem "$beadsSrc\*.md") {
         if ($DryRun) { Say "[dry-run] Copy-Item '$($f.FullName)' -> '$beadsDst\$($f.Name)'" }
         else { Copy-Item $f.FullName (Join-Path $beadsDst $f.Name) -Force }
+    }
+    foreach ($f in Get-ChildItem "$factorySrc\*.md") {
+        if ($DryRun) { Say "[dry-run] Copy-Item '$($f.FullName)' -> '$factoryDst\$($f.Name)'" }
+        else { Copy-Item $f.FullName (Join-Path $factoryDst $f.Name) -Force }
     }
     if ($DryRun) { Say "[dry-run] Copy-Item '$agentSrc' -> '$agentDst'" }
     else { Copy-Item $agentSrc $agentDst -Force }

@@ -40,7 +40,7 @@ graft_pkg=""
 
 # --- dirs --------------------------------------------------------------------
 ensure_dirs() {
-    for d in "$oc_config/plugins" "$oc_config/commands/beads" "$oc_config/agents" \
+    for d in "$oc_config/plugins" "$oc_config/commands/beads" "$oc_config/commands/factory" "$oc_config/agents" \
         "$agents_skills/factory" "$project_skills"; do
         if [ "$DRY_RUN" = 1 ]; then dry "mkdir -p $d"; else mkdir -p "$d"; fi
     done
@@ -152,6 +152,9 @@ install_plugins() {
 install_commands() {
     for f in "$bundle"/commands/beads/*.md; do
         if [ "$DRY_RUN" = 1 ]; then dry "cp \"$f\" \"$oc_config/commands/beads/\""; else cp "$f" "$oc_config/commands/beads/"; fi
+    done
+    for f in "$bundle"/commands/factory/*.md; do
+        if [ "$DRY_RUN" = 1 ]; then dry "cp \"$f\" \"$oc_config/commands/factory/\""; else cp "$f" "$oc_config/commands/factory/"; fi
     done
     if [ "$DRY_RUN" = 1 ]; then
         dry "cp \"$bundle/agents/beads-task-agent.md\" \"$oc_config/agents/\""
