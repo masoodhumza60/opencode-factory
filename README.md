@@ -16,7 +16,7 @@ review → ship) with human gates at spec, plan, and ship.
 ## Quick start (manual, 3 commands)
 
 ```bash
-git clone <repo-url> opencode-factory
+git clone https://github.com/masoodhumza60/opencode-factory opencode-factory
 cd opencode-factory
 ./install.sh            # Windows: powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
 node scripts/factory-selfcheck.mjs --tokens   # health gate: 6 PASS checks

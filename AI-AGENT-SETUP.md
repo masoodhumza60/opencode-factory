@@ -7,7 +7,7 @@ that machine — it performs the whole installation itself.
 ## How to use
 
 1. Clone this repo on the new machine:
-   `git clone <repo-url> && cd opencode-factory`
+   `git clone https://github.com/masoodhumza60/opencode-factory && cd opencode-factory`
 2. Open a new OpenCode session in that folder.
 3. Paste the prompt below and answer the agent's questions (only the TinyFish
    API key needs to come from you — give it in chat; it is never written to the
