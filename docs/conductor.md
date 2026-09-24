@@ -166,7 +166,7 @@ is visible in the repo before a phase relies on it.
 | `factory <feature>` | New feature: creates the beads issue, records `phase:brainstorm`, invokes `brainstorming`. |
 | `factory phase <name>` | Advance phase, enforce the skill gate, record the transition in beads. |
 | `factory discover` | Run the skill-discovery flow (below); idempotent. |
-| `factory onboard` | Per-repo one-time check: `bd init` if no beads DB, `graft build` if no graph, then `factory discover`. Auto-offered when the conductor starts in a repo without state. The graph is rebuilt again whenever phases 4/4' find it empty or stale (see "Graft context freshness"). |
+| `factory onboard` | Per-repo one-time check: `bd init` if no beads DB, `graft build` if no graph **or the graph is empty (0 nodes — an empty `wiring.json` counts as "no graph"**, same rule as phases 4/4' freshness), then `factory discover`. Auto-offered when the conductor starts in a repo without state. The graph is rebuilt again whenever phases 4/4' find it empty or stale (see "Graft context freshness"). |
 | `factory selfcheck` | Environment health (from the spec's verification section): plugins load, graft MCP handshake returns its tools, `bd version` and `graft --version` resolve, and every mandatory phase skill is discoverable. `--tokens` adds a per-skill description-size + total loaded-footprint report — the **required** flag for keeping the loaded footprint visible (spec §8). |
 
 ## Skill discovery — `factory discover` (spec §7)
