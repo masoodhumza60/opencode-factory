@@ -20,6 +20,24 @@ review → ship) with human gates at spec, plan, and ship.
 - **Design:** `docs/superpowers/specs/2026-09-22-opencode-factory-design.md`.
 - **Plan:** `docs/superpowers/plans/2026-09-22-opencode-factory.md`.
 
+## AI-agent install (little prompt)
+
+Paste this into an AI coding agent (OpenCode) running on the new machine:
+
+> Set up opencode-factory on this machine:
+> 1. `git clone https://github.com/masoodhumza60/opencode-factory && cd opencode-factory`
+> 2. Check `node --version` is 20 or newer — if not, STOP and tell me.
+> 3. Install:
+>    - Windows: `powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1`
+>    - macOS/Linux: `./install.sh` (or `bash install.sh`)
+> 4. Check it: `node scripts/factory-selfcheck.mjs --tokens` — all 6 checks must
+>    print PASS.
+> 5. Report the results. Say OK only when every check PASSes.
+
+For the **full, self-contained prompt** — rules, error handling, fresh-session
+notes — use [`AI-AGENT-SETUP.md`](AI-AGENT-SETUP.md). Then, in each project,
+paste [`AI-AGENT-PROJECT.md`](AI-AGENT-PROJECT.md) to build features.
+
 ## Quick start (manual, 3 commands)
 
 ```bash
