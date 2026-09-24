@@ -14,8 +14,10 @@ beads-task agent, and the factory skill.
 3. Paste the prompt below.
 4. After the agent finishes, **start a fresh OpenCode session** — the `/factory`
    commands and graft MCP only appear in sessions started after the install.
-5. From then on, in **any** project on that machine:
-   `/factory onboard` once per project, then `/factory feature <description>`.
+5. From then on, in **any** project on that machine, paste the project prompt
+   from [`AI-AGENT-PROJECT.md`](AI-AGENT-PROJECT.md) into a session opened in
+   that project — it verifies the machine, runs `/factory onboard` once per
+   project, then `/factory feature <description>`.
 
 ## The prompt
 
