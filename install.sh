@@ -47,18 +47,23 @@ ensure_dirs() {
 }
 
 # --- graft package-dir resolution -------------------------------------------
-# Mirrors scripts/graft-patch-store.ps1: `pnpm root -g` first, else the same
-# 3-level store scan (which ends at node_modules dirs). Prints the package dir
-# or returns 1 when graft is absent.
+# Manager global-root probe order pnpm -> bun -> npm; first root that contains a
+# live graft package wins. Falls back to the pnpm store scan (virtual stores /
+# junctions keep the real pkg deeper). Prints the package dir or exits 1.
 find_graft_dir() {
-    local root=""
-    if command -v pnpm >/dev/null 2>&1; then
-        root="$(pnpm root -g 2>/dev/null || true)"
-    fi
-    if [ -n "$root" ] && [ -d "$root/@nanonets/graft/dist" ]; then
-        printf '%s\n' "$root/@nanonets/graft"
-        return 0
-    fi
+    local m="" probe=""
+    for m in pnpm bun npm; do
+        command -v "$m" >/dev/null 2>&1 || continue
+        case "$m" in
+            pnpm) probe="$(pnpm root -g 2>/dev/null || true)" ;;
+            bun)  probe="$(bun pm root -g 2>/dev/null || true)" ;;
+            npm)  probe="$(npm root -g 2>/dev/null || true)" ;;
+        esac
+        if [ -n "$probe" ] && [ -d "$probe/@nanonets/graft/dist" ]; then
+            printf '%s\n' "$probe/@nanonets/graft"
+            return 0
+        fi
+    done
     for base in "${PNPM_HOME:-$HOME/.local/share/pnpm}/global" "$HOME/.local/share/pnpm"; do
         [ -d "$base" ] || continue
         local found=""
@@ -66,6 +71,14 @@ find_graft_dir() {
             if [ -d "$d/@nanonets/graft/dist" ]; then printf '%s\n' "$d"; break; fi
         done | head -n 1)" || true
         if [ -n "$found" ]; then printf '%s\n' "$found/@nanonets/graft"; return 0; fi
+    done
+    return 1
+}
+
+# Fresh-install manager order: pnpm -> bun -> npm (npm ships with node >= 20).
+first_manager() {
+    for m in pnpm bun npm; do
+        if command -v "$m" >/dev/null 2>&1; then printf '%s\n' "$m"; return 0; fi
     done
     return 1
 }
@@ -84,18 +97,20 @@ install_bd() {
 
 # --- graft --------------------------------------------------------------------
 install_graft() {
-    local found=""
+    local found="" m="" cmd=""
     found="$(find_graft_dir || true)"
     if [ "$DRY_RUN" = 1 ]; then
         if [ -n "$found" ]; then
-            dry "graft already installed locally; skipping \`pnpm add -g @nanonets/graft@0.18.0\`"
+            dry "graft already installed locally; skipping install"
         else
-            dry "pnpm add -g @nanonets/graft@0.18.0 (then re-resolve the package dir)"
+            m="$(first_manager || echo npm)"
+            if [ "$m" = npm ]; then cmd="npm install -g @nanonets/graft@0.18.0"; else cmd="$m add -g @nanonets/graft@0.18.0"; fi
+            dry "$cmd  (auto-select pnpm/bun/npm; npm default)"
         fi
         local patch_dir="${found:-<resolved-graft-dir>}"
         if command -v powershell >/dev/null 2>&1; then
             dry "node \"$bundle/scripts/graft-patch-extract.mjs\" --dir \"$patch_dir\""
-            dry "powershell -NoProfile -ExecutionPolicy Bypass -File \"$bundle/scripts/graft-patch-store.ps1\""
+            dry "powershell -NoProfile -ExecutionPolicy Bypass -File \"$bundle/scripts/graft-patch-store.ps1\" -PackageDir \"$patch_dir\""
         else
             dry "skip graft patches (Windows-only kotlin-optional extract + win32-x64 prebuild rename; no PowerShell here)"
         fi
@@ -104,14 +119,27 @@ install_graft() {
         return
     fi
     if [ -z "$found" ]; then
-        command -v pnpm >/dev/null 2>&1 || { echo "install: pnpm is required for graft" >&2; exit 1; }
-        pnpm add -g @nanonets/graft@0.18.0
-        found="$(find_graft_dir)" || { echo "install: graft not found after pnpm add -g" >&2; exit 1; }
+        m="$(first_manager)" || {
+            echo "install: no package manager found to install graft (node >= 20 ships npm)" >&2
+            exit 1
+        }
+        if [ "$m" = npm ]; then
+            npm install -g @nanonets/graft@0.18.0
+        else
+            "$m" add -g @nanonets/graft@0.18.0
+            # Safety net: the chosen manager ran clean but the pkg dir still
+            # doesn't resolve -> redo through npm (always present via node).
+            if ! find_graft_dir >/dev/null 2>&1; then
+                say "graft not resolvable after $m install; retrying with npm..."
+                npm install -g @nanonets/graft@0.18.0
+            fi
+        fi
+        found="$(find_graft_dir)" || { echo "install: graft not found after install" >&2; exit 1; }
     fi
     graft_pkg="$found"
     if command -v powershell >/dev/null 2>&1; then
         node "$bundle/scripts/graft-patch-extract.mjs" --dir "$graft_pkg"
-        powershell -NoProfile -ExecutionPolicy Bypass -File "$bundle/scripts/graft-patch-store.ps1"
+        powershell -NoProfile -ExecutionPolicy Bypass -File "$bundle/scripts/graft-patch-store.ps1" -PackageDir "$graft_pkg"
     else
         say "note: graft patches skipped (Windows-only kotlin-optional extract + win32-x64 prebuild rename; no PowerShell here)."
     fi

@@ -21,8 +21,9 @@ installers' success summary points back to this file.
   opencode's user directory, and needs `opencode-pty` available in opencode's
   npm cache — run `opencode` once before installing so it installs its
   dependencies.
-- **pnpm** (only needed for the graft step; both installers stop with a clear
-  message if it's missing).
+- **A JS package manager for the graft step** — pnpm or bun if you already have
+  one; otherwise npm (which node ≥ 20 ships). The installers auto-select in the
+  order pnpm → bun → npm, so a plain node install works with zero extra setup.
 
 One note on the two non-opencode CLIs:
 
@@ -74,9 +75,11 @@ Both installers run the same steps in the same order:
    → copy-to-`%LOCALAPPDATA%\Programs\bd\bd.exe` fallback, then user-PATH) or
    `executables/install-bd.sh` (`beads.dev/install.sh`), then verify
    `bd version`.
-3. **Install + patch graft** — `pnpm add -g @nanonets/graft@0.18.0` (when not
-   already present), locate the package dir under the pnpm global store, then
-   run both patch scripts (see caveat below) and verify `graft --version`.
+3. **Install + patch graft** — `@nanonets/graft@0.18.0` via an available package
+   manager (`pnpm add -g` / `bun add -g` / `npm install -g`; auto-selected in
+   that order, npm as the default whenever pnpm/bun are absent), locate the
+   package dir under that manager's global root, then run both patch scripts
+   (see caveat below) and verify `graft --version`.
 4. **Deploy plugins** — copy `plugins/opencode-beads.ts` to
    `~/.config/opencode/plugins/`, and render `plugins/opencode-pty.ts.tmpl`
    (substituting the resolved `opencode-pty` v2 index from opencode's cache)
@@ -108,13 +111,16 @@ re-run after everything is in place exits 0 with zero config drift.
 
 ## Graft store caveat — re-patch after any graft upgrade
 
-Graft's patches are applied *inside the pnpm global store*. A `pnpm add -g` of
-any package — or a graft upgrade — replaces the graft package and **resets the
-patches**. Re-run them whenever you upgrade graft or reinstall it:
+Graft's patches are applied *inside the package manager's global store*. Any
+reinstall or upgrade of graft — via `npm install -g`, `pnpm add -g`, or `bun
+add -g` — replaces the package and **resets the patches**. Re-run them whenever
+you upgrade graft or reinstall it:
 
 ```bash
-# 1. find the graft package dir (this only works if graft is already installed)
-node scripts/graft-patch-extract.mjs --dir "$(pnpm root -g)/@nanonets/graft"
+# 1. find the graft package dir (this only works if graft is already installed);
+#    pick the manager you installed graft with:
+node scripts/graft-patch-extract.mjs --dir "$(npm root -g)/@nanonets/graft"
+# ...or with pnpm (pnpm root -g) / bun (bun pm root -g)
 ```
 
 ```powershell
@@ -162,7 +168,7 @@ Failure output says `N check(s) failed. Re-run install.ps1/install.sh.`
 |---|---|
 | `powershell` refuses to run the script (execution policy) | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`, then retry. The one-liner already sidesteps this with `-ExecutionPolicy Bypass`. |
 | `bd` missing on PATH after install | Re-run the bd installer: `powershell -ExecutionPolicy Bypass -File executables/install-bd.ps1` (Windows) or `bash executables/install-bd.sh` (Unix), or call it by absolute path: `%LOCALAPPDATA%\Programs\bd\bd.exe` on Windows. |
-| `graft` missing / `graft --version` fails | Install it: `pnpm add -g @nanonets/graft@0.18.0`, re-run the two patch scripts ("Graft store caveat"), then re-run the installer. |
+| `graft` missing / `graft --version` fails | Install it: `npm install -g @nanonets/graft@0.18.0` (or `pnpm add -g` / `bun add -g`), re-run the two patch scripts ("Graft store caveat"), then re-run the installer. |
 | Installer aborts at the selfcheck | The failing check names the problem (e.g. `bd present` FAIL on very first run). Fix it and re-run — the installer is fail-stop by design. |
 | Selfcheck keeps failing on the plugin checks | Look at the log the selfcheck reads: `%USERPROFILE%\.local\share\opencode\log\opencode.log` (Windows) / `~/.local/share/opencode/log/opencode.log` (Unix). |
 | Want a preview before touching anything | Re-run with `-DryRun` — prints every step, changes nothing, exits 0. |
@@ -176,5 +182,5 @@ Failure output says `N check(s) failed. Re-run install.ps1/install.sh.`
 | project skills (committed) | `.agents/skills/` |
 | skills lock | `.agents/skills/skills.lock.json` |
 | bd CLI (Windows) | `%LOCALAPPDATA%\Programs\bd\bd.exe` |
-| graft | pnpm global store (`${PNPM_HOME:-$HOME/.local/share/pnpm}/global` on Unix) |
+| graft | the package manager's global root (`npm root -g` / `pnpm root -g` / `bun pm root -g`) |
 | selfcheck log | `~/.local/share/opencode/log/opencode.log` |

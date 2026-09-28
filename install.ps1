@@ -48,29 +48,52 @@ function Ensure-Dirs {
     }
 }
 
-function Find-GraftDir {
-    # true -> a live graft cli.js exists; outputs its package dir (or '' when absent).
-    $probe = ''
-    if (Get-Command pnpm -ErrorAction SilentlyContinue) {
-        $probe = (& pnpm root -g 2>$null | Out-String).Trim()
+function Find-GraftRoot {
+    # Manager global-root probe order pnpm -> bun -> npm. Returns the first root
+    # that actually contains a live graft package ('' when none do); a pure npm
+    # machine resolves here too because node >= 20 always ships npm.
+    foreach ($m in 'pnpm','bun','npm') {
+        if (-not (Get-Command $m -ErrorAction SilentlyContinue)) { continue }
+        $root = switch ($m) {
+            'pnpm' { & pnpm root -g 2>$null }
+            'bun'  { & bun pm root -g 2>$null }
+            'npm'  { & npm root -g 2>$null }
+        }
+        $root = ($root | Out-String).Trim()
+        if ($root -and (Test-Path (Join-Path $root '@nanonets\graft\dist\cli.js'))) {
+            return $root
+        }
     }
-    if ($probe -and (Test-Path (Join-Path $probe '@nanonets\graft\dist\cli.js'))) {
-        return Join-Path $probe '@nanonets\graft'
-    }
+    # pnpm store fallback — virtual stores / junctions keep the real pkg deeper.
     $candidates = Get-ChildItem "$env:LOCALAPPDATA\pnpm\global" -Directory -ErrorAction SilentlyContinue |
         ForEach-Object { Get-ChildItem $_.FullName -Directory -ErrorAction SilentlyContinue } |
         ForEach-Object { Get-ChildItem $_.FullName -Directory -ErrorAction SilentlyContinue } |
         Where-Object { Test-Path (Join-Path $_.FullName '@nanonets\graft\dist\cli.js') }
-    if ($candidates) { return Join-Path $candidates[0].FullName '@nanonets\graft' }
+    if ($candidates) { return $candidates[0].FullName }
+    return ''
+}
+
+function Find-GraftDir {
+    # true -> a live graft cli.js exists; outputs its package dir (or '' when absent).
+    $root = Find-GraftRoot
+    if ($root) { return Join-Path $root '@nanonets\graft' }
+    return ''
+}
+
+function Select-GraftManager {
+    # Order pnpm -> bun -> npm (npm ships with node >= 20, so the last is a given).
+    foreach ($m in 'pnpm','bun','npm') {
+        if (Get-Command $m -ErrorAction SilentlyContinue) { return $m }
+    }
     return ''
 }
 
 function Resolve-GraftDir {
-    # Mirrors scripts/graft-patch-store.ps1: pnpm root -g, else 3-level store scan
-    # ending at node_modules dirs. Returns the graft package dir (junctions ok).
+    # Mirrors scripts/graft-patch-store.ps1: pnpm/bun/npm global root, else the
+    # pnpm store scan. Returns the graft package dir (junctions ok).
     $found = Find-GraftDir
     if (-not $found) {
-        throw 'graft CLI not found. Run install (without -SkipGraft) or `pnpm add -g @nanonets/graft@0.18.0` first.'
+        throw 'graft CLI not found. Run install (without -SkipGraft) or install @nanonets/graft@0.18.0 (npm i -g / pnpm add -g / bun add -g) first.'
     }
     return $found
 }
@@ -93,26 +116,45 @@ function Install-Bd {
 function Install-Graft {
     $found = Find-GraftDir
     if ($DryRun) {
-        if ($found) { Say '[dry-run] graft already installed locally; skipping `pnpm add -g @nanonets/graft@0.18.0`' }
-        else        { Say '[dry-run] pnpm add -g @nanonets/graft@0.18.0 (then re-resolve the package dir)' }
+        if ($found) { Say '[dry-run] graft already installed locally; skipping install' }
+        else {
+            $m = Select-GraftManager
+            if (-not $m) { $m = 'npm' }
+            $cmd = if ($m -eq 'npm') { 'npm install -g @nanonets/graft@0.18.0' } else { "$m add -g @nanonets/graft@0.18.0" }
+            Say "[dry-run] $cmd  (auto-select pnpm/bun/npm; npm default)"
+        }
         $patchDir = if ($found) { $found } else { '<resolved-graft-dir>' }
         Say "[dry-run] & node '$script:NodePath' '$bundle\scripts\graft-patch-extract.mjs' --dir '$patchDir'"
-        Say "[dry-run] powershell -NoProfile -ExecutionPolicy Bypass -File '$bundle\scripts\graft-patch-store.ps1'"
+        Say "[dry-run] powershell -NoProfile -ExecutionPolicy Bypass -File '$bundle\scripts\graft-patch-store.ps1' -PackageDir '$patchDir'"
         Say '[dry-run] verify: graft --version'
         $script:GraftPkg = $found   # may be '' when absent; Merge-Config handles it
         return
     }
     if (-not $found) {
-        if (-not (Get-Command pnpm -ErrorAction SilentlyContinue)) {
-            throw 'pnpm is required for graft. Install pnpm (npm i -g pnpm) and re-run, or run: pnpm add -g @nanonets/graft@0.18.0'
+        $m = Select-GraftManager
+        if (-not $m) {
+            throw 'No package manager found to install graft. Install node >= 20 from nodejs.org (it ships npm) and re-run.'
         }
-        & pnpm add -g @nanonets/graft@0.18.0
-        if ($LASTEXITCODE -ne 0) { throw 'pnpm add -g @nanonets/graft@0.18.0 failed' }
+        if ($m -eq 'npm') {
+            & npm install -g @nanonets/graft@0.18.0
+            if ($LASTEXITCODE -ne 0) { throw 'npm install -g @nanonets/graft@0.18.0 failed' }
+        }
+        else {
+            & $m add -g @nanonets/graft@0.18.0
+            if ($LASTEXITCODE -ne 0) { throw "$m add -g @nanonets/graft@0.18.0 failed" }
+            # Safety net: the chosen manager ran clean but the pkg dir still
+            # doesn't resolve -> redo through npm (always present via node).
+            if (-not (Find-GraftDir)) {
+                Say "graft not resolvable after $m install; retrying with npm..."
+                & npm install -g @nanonets/graft@0.18.0
+                if ($LASTEXITCODE -ne 0) { throw 'npm install -g @nanonets/graft@0.18.0 failed (fallback after non-npm manager)' }
+            }
+        }
     }
     $script:GraftPkg = Resolve-GraftDir   # re-resolve (after install, when it was absent)
     & $script:NodePath "$bundle\scripts\graft-patch-extract.mjs" --dir $script:GraftPkg
     if ($LASTEXITCODE -ne 0) { throw 'graft-patch-extract.mjs failed' }
-    & powershell -NoProfile -ExecutionPolicy Bypass -File "$bundle\scripts\graft-patch-store.ps1"
+    & powershell -NoProfile -ExecutionPolicy Bypass -File "$bundle\scripts\graft-patch-store.ps1" -PackageDir $script:GraftPkg
     if ($LASTEXITCODE -ne 0) { throw 'graft-patch-store.ps1 failed' }
     & graft --version
     if ($LASTEXITCODE -ne 0) { throw 'graft --version check failed' }
