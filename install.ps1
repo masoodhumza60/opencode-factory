@@ -291,6 +291,24 @@ function Install-DcpPrompts {
     }
 }
 
+function Run-Tests {
+    # The selfcheck's own tests. A check that cannot fail is decoration, and the
+    # bundle has shipped one; these are what make "can it fail?" a property the
+    # installer enforces rather than something a human remembers to poke at.
+    if ($DryRun) {
+        Say "[dry-run] & node '$script:NodePath' scripts/test-selfcheck.mjs"
+        Say "[dry-run] & node '$script:NodePath' scripts/test-install-idempotency.mjs"
+        return
+    }
+    foreach ($t in @('test-selfcheck.mjs', 'test-install-idempotency.mjs')) {
+        $path = Join-Path $bundle "scripts\$t"
+        if (-not (Test-Path $path)) { SayErr "warning: $path not in bundle yet; skipping."; continue }
+        & $script:NodePath $path | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "$t failed - the selfcheck cannot be trusted. Fix it before installing." }
+    }
+    Say 'selfcheck tests: OK (every check proven able to fail)'
+}
+
 function Run-Selfcheck {
     $selfcheck = Join-Path $bundle 'scripts\factory-selfcheck.mjs'
     if ($DryRun) {
@@ -316,6 +334,7 @@ Install-Commands
 Merge-Config
 Install-Skills
 Install-DcpPrompts
+Run-Tests
 Run-Selfcheck
 if ($DryRun) { Say "[dry-run] done (dry run - nothing was changed)." }
 else { Say "done. See docs/HOW-INSTALL.md for manual steps and troubleshooting." }

@@ -110,42 +110,90 @@ ok("beads store present", beadsMarker, "in cwd tree");
 //    asked a runaway session to compress five times and was ignored five times
 //    — so this does not try to promote it into a budget. It only proves it is
 //    doing the job it is actually capable of doing.
-//    `--dcp-state <file>` inspects a specific session state file, which is how
-//    the negative tests exercise the failure paths.
+//
+//    Sampling several recent sessions, not just the newest one. Keying off a
+//    single newest-by-mtime file made this check cry wolf: a fresh session has
+//    pruned nothing, so running selfcheck in one reported WARN on a perfectly
+//    healthy machine, and a large historical state file could lose an mtime
+//    race to an idle new one. A health check that fires on healthy machines is
+//    one people learn to ignore. So: inspect the most recent DCP_RECENT
+//    sessions, and pass if any of them shows pruning. Every session inspected
+//    is named, so the answer is auditable rather than mysterious.
+//
+//    `--dcp-state <file>` inspects exactly one state file, and
+//    `--dcp-session <id>` targets one session by name. Both exist so the
+//    negative tests in scripts/test-selfcheck.mjs can drive the failure paths.
+const DCP_RECENT = 5;
 const dcpDir = join(homedir(), ".local", "share", "opencode", "storage", "plugin", "dcp");
-let dcpState;
-const dcpStateArg = process.argv.indexOf("--dcp-state");
-if (dcpStateArg !== -1 && process.argv[dcpStateArg + 1]) {
-  dcpState = process.argv[dcpStateArg + 1];
+const dcpRead = (file) => {
+  const s = JSON.parse(readFileSync(file, "utf8"));
+  // The config has manualMode as an object ({enabled, automaticStrategies});
+  // the per-session state file holds the resolved boolean. Read the state.
+  return {
+    id: s.sessionId ?? basename(file, ".json"),
+    manual: s.manualMode === true,
+    pruned: s.stats?.totalPruneTokens ?? s.stats?.pruneTokenCounter ?? 0,
+  };
+};
+const flagValue = (name) => {
+  const i = process.argv.indexOf(name);
+  return i !== -1 && process.argv[i + 1] ? process.argv[i + 1] : undefined;
+};
+let dcpFiles = [];
+const dcpStateArg = flagValue("--dcp-state");
+const dcpSessionArg = flagValue("--dcp-session");
+if (dcpStateArg) {
+  dcpFiles = [dcpStateArg];
 } else {
   try {
-    let newestAt = 0;
-    for (const name of readdirSync(dcpDir).filter((n) => n.endsWith(".json"))) {
-      const p = join(dcpDir, name);
-      const at = statSync(p).mtimeMs;
-      if (at > newestAt) { newestAt = at; dcpState = p; }
-    }
+    dcpFiles = readdirSync(dcpDir)
+      .filter((n) => n.endsWith(".json"))
+      .map((n) => {
+        const p = join(dcpDir, n);
+        return { p, at: statSync(p).mtimeMs };
+      })
+      .sort((a, b) => b.at - a.at)
+      .slice(0, dcpSessionArg ? dcpFiles.length : DCP_RECENT)   // a named session may be any age
+      .map((e) => e.p);
   } catch { /* no dcp state yet */ }
 }
-if (!dcpState || !existsSync(dcpState)) {
+if (dcpSessionArg && !dcpStateArg) {
+  const want = dcpSessionArg.endsWith(".json") ? dcpSessionArg : dcpSessionArg + ".json";
+  try {
+    const all = readdirSync(dcpDir);
+    const hit = all.find((n) => n === want || n.replace(/\.json$/, "") === dcpSessionArg);
+    dcpFiles = hit ? [join(dcpDir, hit)] : [];
+  } catch { /* no dcp state yet */ }
+  if (!dcpFiles.length) ok("dcp: pruning active", false, `no state file for session ${dcpSessionArg}`);
+}
+if ((!dcpStateArg && !dcpSessionArg && dcpFiles.length === 0) || dcpFiles.some((f) => !existsSync(f))) {
   ok("dcp: pruning active", false, "no dcp session state found — plugin loaded but never ran");
 } else {
-  try {
-    const s = JSON.parse(readFileSync(dcpState, "utf8"));
-    // The config has manualMode as an object ({enabled, automaticStrategies});
-    // the per-session state file holds the resolved boolean. Read the state.
-    const sid = s.sessionId ?? basename(dcpState, ".json");
-    const pruned = s.stats?.totalPruneTokens ?? s.stats?.pruneTokenCounter ?? 0;
-    const where = `session ${sid} — pruned ${pruned.toLocaleString("en-US")} tokens`;
-    if (s.manualMode === true)
-      ok("dcp: pruning active", false, `${where} — manualMode is true, so auto-pruning is OFF`);
-    else if (pruned > 0)
-      ok("dcp: pruning active", true, where);
-    else
-      warn("dcp: pruning active", `${where} — nothing pruned yet; expected in a fresh session, re-check once real work has happened`);
-  } catch (e) {
-    ok("dcp: pruning active", false, `state unreadable: ${e.message.slice(0, 60)}`);
+  const seen = [];
+  let prunedAny = false;
+  let manualAny = false;
+  let bad = null;
+  for (const f of dcpFiles) {
+    try {
+      const r = dcpRead(f);
+      seen.push(r);
+      if (r.manual) manualAny = true;
+      if (r.pruned > 0) prunedAny = true;
+    } catch (e) {
+      bad = `${basename(f)}: ${e.message.slice(0, 50)}`;
+    }
   }
+  const list = seen.length
+    ? seen.map((r) => `${r.id.slice(0, 8)}:${r.pruned.toLocaleString("en-US")}${r.manual ? "!" : ""}`).join(" ")
+    : "none readable";
+  if (manualAny)
+    ok("dcp: pruning active", false, `manualMode is true in at least one session (auto-pruning OFF) — [${list}]`);
+  else if (bad)
+    ok("dcp: pruning active", false, `state unreadable — ${bad}`);
+  else if (prunedAny)
+    ok("dcp: pruning active", true, `${seen.filter((r) => r.pruned > 0).length}/${seen.length} recent sessions pruning — [${list}]`);
+  else
+    warn("dcp: pruning active", `no recent session has pruned yet (${list}); expected in a fresh session, re-check once real work has happened`);
 }
 // 6. The turn-nudge override. A WARN, not a FAIL: it is deliberately deletable
 //    by a user who prefers dcp's stock wording, and it only activates after an

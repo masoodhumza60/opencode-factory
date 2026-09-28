@@ -8,9 +8,17 @@
 // "dcp is installed" tells you nothing about whether the model ever compresses.
 // Pairing means giving the nudge somewhere to point: the handoff rule.
 //
-// Two things happen here, both purely additive and both idempotent:
+// Two things happen here, both additive and both idempotent:
 //   1. flip experimental.customPrompts in dcp.jsonc so overrides are honoured
 //   2. write the turn-nudge override itself
+//
+// The config edit is TRANSACTIONAL. Inserting a key by regex is only "additive"
+// as far as we can tell, and a config that contains "experimental" inside a
+// string or a nested object could take a syntactically valid but semantically
+// misplaced key. So we keep the original bytes, write, re-parse, confirm the key
+// landed where intended, and restore the original if anything is off. The one
+// thing this script must never do is leave a user's config worse than it found
+// it while reporting success.
 //
 // We author the override text ourselves. DCP is AGPL-3.0-or-later; installing it
 // is fine, vendoring or copying its prompt text into this bundle is not.
@@ -47,13 +55,23 @@ human one line (done / next / blocked), then stop. The next session resumes from
 beads, not from your scrollback.
 `;
 
-// Strip comments and trailing commas so we can decide what is already set
-// without rewriting the user's file. Detection only — we never write this back,
-// so their comments and formatting survive untouched.
+// Strip comments and trailing commas so we can inspect the config. Parsing and
+// inspection only — we never write this back, so comments and formatting in the
+// user's file survive untouched.
 const withoutComments = (src) =>
   src
     .replace(/\\"|"(?:\\.|[^"\\])*"|(\/\/.*$)|(\/\*[\s\S]*?\*\/)/gm, (m, a, b) => (a || b ? "" : m))
     .replace(/,(\s*[}\]])/g, "$1");
+
+// Read one probe of a DCP state file. The same shape the selfcheck uses.
+const readProbe = (file) => {
+  const s = JSON.parse(readFileSync(file, "utf8"));
+  return {
+    id: s.sessionId ?? file.replace(/^.*[\\/]/, "").replace(/\.json$/, ""),
+    manual: s.manualMode === true,
+    pruned: s.stats?.totalPruneTokens ?? s.stats?.pruneTokenCounter ?? 0,
+  };
+};
 
 // Enable customPrompts without reformatting the file: insert the one key we
 // need. Path A adds the whole `experimental` object; Path B adds the key to an
@@ -62,7 +80,17 @@ const withoutComments = (src) =>
 function enableCustomPrompts() {
   if (!existsSync(dcpConfig)) {
     const seeded = `{\n  "$schema": "${SCHEMA_URL}",\n  "experimental": {\n    "customPrompts": true\n  }\n}\n`;
-    if (!dryRun) writeFileSync(dcpConfig, seeded, "utf8");
+    if (!dryRun) {
+      // On a fresh machine the config dir may not exist yet, and an unguarded
+      // write here throws ENOENT. The installers create it first, but this
+      // script is also runnable on its own, so it must stand up its own path.
+      try {
+        mkdirSync(configDir, { recursive: true });
+        writeFileSync(dcpConfig, seeded, "utf8");
+      } catch (e) {
+        return { action: "skipped", detail: `could not create dcp.jsonc (${e.message.slice(0, 60)})` };
+      }
+    }
     return { action: "created", detail: "dcp.jsonc seeded with experimental.customPrompts" };
   }
   const raw = readFileSync(dcpConfig, "utf8");
@@ -80,8 +108,31 @@ function enableCustomPrompts() {
     const head = raw.slice(0, lastBrace).replace(/\s*$/, "");
     updated = head + ',\n  "experimental": {\n    "customPrompts": true\n  }\n' + raw.slice(lastBrace);
   }
-  if (!dryRun) writeFileSync(dcpConfig, updated, "utf8");
-  return { action: "updated", detail: "inserted experimental.customPrompts (comments preserved)" };
+  if (dryRun) return { action: "updated", detail: "inserted experimental.customPrompts (comments preserved)" };
+
+  // Transactional: write, then prove the result is what we intended. If the
+  // re-parse fails or the key did not land as a real boolean, put the user's
+  // original file back and report that we did.
+  try {
+    writeFileSync(dcpConfig, updated, "utf8");
+  } catch (e) {
+    return { action: "skipped", detail: `write failed (${e.message.slice(0, 60)}); left dcp.jsonc alone` };
+  }
+  let verified;
+  try {
+    const check = JSON.parse(withoutComments(readFileSync(dcpConfig, "utf8")));
+    verified = check?.experimental?.customPrompts === true;
+  } catch (e) {
+    verified = false;
+    var why = `result does not parse (${e.message.slice(0, 60)})`;
+  }
+  if (!verified) {
+    try {
+      writeFileSync(dcpConfig, raw, "utf8");
+    } catch { /* nothing more we can do; report loudly below */ }
+    return { action: "skipped", detail: `insertion unverified${typeof why === "string" ? ` — ${why}` : " (customPrompts not true)"}; original restored` };
+  }
+  return { action: "updated", detail: "inserted experimental.customPrompts (comments preserved, re-parsed)" };
 }
 
 const cfg = enableCustomPrompts();

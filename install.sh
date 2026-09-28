@@ -267,6 +267,30 @@ install_dcp_prompts() {
     fi
 }
 
+# --- selfcheck tests ----------------------------------------------------------------
+# A check that cannot fail is decoration, and the bundle has shipped one. These
+# tests are what turn "can this check fail?" into a property the installer
+# enforces rather than something a human remembers to poke at.
+run_tests() {
+    if [ "$DRY_RUN" = 1 ]; then
+        dry "node \"$bundle/scripts/test-selfcheck.mjs\""
+        dry "node \"$bundle/scripts/test-install-idempotency.mjs\""
+        return
+    fi
+    for t in test-selfcheck.mjs test-install-idempotency.mjs; do
+        local path="$bundle/scripts/$t"
+        if [ ! -f "$path" ]; then
+            say "warning: $path not in bundle yet; skipping."
+            continue
+        fi
+        node "$path" >/dev/null || {
+            echo "install: $t failed - the selfcheck cannot be trusted. Fix it before installing." >&2
+            exit 1
+        }
+    done
+    say "selfcheck tests: OK (every check proven able to fail)"
+}
+
 # --- selfcheck ---------------------------------------------------------------------
 run_selfcheck() {
     local selfcheck="$bundle/scripts/factory-selfcheck.mjs"
@@ -292,6 +316,7 @@ install_commands
 merge_config
 install_skills
 install_dcp_prompts
+run_tests
 run_selfcheck
 if [ "$DRY_RUN" = 1 ]; then
     say "[dry-run] done (dry run - nothing was changed)."

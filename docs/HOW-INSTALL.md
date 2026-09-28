@@ -113,12 +113,25 @@ Both installers run the same steps in the same order:
    override text is our own: DCP is AGPL-3.0-or-later, so we install it but
    never vendor or copy its prompts. Delete the override file to return to
    stock dcp wording.
-9. **Selfcheck** — run `node scripts/factory-selfcheck.mjs`. Any failed check
+9. **Run the selfcheck's own tests** — `node scripts/test-selfcheck.mjs` and
+   `node scripts/test-install-idempotency.mjs`. A check that cannot fail is
+   decoration, and this bundle has shipped one, so the proof that each check
+   can reach a FAIL lives in the repo rather than in someone's memory. The
+   tests run **before** the selfcheck and a failure aborts the install
+   (`the selfcheck cannot be trusted`). They cover every branch of the dcp
+   check — pruned → PASS, `manualMode: true` → FAIL, corrupt → FAIL, fresh
+   session → WARN, missing state → FAIL — plus the writers' idempotency and
+   their refusal to damage a config they cannot parse.
+10. **Selfcheck** — run `node scripts/factory-selfcheck.mjs`. Any failed check
    aborts the install (`factory selfcheck failed - install incomplete.`). Two
    of the checks watch DCP rather than merely asserting the plugin loads:
-   `dcp: pruning active` reads the newest session's state file and proves
-   auto-pruning is on and has actually pruned (`manualMode: true`, or no state
-   file at all, fails the install), and `dcp: turn-nudge override installed`
+   `dcp: pruning active` reads the state files of the **5 most recent** DCP
+   sessions and passes if any of them shows pruning (`manualMode: true` in any
+   of them, or no state files at all, fails the install). It inspects several
+   sessions rather than only the newest because keying off a single
+   newest-by-mtime file made it report a WARN on healthy fresh sessions — a
+   health check that cries wolf is one people stop reading. `--dcp-session <id>`
+   targets one session deliberately. `dcp: turn-nudge override installed`
    confirms step 8 landed. A session that simply has not needed pruning yet is
    a `WARN`, not a failure, so a fresh install stays green.
 
