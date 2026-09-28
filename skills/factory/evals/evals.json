@@ -1,0 +1,23 @@
+{
+  "skill_name": "factory",
+  "evals": [
+    {
+      "id": "dark-mode",
+      "prompt": "Add a dark-mode toggle to the settings page of our TypeScript React app.",
+      "expected_output": "One session that follows the factory pipeline (brainstorm -> spec [gate A] -> plan [gate B] -> implement -> debug -> verify), stops at each human gate for approval, and produces phase documents rather than committing code before spec+plan approval.",
+      "files": []
+    },
+    {
+      "id": "resume-login",
+      "prompt": "We restarted mid-feature yesterday. We were in the implement phase of the login feature. Continue it and finish the login flow.",
+      "expected_output": "Resumes the existing feature via the resume path (factory phase <name> / bd show <id>), honors graft freshness and the required superpowers skill at implement/debug entry, and finishes through verify.",
+      "files": []
+    },
+    {
+      "id": "payments-integration",
+      "prompt": "I need to build a new payments integration from scratch for our checkout. Plan it out — I want to review each step before you write any code.",
+      "expected_output": "The same factory discipline applies even though the word 'factory' never appears: brainstorm -> spec -> gate A -> plan -> gate B, with no implementation files before spec AND plan approval.",
+      "files": []
+    }
+  ]
+}

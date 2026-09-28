@@ -1,6 +1,6 @@
-# Node / opencode runtime (never commit anything machine-specific)
-node_modules/
-*.log
-.thumbs/
-.graft/
-.superpowers/
+# Eval run evidence (skill-creator loops) — regenerated on demand
+factory-workspace/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db

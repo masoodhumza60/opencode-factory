@@ -3,9 +3,12 @@ name: factory
 description: Run a feature through the whole opencode-factory pipeline
   (brainstorm -> spec -> plan -> tasks -> implement -> debug -> verify ->
   review -> ship) on autopilot with human gates at spec, plan, and ship.
-  Invoke with "factory <feature>". Read docs/how-factory-works.md and
-  docs/conductor.md before acting; this file is intentionally thin (context
-  economy — pull, don't push).
+  Invoke with "factory <feature>". Use this whenever the user wants to build,
+  change, extend, or roll out a feature or milestone, wants a structured
+  brainstorm/spec/plan/implement pipeline with review gates, or says
+  "factory <x>" / "let's build <x>" — even if they never say the word factory.
+  Read docs/how-factory-works.md and docs/conductor.md before acting; this file
+  is intentionally thin (context economy — pull, don't push).
 ---
 # factory — the software factory conductor
 
