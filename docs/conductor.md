@@ -2,9 +2,11 @@
 
 This is the operating manual for the `factory` skill. The skill's `SKILL.md` is
 intentionally thin (description only); the conductor's actual logic lives here,
-read on demand. Everything below is transcribed from the binding design spec
-(`docs/superpowers/specs/2026-09-22-opencode-factory-design.md`, §4–§8). When
-this file and the spec disagree, the spec wins.
+read on demand. Everything below is transcribed from the factory's own design
+spec (§4–§8), kept in the bundle repo at
+`docs/superpowers/specs/2026-09-22-opencode-factory-design.md` as build
+reference — it is not installed on machines. When this file and that spec
+disagree, the spec wins; settle the disagreement in the bundle repo.
 
 ## Roles (spec §4)
 

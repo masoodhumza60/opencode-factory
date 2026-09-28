@@ -17,8 +17,8 @@ review → ship) with human gates at spec, plan, and ship.
   the feature through the pipeline. Run `AI-AGENT-SETUP.md` **first** on a new
   machine; the project prompt stops and says so if the machine isn't ready.
 - **Agents:** start by reading `SKILL.md`.
-- **Design:** `docs/superpowers/specs/2026-09-22-opencode-factory-design.md`.
-- **Plan:** `docs/superpowers/plans/2026-09-22-opencode-factory.md`.
+- **Build reference (not product docs):** `docs/superpowers/` holds this bundle's
+  own spec and plan — kept for developing the factory itself, never installed.
 
 ## AI-agent install (little prompt)
 
