@@ -17,3 +17,10 @@ This is a factory flow — NOT a shell command. Follow the installed factory ski
 Record every phase transition in beads with the audit format:
 `bd update <feature-id> --append-notes "phase:<name> ✓ <skill>"`
 and every graft rebuild as `"graft: rebuilt (N nodes)"` / `"graft: fresh"` / `"graft: degraded <reason>"`.
+
+## Session discipline (not a phase — these rules run underneath the pipeline)
+
+- **~100 turns is a soft budget for this session, never for the work.** When you reach it — or at any phase boundary, or the moment you are stuck — hand off rather than continue: record state with `bd set-state <feature-id> <dimension>=<value> --reason "…"`, leave the next action in beads (`bd update <feature-id> --append-notes "next: <action>"`), tell the user in one line what is done / next / blocked, then stop. A fresh session resumes at roughly 20k of context instead of 190k, and the work continues.
+- **Keep a subagent's report, not its output.** Subagent and skill output is never pruned and is re-sent on every turn of this session. Take the report it returns; do not go back and re-read its raw output to double-check.
+- **Pick work with `bd ready`, not `bd list`.** `bd list` does not render the blocked state, so it will happily offer a feature whose gate is still waiting on the user.
+- These rules exist because a real run spent 78.3M tokens in one session — 955 turns whose context climbed to 191k and never dropped. The work was fine; the session shape was not.

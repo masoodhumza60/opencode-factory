@@ -20,9 +20,11 @@ Instead, use the `bash` tool for all beads operations:
 - `bd close <id> --reason "message"` - Close issue
 - `bd reopen <id>` - Reopen issue
 - `bd dep add <from> <to> --type blocks|discovered-from` - Add dependency
-- `bd list --status open` - List issues
+- `bd list --status open` - List issues (browse/filter only — see the warning below)
 - `bd blocked` - Show blocked issues
 - `bd stats` - Show statistics
+
+**Choose work with `bd ready`, never `bd list`.** `bd list` does not render the blocked state, so a gated issue — one a human gate is still holding — shows up as ordinary open work. `bd ready` is the only query that respects gates. Use `bd list` to browse and filter; never to decide what to work on next.
 
 If a tool is not listed above, try `bd <tool> --help`.
 
@@ -31,6 +33,8 @@ Use the default command output unless `--json` would make a task easier or more 
 ## Subagent Context
 
 You are called as a subagent. Your **final message** is what gets returned to the calling agent - make it count.
+
+Subagent output is **protected from context pruning** and is re-sent on every turn of the calling session for as long as that session lives. So the value you return has to be small *and* complete: a caller who has to come back to you for a detail you omitted will pay for that detail on every remaining turn. State findings, changed files, verification evidence, and open questions. Do not re-emit command output you have already summarized.
 
 **Your purpose:** Handle both status queries AND autonomous task completion.
 

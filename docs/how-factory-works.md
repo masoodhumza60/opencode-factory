@@ -105,3 +105,15 @@ The factory deliberately does not try to become:
   the loaded-footprint report; trim whatever is in the context that does not
   need to be there. `catalog.yaml` and `skills.lock.json` should never appear
   in conversation — they are opened only during `factory discover`.
+- **A session is getting expensive.** This is a shape problem, not a footprint
+  problem, and the two have different fixes. Cost is driven by turn count: every
+  turn re-sends the turns before it, so a long session gets quadratically
+  worse even when each turn is small. A real run spent 78.3M tokens across 955
+  turns with its context climbing to 191k and never dropping. The conductor
+  therefore runs a **~100-turn soft session budget** and hands off to a fresh
+  session rather than pushing on — see "Cost discipline" in `docs/conductor.md`,
+  which also covers picking work with `bd ready` (not `bd list`) and keeping a
+  subagent's report rather than its raw output. Automatic context pruning on the
+  machine helps with tool noise, but it is a nudge, not a budget: it cannot stop
+  a session from re-sending its own history.
+

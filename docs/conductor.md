@@ -71,7 +71,9 @@ factory <feature-name>            # create beads issue, start phase 1
 For every phase after onboard:
 
 1. **Read phase state from beads first**: `bd show <id>` at every entry, so a
-   restarted session or a different device resumes where it left off.
+   restarted session or a different device resumes where it left off. For
+   *choosing* what to work on next use `bd ready`, never `bd list` — the
+   difference is load-bearing, see "Cost discipline" below.
 2. **Verify the prerequisite gate** (A before 3, B before 4, C before 8).
 3. **Load the mandatory skill's content in-session.** Each phase begins with
    the literal instruction: *"Invoke skill X now and follow it."* A phase
@@ -83,6 +85,82 @@ For every phase after onboard:
    (the audit survives restarts and device moves — Dolt).
 6. At each human gate, **report which mandatory skills ran per phase**. Any
    skipped skill forces the phase to re-run before the gate can pass.
+
+## Cost discipline — the three rules that keep a session affordable
+
+A real factory run produced **78.3M tokens in a single session**: 955 turns,
+~63 hours, context climbing 39k → 113k and peaking at 191k, never once dropping.
+The work it did was good. The session shape was the failure. Three rules prevent
+it, and none of them is "be more careful" — each is mechanical, and each exists
+because the softer version was already tried and did not hold.
+
+### 1. Session turn budget, and a mandatory handoff (default 100 turns)
+
+Cost is driven by **turn count**, not by how much any single turn says. Turn N
+re-sends every turn before it, so a session that simply keeps going pays
+quadratically. That is why the 78M run's context never came back down.
+
+**100 turns is a soft budget: a cap on one session, never on the total work.**
+Reaching it is not a suggestion to push on. It is a handoff:
+
+1. Record where things stand — `bd set-state <id> <dimension>=<value> --reason "…"`.
+2. Leave the next action **in beads, not in your context** — create or update the
+   next unit of work and `bd update <id> --append-notes "next: <action>"`.
+3. Tell the human in one line: what is done, what is next, what is blocked.
+4. Stop.
+
+A fresh session resumes with roughly 20k of context instead of 190k. The budget is
+soft in one direction only: **hand off early at a phase boundary even if you are
+well under it**, because a handoff is where the state becomes durable rather than
+merely remembered. A session that is stuck should also hand off early and say
+what it is stuck on — a stuck session that keeps talking is precisely the failure
+this rule exists to stop.
+
+Corollary: **work out of beads, never out of your own scrollback.** The next
+session has no memory of this one, so anything that matters must already be in
+beads before you stop.
+
+### 2. Query `bd ready`, never `bd list`
+
+When choosing what to work on next — next task, next feature, what is unblocked —
+use **`bd ready`**.
+
+**`bd list` will hand you gated work.** It does not render the blocked state: a
+gated issue still shows up as ordinary open work. `bd ready` is the only query
+that respects gates. Verified on bd 1.3.0 — create a gate and `bd ready` reports
+*"No ready work found (all issues have blocking dependencies)"*; resolve the gate
+and the work appears. A conductor that selects work with `bd list` will cheerfully
+start a feature whose Gate A is still waiting on a human.
+
+### 3. Subagents return reports, never transcripts
+
+Every `task` (subagent) and `skill` (skill load) output is **protected from
+context pruning** — it is kept, in summary form, for the remainder of the
+session. So the more the factory delegates, the more unprunable content it
+carries, and every bit of it is re-sent on every subsequent turn.
+
+Therefore: **keep a subagent's report, not its output.** The subagent writes up
+findings, changed files, verification evidence and open questions; the
+orchestrator reads that report. Do not ask a subagent to re-emit its transcript,
+and do not go back and re-read a subagent's raw output to double-check it — the
+report *is* the contract, and treating it as a summary to be second-guessed is how
+a cheap delegation turns into permanent context tax.
+
+This is the same lever as delegation itself: a fresh subagent context is ~20k, a
+saturated orchestrator is ~190k, and the difference is paid on every turn after.
+
+### What context pruning does and does not do for you
+
+Automatic pruning on the machine is real and it does help — it removes repeated
+tool results and the oversized payloads of failed builds and failed test runs,
+none of which need anyone's cooperation. But it is a **nudge channel, not a
+budget**: it can only ask the model to compress stale context, and on the 78M run
+it asked five times and was ignored five times. Pruning cannot remove the fact
+that turn N re-sends turn N−1.
+
+So pruning sits **under** these three rules as a safety net, never as a
+substitute for them. If it is not visibly working, say so out loud — never let it
+become the reason a session is allowed to run long.
 
 ## Gates A / B / C — HARD STOPS (spec §5.3)
 

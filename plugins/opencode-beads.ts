@@ -26,9 +26,11 @@ Instead, use the \`bash\` tool for all beads operations:
 - \`bd close <id> --reason "message"\` - Close issue
 - \`bd reopen <id>\` - Reopen issue
 - \`bd dep add <from> <to> --type blocks|discovered-from\` - Add dependency
-- \`bd list --status open\` - List issues
+- \`bd list --status open\` - List issues (browse/filter only — see the warning below)
 - \`bd blocked\` - Show blocked issues
 - \`bd stats\` - Show statistics
+
+**Choose work with \`bd ready\`, never \`bd list\`.** \`bd list\` does not render the blocked state, so a gated issue — one a human gate is still holding — shows up as ordinary open work. \`bd ready\` is the only query that respects gates. Use \`bd list\` to browse and filter; never to decide what to work on next.
 
 If a tool is not listed above, try \`bd <tool> --help\`.
 
