@@ -133,7 +133,13 @@ try {
     report("live run emits a dcp verdict", hasVerdict && !crashed, r.line(/dcp: pruning active/) || "(no dcp dir yet)");
   }
 } finally {
-  rmSync(tmp, { recursive: true, force: true });
+  // A locked temp dir is a cleanup inconvenience, not a test result; retry and
+  // never let it turn a green suite red.
+  try {
+    rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  } catch (e) {
+    console.warn(`\n  warn  temp dir left behind (${e.code}): ${tmp}`);
+  }
 }
 
 console.log(`\n${ran - failures}/${ran} selfcheck tests passed.`);

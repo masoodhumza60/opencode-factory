@@ -233,10 +233,10 @@ EOF
 # --- skills ---------------------------------------------------------------------
 install_skills() {
     local src_sk="$bundle/skills/factory/SKILL.md"
-    local docs=(conductor.md how-factory-works.md)
+    local docs=(conductor.md how-factory-works.md plan-format.md)
     if [ "$DRY_RUN" = 1 ]; then
         dry "cp \"$src_sk\" \"$agents_skills/factory/\""
-        dry "cp \"$bundle/docs/conductor.md\" \"$bundle/docs/how-factory-works.md\" \"$agents_skills/factory/docs/\""
+        dry "cp \"$bundle/docs/conductor.md\" \"$bundle/docs/how-factory-works.md\" \"$bundle/docs/plan-format.md\" \"$agents_skills/factory/docs/\""
         return
     fi
     if [ -f "$src_sk" ]; then
@@ -276,18 +276,22 @@ run_tests() {
         dry "node \"$bundle/scripts/test-selfcheck.mjs\""
         dry "node \"$bundle/scripts/test-install-idempotency.mjs\""
         dry "node \"$bundle/scripts/test-factory-phase.mjs\""
+        dry "node \"$bundle/scripts/test-factory-plan.mjs\""
         return
     fi
-    for t in test-selfcheck.mjs test-install-idempotency.mjs test-factory-phase.mjs; do
+    for t in test-selfcheck.mjs test-install-idempotency.mjs test-factory-phase.mjs test-factory-plan.mjs; do
         local path="$bundle/scripts/$t"
         if [ ! -f "$path" ]; then
             say "warning: $path not in bundle yet; skipping."
             continue
         fi
-        node "$path" >/dev/null || {
+        # Capture rather than discard: a suite that fails without showing why is
+        # almost as useless as one that cannot fail at all.
+        if ! out=$(node "$path" 2>&1); then
+            printf '%s\n' "$out"
             echo "install: $t failed - the selfcheck cannot be trusted. Fix it before installing." >&2
             exit 1
-        }
+        fi
     done
     say "selfcheck tests: OK (every check proven able to fail)"
 }

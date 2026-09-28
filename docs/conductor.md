@@ -55,7 +55,8 @@ factory <feature-name>            # create beads issue, start phase 1
   → 1 brainstorm                   # brainstorming skill: vision questions + own research
   → 2 spec                         # spec doc → docs/superpowers/specs/
   → GATE A                         # human approves spec  ── STOP, wait
-  → 3 plan                         # writing-plans → plan doc, task breakdown
+  → 3 plan                         # writing-plans → plan doc + task breakdown
+                                   #   + <plan>.plan.json (the machine graph)
   → GATE B                         # human approves plan + execution method ── STOP, wait
   → 4 implement                    # TDD; beads-task-agent subagents; graft navigation
   → 4' debug (routed on failure)   # systematic-debugging
@@ -237,7 +238,9 @@ approval; a resolved gate is.
 - **Gate B — plan approved** (between phase 3 and phase 4): the plan doc and
   task breakdown were produced with `writing-plans`, the execution method was
   chosen (B decides between `executing-plans` and
-  `subagent-driven-development`), and the human approves plan + method.
+  `subagent-driven-development`), and the human approves plan + method. After B,
+  apply the plan graph so the approved task breakdown becomes the ledger (see
+  "The plan ledger" below) — before entering phase 4.
 - **Gate C — ship approved** (between phase 7 and phase 8): the ship criteria
   are met — verification passed (`verification-before-completion`, the
   evidence gate), review completed (`requesting-code-review` then
@@ -247,6 +250,37 @@ approval; a resolved gate is.
 **No implementation files before spec AND plan approval.** Gates A and B are
 hard human gates before any implementation; the plan is shared mutable state
 between human and agent.
+
+## The plan ledger — markdown for humans, JSON for beads
+
+A plan has two halves and neither replaces the other. The markdown plan
+(`docs/superpowers/plans/`) is the human record you read in a review. The
+companion `*.plan.json` is the machine graph, and it is the half beads can
+enforce: dependencies, acceptance criteria, `bd lint` completeness.
+
+**The factory never parses the markdown.** Headings get reworded mid-review and
+tables get reformatted, so a markdown parser loses tasks quietly — a plan that
+still reads perfectly to a human while phase 4 finds three of its tasks have
+disappeared.
+
+Once Gate B is resolved, compile the graph before entering phase 4:
+
+```bash
+node <bundle>/scripts/factory-plan.mjs validate docs/superpowers/plans/<name>.plan.json
+node <bundle>/scripts/factory-plan.mjs graph    docs/superpowers/plans/<name>.plan.json --issue <feature-bead>
+```
+
+This is what stops beads being decoration. A feature that leaves phase 3 with
+two issues against a 7,476-line plan has a progress nobody can query. With the
+graph applied, `bd ready` answers "what can I work on right now" with
+dependencies honoured, and every task carries its own acceptance criteria.
+
+The compiler refuses two things on your behalf. A field bd would **silently**
+drop — a task whose acceptance criteria quietly vanish is how work ships
+undefined. And a re-apply, because `bd create --graph` is not idempotent: the
+plan is fingerprinted and a second application exits `2` rather than creating a
+second set of issues. The format, every field bd accepts and the ones it drops,
+is in `docs/plan-format.md`.
 
 ## Brainstorm: vision questions + self-research (spec §5.4)
 

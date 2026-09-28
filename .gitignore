@@ -4,3 +4,13 @@ factory-workspace/
 # OS / editor noise
 .DS_Store
 Thumbs.db
+
+# bd's agent-integration scaffolding. The installer creates .agents/skills/ in
+# the bundle so `factory discover` has somewhere to write, and running bd in this
+# repo can add the rest. None of it belongs in the published clone.
+.agents/
+.claude/
+.codex/
+.cursor/
+AGENTS.md
+CLAUDE.md

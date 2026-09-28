@@ -181,5 +181,7 @@ if (badBead) {
 // ---------------------------------------------------------------- report
 console.log(`\n${pass}/${pass + fail} phase-machine tests passed.`);
 if (fail) { console.log("\nFailures:"); failures.forEach((f) => console.log("  - " + f)); }
-try { rmSync(SANDBOX, { recursive: true, force: true }); } catch {}
+// bd's Dolt database can stay locked for a moment after the last command, so
+// retry the remove; a locked temp dir is a cleanup note, never a test result.
+try { rmSync(SANDBOX, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); } catch {}
 process.exit(fail ? 1 : 0);

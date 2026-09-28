@@ -260,12 +260,13 @@ function Install-Skills {
     $dstSk = Join-Path $agentsSkills 'factory\SKILL.md'
     $srcDocs = @(
         (Join-Path $bundle 'docs\conductor.md'),
-        (Join-Path $bundle 'docs\how-factory-works.md')
+        (Join-Path $bundle 'docs\how-factory-works.md'),
+        (Join-Path $bundle 'docs\plan-format.md')
     )
     $dstDocs = Join-Path (Split-Path $dstSk) 'docs'
     if ($DryRun) {
         Say "[dry-run] Copy-Item '$srcSk' -> '$dstSk'"
-        Say "[dry-run] Copy-Item '$bundle\docs\conductor.md', '$bundle\docs\how-factory-works.md' -> '$dstDocs'"
+        Say "[dry-run] Copy-Item '$bundle\docs\conductor.md', '$bundle\docs\how-factory-works.md', '$bundle\docs\plan-format.md' -> '$dstDocs'"
     }
     elseif (Test-Path $srcSk) {
         Copy-Item $srcSk $dstSk -Force
@@ -299,13 +300,28 @@ function Run-Tests {
         Say "[dry-run] & node '$script:NodePath' scripts/test-selfcheck.mjs"
         Say "[dry-run] & node '$script:NodePath' scripts/test-install-idempotency.mjs"
         Say "[dry-run] & node '$script:NodePath' scripts/test-factory-phase.mjs"
+        Say "[dry-run] & node '$script:NodePath' scripts/test-factory-plan.mjs"
         return
     }
-    foreach ($t in @('test-selfcheck.mjs', 'test-install-idempotency.mjs', 'test-factory-phase.mjs')) {
+    foreach ($t in @('test-selfcheck.mjs', 'test-install-idempotency.mjs', 'test-factory-phase.mjs', 'test-factory-plan.mjs')) {
         $path = Join-Path $bundle "scripts\$t"
         if (-not (Test-Path $path)) { SayErr "warning: $path not in bundle yet; skipping."; continue }
-        & $script:NodePath $path | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw "$t failed - the selfcheck cannot be trusted. Fix it before installing." }
+        # Capture rather than discard: a suite that fails without showing why is
+        # almost as useless as one that cannot fail at all. Start-Process with real
+        # file redirection, because these suites run bd, and bd writes ordinary
+        # warnings to stderr - merging that into a PowerShell stream (2>&1 or *>)
+        # turns a "not a git repository" notice into a terminating error under this
+        # installer's error preferences, and the install dies on a passing suite.
+        $log = Join-Path ([IO.Path]::GetTempPath()) "factory-test-$t.log"
+        $errLog = "$log.err"
+        $proc = Start-Process -FilePath $script:NodePath -ArgumentList $path -NoNewWindow -Wait -PassThru `
+            -RedirectStandardOutput $log -RedirectStandardError $errLog
+        if ($proc.ExitCode -ne 0) {
+            Get-Content $log, $errLog -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+            Remove-Item $log, $errLog -Force -ErrorAction SilentlyContinue
+            throw "$t failed (exit $($proc.ExitCode)) - the selfcheck cannot be trusted. Fix it before installing."
+        }
+        Remove-Item $log, $errLog -Force -ErrorAction SilentlyContinue
     }
     Say 'selfcheck tests: OK (every check proven able to fail)'
 }
