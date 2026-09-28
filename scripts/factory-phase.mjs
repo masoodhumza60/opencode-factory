@@ -44,6 +44,15 @@ const flag = (name) => {
 };
 const asJson = args.includes("--json");
 const quiet = args.includes("--quiet");
+// The complete set of flags this script understands, so a flag used as a
+// positional can be reported as exactly that. Every flag is read by name above
+// (flag("reason"), flag("evidence"), flag("next")) or tested with includes(), so
+// this list and those reads must stay in step.
+const FLAG_NAMES = new Set(["reason", "evidence", "next", "json", "quiet"]);
+// The flags that consume the argument after them. Needed to tell a positional
+// from a flag's value: counting `--reason "why"` as two positionals is what made
+// this check reject every correct invocation.
+const VALUE_FLAGS = new Set(["reason", "evidence", "next"]);
 
 let BD = "bd";
 function bd(args2, { allowFail = false } = {}) {
@@ -247,6 +256,32 @@ try {
   }
   const bead = args[1];
   if (cmd !== "status" && cmd !== "next" && !bead) throw new Illegal("a bead id is required");
+  // Catch a flag where a positional belongs, and say so. `enter <bead> 1 --reason`
+  // is the documented form, but the design notes for this script used
+  // `--issue <bead>`, and an agent working from a half-remembered design
+  // writes `enter 1 --issue <bead>`. Without this the phase parser swallows the
+  // flag and reports `unknown phase "--issue"`, which points at the phase table
+  // instead of at the argument order - a diagnostic that sends the reader to
+  // the wrong file. Verified real: it cost me one wasted invocation.
+  // A flag this command does not have (`--issue` came from the design notes for
+  // this script) is the fault worth naming. A *known* flag sitting in a
+  // positional slot is deliberately NOT diagnosed separately: there was no
+  // reachable case for it, and a branch nobody can reach is a branch nobody has
+  // tested. One real diagnosis beats two with one fictional.
+  const takesPhase = cmd === "enter" || cmd === "complete";
+  const maxPositional = takesPhase ? 2 : 1;
+  const given = args.slice(1);
+  const shape = `factory-phase.mjs ${cmd} <bead>${takesPhase ? " <phase>" : ""} --reason "..."`;
+  const unknownFlag = given.find((a) => a.startsWith("--") && !FLAG_NAMES.has(a.replace(/^--/, "").split("=")[0]));
+  if (unknownFlag) {
+    throw new Illegal(`unknown flag ${unknownFlag}. This command is: ${shape} (the bead and phase are POSITIONAL, not flags)`);
+  }
+  const positionals = given.filter((a, i) => !a.startsWith("--") && !VALUE_FLAGS.has((given[i - 1] ?? "").replace(/^--/, "")));
+  if (positionals.length > maxPositional) {
+    throw new Illegal(
+      `too many arguments: ${maxPositional} positional expected, got ${positionals.length} (${positionals.join(", ")}). This command is: ${shape}`,
+    );
+  }
   if (cmd === "status") cmdStatus(bead);
   else if (cmd === "next") cmdNext(bead);
   else if (cmd === "enter") cmdEnter(bead, args[2], flag("reason"));

@@ -95,6 +95,19 @@ check("unknown phase is REFUSED", r.code === 1 && has(r.out, "unknown phase"), r
 r = phase(["enter", bead, "1", "--quiet"]);
 check("enter without --reason is REFUSED", r.code === 1 && has(r.out, "--reason is required"), r.out);
 
+// Argument order is the most common way to get this command wrong, and the
+// phase table is the wrong place to be sent when it happens. `--issue` was the
+// flag named in this script's design notes, so an agent working from a
+// half-remembered design writes it out of habit, and the phase parser used to
+// swallow it and report `unknown phase "--issue"`.
+r = phase(["enter", "1", "--issue", bead, "--reason", "wrong order"]);
+check("a flag this command does not have is named", r.code === 1 && has(r.out, "unknown flag --issue"), r.out);
+check("that error does not blame the phase table", r.code === 1 && !has(r.out, "unknown phase"), r.out);
+check("that error shows the positional form", r.code === 1 && has(r.out, "enter <bead> <phase>"), r.out);
+
+r = phase(["enter", bead, "1", "2"]);
+check("a surplus positional is REFUSED with the expected shape", r.code === 1 && has(r.out, "too many arguments") && has(r.out, "enter <bead> <phase>"), r.out);
+
 console.log("\nphase 2 creates GATE A and blocks phase 3");
 r = phase(["enter", bead, "1", "--reason", "brainstormed", "--quiet"]);
 check("entering 1 succeeds", r.code === 0, r.out);
