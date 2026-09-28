@@ -250,6 +250,23 @@ install_skills() {
     # NOTE: .agents/skills/skills.lock.json is created by `factory discover`, not by install.
 }
 
+# --- dcp turn-nudge -----------------------------------------------------------------
+# Runs before the selfcheck on purpose: the selfcheck reports on this override,
+# so writing it first keeps a fresh install green instead of failing on a file
+# the installer has not created yet.
+install_dcp_prompts() {
+    local script="$bundle/scripts/dcp-prompts.mjs"
+    if [ "$DRY_RUN" = 1 ]; then
+        dry "node \"$script\""
+        return
+    fi
+    if [ -f "$script" ]; then
+        node "$script" || { echo "install: dcp-prompts.mjs failed" >&2; exit 1; }
+    else
+        say "warning: $script not in bundle yet; skipping the DCP turn-nudge override."
+    fi
+}
+
 # --- selfcheck ---------------------------------------------------------------------
 run_selfcheck() {
     local selfcheck="$bundle/scripts/factory-selfcheck.mjs"
@@ -274,6 +291,7 @@ install_plugins
 install_commands
 merge_config
 install_skills
+install_dcp_prompts
 run_selfcheck
 if [ "$DRY_RUN" = 1 ]; then
     say "[dry-run] done (dry run - nothing was changed)."

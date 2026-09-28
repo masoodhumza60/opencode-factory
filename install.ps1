@@ -277,6 +277,20 @@ function Install-Skills {
     # NOTE: .agents/skills/skills.lock.json is created by `factory discover`, not by install.
 }
 
+function Install-DcpPrompts {
+    $script = Join-Path $bundle 'scripts\dcp-prompts.mjs'
+    if ($DryRun) {
+        Say "[dry-run] & node '$script:NodePath' '$script'"
+        return
+    }
+    if (Test-Path $script) {
+        & $script:NodePath $script
+        if ($LASTEXITCODE -ne 0) { throw 'dcp-prompts.mjs failed' }
+    } else {
+        SayErr "warning: $script not in bundle yet; skipping the DCP turn-nudge override."
+    }
+}
+
 function Run-Selfcheck {
     $selfcheck = Join-Path $bundle 'scripts\factory-selfcheck.mjs'
     if ($DryRun) {
@@ -301,6 +315,7 @@ Install-Plugins
 Install-Commands
 Merge-Config
 Install-Skills
+Install-DcpPrompts
 Run-Selfcheck
 if ($DryRun) { Say "[dry-run] done (dry run - nothing was changed)." }
 else { Say "done. See docs/HOW-INSTALL.md for manual steps and troubleshooting." }

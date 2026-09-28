@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // opencode-factory selfcheck. Exits 0 when the factory environment is intact.
 // --tokens additionally prints the token-cost estimate of injected context.
-import { readFileSync, existsSync, openSync, readSync, closeSync, fstatSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, existsSync, openSync, readSync, closeSync, fstatSync, readdirSync, statSync } from "node:fs";
+import { join, basename } from "node:path";
 import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 
@@ -11,6 +11,10 @@ const ok = (name, pass, extra = "") => {
   checks.push({ name, pass, extra });
   console.log(`${pass ? "PASS" : "FAIL  "} ${name}${extra ? " — " + extra : ""}`);
 };
+// Informational only: never enters `checks`, so it cannot change the exit code.
+// A fresh session that has not needed pruning yet is a fact about the machine's
+// current state, not a broken install — installers must stay green there.
+const warn = (name, msg) => console.log(`WARN ${name} — ${msg}`);
 
 // 1. Plugins load cleanly (same-run evidence from the opencode log).
 //    The machine-wide log's most recent lines are mostly session noise
@@ -99,9 +103,58 @@ ok("factory skill deployed", existsSync(factorySkill), factorySkill);
 // 4. Beads state accessible (git repo has .beads store)
 const beadsMarker = existsSync(join(homedir(), ".beads")) || existsSync(".beads") || existsSync(".agit");
 ok("beads store present", beadsMarker, "in cwd tree");
-// 5. Repo-scoped warnings (informational — these never affect the exit code,
+// 5. DCP is actually pruning, not merely loaded. Check 1 proves dcp *started*;
+//    it says nothing about whether pruning is doing anything. A loaded-but-idle
+//    dcp passes every other check here and silently does nothing, which is the
+//    failure this catches. DCP is a nudge channel rather than a budget — it
+//    asked a runaway session to compress five times and was ignored five times
+//    — so this does not try to promote it into a budget. It only proves it is
+//    doing the job it is actually capable of doing.
+//    `--dcp-state <file>` inspects a specific session state file, which is how
+//    the negative tests exercise the failure paths.
+const dcpDir = join(homedir(), ".local", "share", "opencode", "storage", "plugin", "dcp");
+let dcpState;
+const dcpStateArg = process.argv.indexOf("--dcp-state");
+if (dcpStateArg !== -1 && process.argv[dcpStateArg + 1]) {
+  dcpState = process.argv[dcpStateArg + 1];
+} else {
+  try {
+    let newestAt = 0;
+    for (const name of readdirSync(dcpDir).filter((n) => n.endsWith(".json"))) {
+      const p = join(dcpDir, name);
+      const at = statSync(p).mtimeMs;
+      if (at > newestAt) { newestAt = at; dcpState = p; }
+    }
+  } catch { /* no dcp state yet */ }
+}
+if (!dcpState || !existsSync(dcpState)) {
+  ok("dcp: pruning active", false, "no dcp session state found — plugin loaded but never ran");
+} else {
+  try {
+    const s = JSON.parse(readFileSync(dcpState, "utf8"));
+    // The config has manualMode as an object ({enabled, automaticStrategies});
+    // the per-session state file holds the resolved boolean. Read the state.
+    const sid = s.sessionId ?? basename(dcpState, ".json");
+    const pruned = s.stats?.totalPruneTokens ?? s.stats?.pruneTokenCounter ?? 0;
+    const where = `session ${sid} — pruned ${pruned.toLocaleString("en-US")} tokens`;
+    if (s.manualMode === true)
+      ok("dcp: pruning active", false, `${where} — manualMode is true, so auto-pruning is OFF`);
+    else if (pruned > 0)
+      ok("dcp: pruning active", true, where);
+    else
+      warn("dcp: pruning active", `${where} — nothing pruned yet; expected in a fresh session, re-check once real work has happened`);
+  } catch (e) {
+    ok("dcp: pruning active", false, `state unreadable: ${e.message.slice(0, 60)}`);
+  }
+}
+// 6. The turn-nudge override. A WARN, not a FAIL: it is deliberately deletable
+//    by a user who prefers dcp's stock wording, and it only activates after an
+//    OpenCode restart, so a missing file right after install is not an error.
+const dcpOverride = join(homedir(), ".config", "opencode", "dcp-prompts", "overrides", "turn-nudge");
+if (existsSync(dcpOverride)) ok("dcp: turn-nudge override installed", true, dcpOverride);
+else warn("dcp: turn-nudge override installed", `missing — re-run the installer to write ${dcpOverride}`);
+// 7. Repo-scoped warnings (informational — these never affect the exit code,
 //    so installers stay green on healthy machines).
-const warn = (name, msg) => console.log(`WARN ${name} — ${msg}`);
 try {
   const wiring = join(process.cwd(), "graft", ".graph", "wiring.json");
   if (existsSync(wiring)) {
@@ -115,7 +168,7 @@ try {
       !existsSync(join(process.cwd(), ".agents", "skills", "skills.lock.json")))
     warn("skills.lock.json missing", "run `factory discover` to record the (possibly empty) outcome");
 } catch { /* subdirs unreadable — skip */ }
-// 5. Token footprint (--tokens only)
+// 8. Token footprint (--tokens only)
 if (process.argv.includes("--tokens")) {
   const beadsCtx = (readFileSync(join(homedir(), ".config", "opencode", "plugins", "opencode-beads.ts"), "utf8").length);
   ok("context footprint rough est.", true, `beads plugin approx ${(beadsCtx / 4000).toFixed(1)}k chars → ~${Math.round(beadsCtx / 4)} tokens`);

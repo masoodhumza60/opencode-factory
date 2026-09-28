@@ -100,8 +100,27 @@ Both installers run the same steps in the same order:
    `docs/how-factory-works.md` to `~/.agents/skills/factory/docs/`. The
    installed skill is self-contained: its `docs/` subdir ships the conductor
    and how-it-works docs next to the reference.
-8. **Selfcheck** — run `node scripts/factory-selfcheck.mjs`. Any failed check
-   aborts the install (`factory selfcheck failed - install incomplete.`).
+8. **Pair DCP with the handoff rule** — run `scripts/dcp-prompts.mjs`. It
+   inserts `experimental.customPrompts: true` into
+   `~/.config/opencode/dcp.jsonc` (a pure insertion: your comments and
+   formatting are left alone, and a second run changes nothing) and writes the
+   `turn-nudge` prompt override to
+   `~/.config/opencode/dcp-prompts/overrides/turn-nudge`. DCP only honours
+   overrides once that flag is set, and if the config cannot be parsed the
+   script reports the override as **inert** rather than leaving a file that
+   looks configured and never fires. **Restart OpenCode afterwards** — dcp
+   reads its config at startup, so the nudge is inactive until then. The
+   override text is our own: DCP is AGPL-3.0-or-later, so we install it but
+   never vendor or copy its prompts. Delete the override file to return to
+   stock dcp wording.
+9. **Selfcheck** — run `node scripts/factory-selfcheck.mjs`. Any failed check
+   aborts the install (`factory selfcheck failed - install incomplete.`). Two
+   of the checks watch DCP rather than merely asserting the plugin loads:
+   `dcp: pruning active` reads the newest session's state file and proves
+   auto-pruning is on and has actually pruned (`manualMode: true`, or no state
+   file at all, fails the install), and `dcp: turn-nudge override installed`
+   confirms step 8 landed. A session that simply has not needed pruning yet is
+   a `WARN`, not a failure, so a fresh install stays green.
 
 Why re-runs are safe (and how they behave): the config merge is a union (no
 destructive overwrite of your keys), the two graft patch scripts are idempotent
