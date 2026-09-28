@@ -233,10 +233,10 @@ EOF
 # --- skills ---------------------------------------------------------------------
 install_skills() {
     local src_sk="$bundle/skills/factory/SKILL.md"
-    local docs=(conductor.md how-factory-works.md plan-format.md discovery.md)
+    local docs=(conductor.md how-factory-works.md plan-format.md discovery.md mcp-judging.md)
     if [ "$DRY_RUN" = 1 ]; then
         dry "cp \"$src_sk\" \"$agents_skills/factory/\""
-        dry "cp \"$bundle/docs/conductor.md\" \"$bundle/docs/how-factory-works.md\" \"$bundle/docs/plan-format.md\" \"$bundle/docs/discovery.md\" \"$agents_skills/factory/docs/\""
+        dry "cp \"$bundle/docs/conductor.md\" \"$bundle/docs/how-factory-works.md\" \"$bundle/docs/plan-format.md\" \"$bundle/docs/discovery.md\" \"$bundle/docs/mcp-judging.md\" \"$agents_skills/factory/docs/\""
         return
     fi
     if [ -f "$src_sk" ]; then
@@ -298,9 +298,10 @@ run_tests() {
         dry "node \"$bundle/scripts/test-factory-phase.mjs\""
         dry "node \"$bundle/scripts/test-factory-plan.mjs\""
         dry "node \"$bundle/scripts/test-factory-skills.mjs\""
+        dry "node \"$bundle/scripts/test-factory-mcp.mjs\""
         return
     fi
-    for t in test-selfcheck.mjs test-install-idempotency.mjs test-factory-phase.mjs test-factory-plan.mjs test-factory-skills.mjs; do
+    for t in test-selfcheck.mjs test-install-idempotency.mjs test-factory-phase.mjs test-factory-plan.mjs test-factory-skills.mjs test-factory-mcp.mjs; do
         local path="$bundle/scripts/$t"
         if [ ! -f "$path" ]; then
             say "warning: $path not in bundle yet; skipping."

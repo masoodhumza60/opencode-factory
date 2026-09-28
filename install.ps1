@@ -262,12 +262,13 @@ function Install-Skills {
         (Join-Path $bundle 'docs\conductor.md'),
         (Join-Path $bundle 'docs\how-factory-works.md'),
         (Join-Path $bundle 'docs\plan-format.md'),
-        (Join-Path $bundle 'docs\discovery.md')
+        (Join-Path $bundle 'docs\discovery.md'),
+        (Join-Path $bundle 'docs\mcp-judging.md')
     )
     $dstDocs = Join-Path (Split-Path $dstSk) 'docs'
     if ($DryRun) {
         Say "[dry-run] Copy-Item '$srcSk' -> '$dstSk'"
-        Say "[dry-run] Copy-Item '$bundle\docs\conductor.md', '$bundle\docs\how-factory-works.md', '$bundle\docs\plan-format.md', '$bundle\docs\discovery.md' -> '$dstDocs'"
+        Say "[dry-run] Copy-Item '$bundle\docs\conductor.md', '$bundle\docs\how-factory-works.md', '$bundle\docs\plan-format.md', '$bundle\docs\discovery.md', '$bundle\docs\mcp-judging.md' -> '$dstDocs'"
     }
     elseif (Test-Path $srcSk) {
         Copy-Item $srcSk $dstSk -Force
@@ -325,9 +326,10 @@ function Run-Tests {
         Say "[dry-run] & node '$script:NodePath' scripts/test-factory-phase.mjs"
         Say "[dry-run] & node '$script:NodePath' scripts/test-factory-plan.mjs"
         Say "[dry-run] & node '$script:NodePath' scripts/test-factory-skills.mjs"
+        Say "[dry-run] & node '$script:NodePath' scripts/test-factory-mcp.mjs"
         return
     }
-    foreach ($t in @('test-selfcheck.mjs', 'test-install-idempotency.mjs', 'test-factory-phase.mjs', 'test-factory-plan.mjs', 'test-factory-skills.mjs')) {
+    foreach ($t in @('test-selfcheck.mjs', 'test-install-idempotency.mjs', 'test-factory-phase.mjs', 'test-factory-plan.mjs', 'test-factory-skills.mjs', 'test-factory-mcp.mjs')) {
         $path = Join-Path $bundle "scripts\$t"
         if (-not (Test-Path $path)) { SayErr "warning: $path not in bundle yet; skipping."; continue }
         # Capture rather than discard: a suite that fails without showing why is

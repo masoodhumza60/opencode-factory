@@ -105,7 +105,7 @@ for (const [name, cmd, args] of [
 //    not a packaging detail.
 const factorySkillDir = join(homedir(), ".agents", "skills", "factory");
 const factorySkill = join(factorySkillDir, "SKILL.md");
-const requiredDocs = ["conductor.md", "how-factory-works.md", "plan-format.md", "discovery.md"];
+const requiredDocs = ["conductor.md", "how-factory-works.md", "plan-format.md", "discovery.md", "mcp-judging.md"];
 const missingDocs = requiredDocs.filter((d) => !existsSync(join(factorySkillDir, "docs", d)));
 ok(
   "factory skill deployed",
@@ -261,7 +261,58 @@ if (!existsSync(skillsScript)) {
       `${report.missing.length} of ${report.total} missing: ${report.missing.join(", ")} — fix: node scripts/factory-skills.mjs install`);
   }
 }
-// 8. Repo-scoped warnings (informational — these never affect the exit code,
+// 8. The graft MCP actually handshakes. The `graft present` check above only
+//    proves the CLI answers `--version`; a server that is misconfigured, renamed,
+//    or crashes on boot looks identical to a healthy one. docs/conductor.md
+//    promised the selfcheck asserted the handshake, and it did not - prose
+//    claiming what the state layer does not enforce is the defect class this
+//    project has now hit three times (docs/superpowers as a second source of
+//    truth; gates described in prose while bd reported none; this).
+//
+//    Delegates to factory-mcp.mjs for the same reason check 7 delegates to
+//    factory-skills.mjs: one reader per file, so the two cannot disagree.
+//
+//    A FAIL, not a WARN: graft is the conductor's context layer, and the factory
+//    degrades to file navigation when it is gone. A warning here would be a gate
+//    people learn to ignore, which is the P4 lesson restated.
+//
+//    `--mcp-config <path>` exists so scripts/test-selfcheck.mjs can drive the
+//    failure path with a config it controls, not the real one.
+const mcpScript = join(dirname(fileURLToPath(import.meta.url)), "factory-mcp.mjs");
+if (!existsSync(mcpScript)) {
+  ok("mcp: graft handshake", false, `factory-mcp.mjs missing from the bundle (${mcpScript})`);
+} else {
+  const mcpArgs = [mcpScript, "handshake", "--name", "graft", "--json", "--quiet"];
+  const mcpConfigArg = flagValue("--mcp-config");
+  if (mcpConfigArg) mcpArgs.push("--config", mcpConfigArg);
+  const mr = process.platform === "win32"
+    ? spawnSync("node " + mcpArgs.join(" "), { shell: true, timeout: 60000, encoding: "utf8" })
+    : spawnSync("node", mcpArgs, { timeout: 60000, encoding: "utf8" });
+  let handshake = null;
+  try { handshake = JSON.parse((mr.stdout ?? "").trim().split("\n").pop()); } catch { /* handled below */ }
+  // Shape first, flag second: factory-mcp.mjs reports `ok: false` for both a
+  // refused handshake and an unusable config, and a toolCount of null is a
+  // legitimate answer (graft defers tool schemas until a graph exists), so
+  // `toolCount === 0` must never be read as a failure.
+  const usable = handshake && typeof handshake.ok === "boolean" && handshake.serverInfo;
+  if (!usable) {
+    const why = handshake?.error
+      ? `handshake failed at ${handshake.stage ?? "unknown stage"} - ${String(handshake.error).slice(0, 50)}`
+      : `no usable report (exit ${mr.status}) - ${(mr.stderr || mr.stdout || "no output").trim().slice(0, 50)}`;
+    ok("mcp: graft handshake", false, why);
+  } else if (handshake.ok) {
+    const si = handshake.serverInfo;
+    const tools = handshake.toolCount === null || handshake.toolCount === undefined
+      ? "tool list not graded"
+      : `${handshake.toolCount} tool${handshake.toolCount === 1 ? "" : "s"}`;
+    ok("mcp: graft handshake", true,
+      `${si.name} ${si.version ?? "?"} - ${tools}, ${handshake.instructionsChars ?? 0} chars of instructions injected per call`);
+  } else {
+    ok("mcp: graft handshake", false,
+      `${handshake.stage ?? "handshake"} - ${String(handshake.error ?? "unknown").slice(0, 50)} (re-run install.ps1/install.sh to re-register the server)`);
+  }
+}
+// 9. Repo-scoped warnings (informational — these never affect the exit code,
 //    so installers stay green on healthy machines).
 try {
   const wiring = join(process.cwd(), "graft", ".graph", "wiring.json");
@@ -276,7 +327,7 @@ try {
       !existsSync(join(process.cwd(), ".agents", "skills", "skills.lock.json")))
     warn("skills.lock.json missing", "run `factory discover` to record the (possibly empty) outcome");
 } catch { /* subdirs unreadable — skip */ }
-// 8. Token footprint (--tokens only)
+// 10. Token footprint (--tokens only)
 if (process.argv.includes("--tokens")) {
   const beadsCtx = (readFileSync(join(homedir(), ".config", "opencode", "plugins", "opencode-beads.ts"), "utf8").length);
   ok("context footprint rough est.", true, `beads plugin approx ${(beadsCtx / 4000).toFixed(1)}k chars → ~${Math.round(beadsCtx / 4)} tokens`);

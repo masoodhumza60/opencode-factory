@@ -373,6 +373,22 @@ Phase 1 runs two tracks that feed each other:
   run is *not* a reason to skip it — run it, report `DISCOVERY_DEGRADED` with
   its reason, and let the human decide. See `docs/discovery.md`.
 
+- **MCP audit (part of the same sub-step)** — an enabled MCP server costs
+  context on *every* model call, not only when something triggers it, and its
+  tools can write to the repo or to production. So before a feature leans on
+  one, run `node scripts/factory-mcp.mjs audit` and report what is configured,
+  what it costs, and which of it the factory actually verifies. A server the
+  feature needs must have completed a real handshake
+  (`factory-mcp.mjs handshake --name <server>`), never merely appear in the
+  config. If a new server looks like the answer, judge it against
+  `docs/mcp-judging.md` and record the verdict, including the rejections.
+
+  **The factory never installs an MCP.** Adding one edits the user's global
+  `opencode.json`, which is a larger act than adding a project skill, so the
+  agent proposes, judges and records, and the human decides. A degraded audit
+  (`MCP_NO_CONFIG`, `MCP_CONFIG_UNREADABLE`, `MCP_NOT_STDIO`,
+  `MCP_HANDSHAKE_FAILED`) is reported with its reason, never silently passed.
+
 Interaction model: light research first → sharper opening questions; answers
 shape deeper research (follow-ups, docs, comparisons); research produces
 informed options, presented alongside the remaining questions and carried into
@@ -416,8 +432,10 @@ is visible in the repo before a phase relies on it.
 | `factory <feature>` | New feature: creates the beads issue, records `phase:brainstorm`, invokes `brainstorming`. |
 | `factory phase <name>` | Advance phase, enforce the skill gate, record the transition in beads. |
 | `factory discover` | Run the skill-discovery flow (below); idempotent. |
+| `factory mcp audit` | Inventory the configured MCP servers: owner (bundle or the user), live or disabled, whether each needs a credential, and the context it injects into every model call. Read-only; it never edits the config. |
+| `factory mcp handshake` | Spawn a local stdio server and speak the real protocol, proving it answers rather than assuming it. See `docs/mcp-judging.md`. |
 | `factory onboard` | Per-repo one-time check: `bd init` if no beads DB, `graft build` if no graph **or the graph is empty (0 nodes — an empty `wiring.json` counts as "no graph"**, same rule as phases 4/4' freshness), then `factory discover`. Auto-offered when the conductor starts in a repo without state. The graph is rebuilt again whenever phases 4/4' find it empty or stale (see "Graft context freshness"). |
-| `factory selfcheck` | Environment health (from the spec's verification section): plugins load, graft MCP handshake returns its tools, `bd version` and `graft --version` resolve, and every mandatory phase skill is discoverable. `--tokens` adds a per-skill description-size + total loaded-footprint report — the **required** flag for keeping the loaded footprint visible (spec §8). |
+| `factory selfcheck` | Environment health (from the spec's verification section): plugins load, the graft MCP completes a real handshake (serverInfo, the tool list, and the instructions it injects into every call; 0 tools is a legitimate state, not a failure), `bd version` and `graft --version` resolve, and every mandatory phase skill is discoverable. `--tokens` adds a per-skill description-size + total loaded-footprint report — the **required** flag for keeping the loaded footprint visible (spec §8). |
 
 ## Skill discovery — `factory discover` (spec §7)
 

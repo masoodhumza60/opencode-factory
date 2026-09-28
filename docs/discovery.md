@@ -194,6 +194,35 @@ its score, each rejection with its reason, and the lockfile outcome — then
 wait. A skill the human declined is recorded as declined, and phase 1 continues
 without it; that verdict is not a blocker, it is an answer.
 
+## 7. Audit the MCP servers
+
+Skills are what this flow finds. MCP servers are what it has to live alongside,
+so they get audited in the same sub-step, and the asymmetry is the point:
+
+```bash
+node scripts/factory-mcp.mjs audit                    # what is configured, and what it costs
+node scripts/factory-mcp.mjs handshake --name graft   # does it actually answer?
+```
+
+A skill costs context when it is triggered. An **enabled MCP server costs
+context on every model call**, and its tools can write to the repo or to
+production. That makes an unused server a standing tax, and it makes a
+misconfigured one a failure that is invisible until a feature needs it. So:
+
+- Report every configured server: owner (bundle or the user), live or disabled,
+  whether it needs a credential, and the instructions it injects per call.
+- A server the feature depends on must have **completed a handshake**, not
+  merely appear in the config. The selfcheck does this for graft; a
+  feature-specific server is handshaked on demand.
+- If a *new* server looks like the answer, judge it against
+  `docs/mcp-judging.md` and record the verdict, rejections included.
+- **Never install one automatically.** It edits the user's global
+  `opencode.json`. The agent proposes and records; the human decides.
+
+A degraded audit is a recorded outcome with a reason, exactly as
+`DISCOVERY_DEGRADED` is for skills: `MCP_NO_CONFIG`, `MCP_CONFIG_UNREADABLE`,
+`MCP_NOT_STDIO`, `MCP_HANDSHAKE_FAILED`. It is never reported as a clean pass.
+
 ## Hard skills are not discovered
 
 `commit-work` and `skill-judge` are **hard skills** — declared in

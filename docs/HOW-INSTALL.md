@@ -130,7 +130,8 @@ Both installers run the same steps in the same order:
    `node scripts/test-install-idempotency.mjs`,
    `node scripts/test-factory-phase.mjs` and
    `node scripts/test-factory-plan.mjs` and
-   `node scripts/test-factory-skills.mjs`. A check that cannot fail is
+   `node scripts/test-factory-skills.mjs` and
+   `node scripts/test-factory-mcp.mjs`. A check that cannot fail is
    decoration, and this bundle has shipped one, so the proof that each check
    can reach a FAIL lives in the repo rather than in someone's memory. The
    tests run **before** the selfcheck and a failure aborts the install
@@ -155,6 +156,14 @@ Both installers run the same steps in the same order:
    an unknown future version and an unknown top-level key are each **rejected**
    rather than read as an empty mandatory list, and a `SKILL.md` that is a
    *directory* does not count as installed.
+   `test-factory-mcp.mjs` drives a **fake MCP server** it spawns itself, in a
+   sandbox, with a config it controls, so it proves the handshake check both
+   ways: a server that completes the protocol PASSes and reports the version it
+   sent, while an absent, disabled, unspawnable or unreadable one FAILs with a
+   named stage. It also pins the two judgement calls that are easy to get
+   backwards — a tool list of **zero is a legitimate state** and never a
+   failure, and **no credential can leak** into a record (no header values, no
+   header names, no URL query tokens). See `docs/mcp-judging.md`.
 11. **Selfcheck** — run `node scripts/factory-selfcheck.mjs`. Any failed check
    aborts the install (`factory selfcheck failed - install incomplete.`). Two
    of the checks watch DCP rather than merely asserting the plugin loads:
@@ -174,6 +183,18 @@ Both installers run the same steps in the same order:
    parsers of one file drift, and the second one is the one that quietly
    disagrees. On failure it names the missing skill and the fix
    (`factory-skills.mjs install`).
+   `mcp: graft handshake` is a **FAIL** for the same reason. It is not the
+   `graft --version` CLI check: it reads the configured command out of
+   `opencode.json`, spawns it, and speaks the real MCP protocol (`initialize`,
+   then `tools/list`). This is what the doc used to *claim* the selfcheck did
+   while it only ran the CLI, which meant a graft server that was misconfigured,
+   renamed or crashing on boot looked exactly as healthy as a working one. A
+   tool list of **zero passes** — graft defers its schemas until a graph exists,
+   and a healthy server legitimately exposes nothing in some repos. The verdict
+   also reports the instructions the server injects into every model call,
+   because an enabled MCP is a standing context cost, not a skill that costs
+   only when triggered. `--mcp-config <path>` points the check at another
+   config, which is how the negative tests drive it.
 
 Why re-runs are safe (and how they behave): the config merge is a union (no
 destructive overwrite of your keys), the two graft patch scripts are idempotent
