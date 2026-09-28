@@ -113,8 +113,9 @@ Both installers run the same steps in the same order:
    override text is our own: DCP is AGPL-3.0-or-later, so we install it but
    never vendor or copy its prompts. Delete the override file to return to
    stock dcp wording.
-9. **Run the selfcheck's own tests** — `node scripts/test-selfcheck.mjs` and
-   `node scripts/test-install-idempotency.mjs`. A check that cannot fail is
+9. **Run the selfcheck's own tests** — `node scripts/test-selfcheck.mjs`,
+   `node scripts/test-install-idempotency.mjs` and
+   `node scripts/test-factory-phase.mjs`. A check that cannot fail is
    decoration, and this bundle has shipped one, so the proof that each check
    can reach a FAIL lives in the repo rather than in someone's memory. The
    tests run **before** the selfcheck and a failure aborts the install
@@ -122,6 +123,11 @@ Both installers run the same steps in the same order:
    check — pruned → PASS, `manualMode: true` → FAIL, corrupt → FAIL, fresh
    session → WARN, missing state → FAIL — plus the writers' idempotency and
    their refusal to damage a config they cannot parse.
+   `test-factory-phase.mjs` drives the phase machine against a throwaway bd
+   database and asserts that every illegal transition is **refused**: jumping
+   phases, entering a phase while its human gate is still pending, completing a
+   phase you are not in, and reading a state that cannot be parsed. That suite
+   is the proof the pipeline's enforcement can actually say no.
 10. **Selfcheck** — run `node scripts/factory-selfcheck.mjs`. Any failed check
    aborts the install (`factory selfcheck failed - install incomplete.`). Two
    of the checks watch DCP rather than merely asserting the plugin loads:

@@ -71,20 +71,59 @@ factory <feature-name>            # create beads issue, start phase 1
 For every phase after onboard:
 
 1. **Read phase state from beads first**: `bd show <id>` at every entry, so a
-   restarted session or a different device resumes where it left off. For
-   *choosing* what to work on next use `bd ready`, never `bd list` — the
-   difference is load-bearing, see "Cost discipline" below.
-2. **Verify the prerequisite gate** (A before 3, B before 4, C before 8).
+   restarted session or a different device resumes where it left off. Better:
+   `node <bundle>/scripts/factory-phase.mjs status <bead>` reads the recorded
+   phase *and* the pending gates in one call. For *choosing* what to work on
+   next use `bd ready`, never `bd list` — the difference is load-bearing, see
+   "Cost discipline" below.
+2. **Verify the prerequisite gate** (A before 3, B before 4, C before 8). This
+   is enforced, not remembered — see "The phase machine" below.
 3. **Load the mandatory skill's content in-session.** Each phase begins with
    the literal instruction: *"Invoke skill X now and follow it."* A phase
    cannot be marked complete until skill X's content was loaded in-session —
    verify the model actually has the skill content, not just the name.
 4. **Run the skill's procedure** for this phase.
-5. **Record the transition in beads**, the audit format:
-   `bd update <feature-id> --append-notes "phase:<name> ✓ <skill>"`
-   (the audit survives restarts and device moves — Dolt).
+5. **Record the transition with the phase machine**, not with free-text notes:
+   `node <bundle>/scripts/factory-phase.mjs enter <bead> <phase> --reason "…"`
+   then `complete <bead> <phase> --evidence "…"`. The `--reason` becomes an
+   append-only event bead, so the audit survives restarts and device moves
+   (Dolt) — and an illegal transition is refused outright.
 6. At each human gate, **report which mandatory skills ran per phase**. Any
    skipped skill forces the phase to re-run before the gate can pass.
+
+## The phase machine - rules that refuse to be talked out of
+
+`scripts/factory-phase.mjs` is the pipeline's enforcement. It reads the same
+phase table documented above, and it **fails closed**: an unreadable state, an
+unknown phase, or a gate it cannot evaluate means STOP. That is deliberate. The
+gaps it closes were not hypothetical - a session once read the words
+"GATE A approved" out of a plan file and began implementing on the strength of
+prose, and bd reported no gates at all afterwards.
+
+```
+node <bundle>/scripts/factory-phase.mjs status   <bead> [--json]
+node <bundle>/scripts/factory-phase.mjs next     <bead> [--json]
+node <bundle>/scripts/factory-phase.mjs enter    <bead> <phase> --reason "…"
+node <bundle>/scripts/factory-phase.mjs complete <bead> <phase> --evidence "…"
+node <bundle>/scripts/factory-phase.mjs handoff  <bead> --next "<action>"
+```
+
+Exit codes: **0** ok · **1** illegal transition or error · **2** blocked, a
+human gate is still pending.
+
+Three properties worth relying on:
+
+- **Legality is checked on every transition, including the first.** A bead with
+  no recorded phase may enter `0` or `1`; it may not jump to `5`.
+- **Entering a gate-bearing phase creates that gate** in bd and records its id
+  on the bead, so `bd ready` withholds the next phase from every other session
+  on every device. The gate is no longer a sentence in a document.
+- **`--evidence` is mandatory on complete.** Completion has to be checkable
+  rather than asserted, which is the difference MAST's "not recognizing
+  completion" failures actually turn on.
+
+If the script refuses you, that is the gate working, not a bug to route
+around. Fix the state or ask the human — do not start writing files anyway.
 
 ## Cost discipline — the three rules that keep a session affordable
 
@@ -103,7 +142,8 @@ quadratically. That is why the 78M run's context never came back down.
 **100 turns is a soft budget: a cap on one session, never on the total work.**
 Reaching it is not a suggestion to push on. It is a handoff:
 
-1. Record where things stand — `bd set-state <id> <dimension>=<value> --reason "…"`.
+1. Record where things stand — `node <bundle>/scripts/factory-phase.mjs handoff <bead> --next "<action>"`
+   (which writes `bd set-state` and the next action for you).
 2. Leave the next action **in beads, not in your context** — create or update the
    next unit of work and `bd update <id> --append-notes "next: <action>"`.
 3. Tell the human in one line: what is done, what is next, what is blocked.
@@ -119,6 +159,22 @@ this rule exists to stop.
 Corollary: **work out of beads, never out of your own scrollback.** The next
 session has no memory of this one, so anything that matters must already be in
 beads before you stop.
+
+**A claim is the mechanism, so a runaway cannot hide.** When you start work on a
+bead, `bd update <id> --claim` takes a lease on it, and `bd heartbeat <id>`
+keeps that lease alive. Two properties make this worth the two commands:
+
+- A session that dies — crashes, closes its laptop, gets killed — simply stops
+  heartbeating. Its lease goes stale, and `bd reclaim` returns the bead to
+  ready. **The runaway is then detectable without reading a single token
+  count**, which is the whole point: you cannot see cost from inside a session
+  that is happily spending it.
+- `bd heartbeat` on a reclaimed bead *fails*, so a session that has been
+  overtaken learns to stop instead of continuing to write.
+
+So a handoff is a release: `bd unclaim <id>` (or closing the bead) tells the
+next session the work is genuinely free, rather than leaving the previous
+owner holding it until a lease expires.
 
 ### 2. Query `bd ready`, never `bd list`
 
@@ -166,6 +222,13 @@ become the reason a session is allowed to run long.
 
 Gates are genuine stops in the pipeline, not checkboxes. The conductor waits
 for the human; nothing advances past a gate without approval.
+
+**They are enforced in the state layer, not just described here.** Entering
+phase `2`, `3` or `7` through the phase machine creates a real `bd` gate
+(`--type human`) that blocks the bead, so `bd ready` reports the feature as
+blocked on every device. Ask the human, then `bd gate resolve <gate-id>` — and
+only then can the next phase be entered. A word written in a document is not an
+approval; a resolved gate is.
 
 - **Gate A — spec approved** (between phase 2 and phase 3): the spec doc
   exists at `docs/superpowers/specs/`, `brainstorming` (spec section) ran and

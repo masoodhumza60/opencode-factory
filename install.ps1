@@ -298,9 +298,10 @@ function Run-Tests {
     if ($DryRun) {
         Say "[dry-run] & node '$script:NodePath' scripts/test-selfcheck.mjs"
         Say "[dry-run] & node '$script:NodePath' scripts/test-install-idempotency.mjs"
+        Say "[dry-run] & node '$script:NodePath' scripts/test-factory-phase.mjs"
         return
     }
-    foreach ($t in @('test-selfcheck.mjs', 'test-install-idempotency.mjs')) {
+    foreach ($t in @('test-selfcheck.mjs', 'test-install-idempotency.mjs', 'test-factory-phase.mjs')) {
         $path = Join-Path $bundle "scripts\$t"
         if (-not (Test-Path $path)) { SayErr "warning: $path not in bundle yet; skipping."; continue }
         & $script:NodePath $path | Out-Null

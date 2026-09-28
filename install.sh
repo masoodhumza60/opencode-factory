@@ -275,9 +275,10 @@ run_tests() {
     if [ "$DRY_RUN" = 1 ]; then
         dry "node \"$bundle/scripts/test-selfcheck.mjs\""
         dry "node \"$bundle/scripts/test-install-idempotency.mjs\""
+        dry "node \"$bundle/scripts/test-factory-phase.mjs\""
         return
     fi
-    for t in test-selfcheck.mjs test-install-idempotency.mjs; do
+    for t in test-selfcheck.mjs test-install-idempotency.mjs test-factory-phase.mjs; do
         local path="$bundle/scripts/$t"
         if [ ! -f "$path" ]; then
             say "warning: $path not in bundle yet; skipping."
