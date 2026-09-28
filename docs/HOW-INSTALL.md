@@ -3,8 +3,8 @@
 `install.ps1` (Windows) and `install.sh` (Unix) turn a machine into an
 opencode-factory workstation in one go. They install the two CLIs the factory
 relies on (bd and graft), deploy the opencode plugins and beads commands, merge
-the factory's config into your user config, deploy the `factory` skill, and run
-a selfcheck.
+the factory's config into your user config, deploy the `factory` skill, install the
+mandatory hard skills, and run a selfcheck.
 If the selfcheck fails, the installer **aborts** (`factory selfcheck failed -
 install incomplete.`) — the design is fail-stop, not proceed-with-warnings. The
 installers' success summary points back to this file.
@@ -96,11 +96,24 @@ Both installers run the same steps in the same order:
    already have — enabled or disabled — is preserved exactly as configured;
    nothing is ever removed.
 7. **Install the factory skill** — copy `skills/factory/SKILL.md` to
-   `~/.agents/skills/factory/`, plus `docs/conductor.md` and
-   `docs/how-factory-works.md` to `~/.agents/skills/factory/docs/`. The
-   installed skill is self-contained: its `docs/` subdir ships the conductor
-   and how-it-works docs next to the reference.
-8. **Pair DCP with the handoff rule** — run `scripts/dcp-prompts.mjs`. It
+   `~/.agents/skills/factory/`, plus `docs/conductor.md`,
+   `docs/how-factory-works.md`, `docs/plan-format.md` and `docs/discovery.md`
+   to `~/.agents/skills/factory/docs/`. The installed skill is self-contained:
+   its `docs/` subdir ships every document the conductor and the commands point
+   at, so nothing is a dangling path on the machine. All four matter — a
+   machine with only the conductor has references that resolve to nothing.
+8. **Install the mandatory hard skills** — run
+   `node scripts/factory-skills.mjs install`, which installs the `mandatory`
+   section of `skills/catalog.yaml` into `~/.agents/skills/` via
+   `npx --yes skills add <source> -s <name> -g -a opencode --copy -y`. Today
+   that is **`commit-work`** (phase 7 ship) and **`skill-judge`** (discovery).
+   This step runs **before** the selfcheck on purpose: the selfcheck FAILs when
+   a mandatory skill is missing, so installing afterwards would guarantee a red
+   install on a clean machine. A network failure here is not swallowed — the
+   installer aborts with the command to fix, the same as a missing graft.
+   `--dry-run` prints what it would install and writes nothing; `factory-skills.mjs
+   check` reports the current state and exits 1 if anything is missing.
+9. **Pair DCP with the handoff rule** — run `scripts/dcp-prompts.mjs`. It
    inserts `experimental.customPrompts: true` into
    `~/.config/opencode/dcp.jsonc` (a pure insertion: your comments and
    formatting are left alone, and a second run changes nothing) and writes the
@@ -113,10 +126,11 @@ Both installers run the same steps in the same order:
    override text is our own: DCP is AGPL-3.0-or-later, so we install it but
    never vendor or copy its prompts. Delete the override file to return to
    stock dcp wording.
-9. **Run the selfcheck's own tests** — `node scripts/test-selfcheck.mjs`,
+10. **Run the selfcheck's own tests** — `node scripts/test-selfcheck.mjs`,
    `node scripts/test-install-idempotency.mjs`,
    `node scripts/test-factory-phase.mjs` and
-   `node scripts/test-factory-plan.mjs`. A check that cannot fail is
+   `node scripts/test-factory-plan.mjs` and
+   `node scripts/test-factory-skills.mjs`. A check that cannot fail is
    decoration, and this bundle has shipped one, so the proof that each check
    can reach a FAIL lives in the repo rather than in someone's memory. The
    tests run **before** the selfcheck and a failure aborts the install
@@ -134,7 +148,14 @@ Both installers run the same steps in the same order:
    reach the database** — 17 must-fail cases covering a silently-ignored field,
    a dangling dependency, a missing acceptance criterion, a duplicate key and a
    malformed key. See `docs/plan-format.md`.
-10. **Selfcheck** — run `node scripts/factory-selfcheck.mjs`. Any failed check
+   `test-factory-skills.mjs` runs the real script against temporary catalogs
+   with a **sandboxed HOME per test**, so it can neither install into nor be
+   satisfied by the real `~/.agents/skills`. It asserts the fail-closed
+   behaviour the catalog depends on: a mis-indented entry, a missing version,
+   an unknown future version and an unknown top-level key are each **rejected**
+   rather than read as an empty mandatory list, and a `SKILL.md` that is a
+   *directory* does not count as installed.
+11. **Selfcheck** — run `node scripts/factory-selfcheck.mjs`. Any failed check
    aborts the install (`factory selfcheck failed - install incomplete.`). Two
    of the checks watch DCP rather than merely asserting the plugin loads:
    `dcp: pruning active` reads the state files of the **5 most recent** DCP
@@ -144,8 +165,15 @@ Both installers run the same steps in the same order:
    newest-by-mtime file made it report a WARN on healthy fresh sessions — a
    health check that cries wolf is one people stop reading. `--dcp-session <id>`
    targets one session deliberately. `dcp: turn-nudge override installed`
-   confirms step 8 landed. A session that simply has not needed pruning yet is
+   confirms step 9 landed. A session that simply has not needed pruning yet is
    a `WARN`, not a failure, so a fresh install stays green.
+   `mandatory skills: present` is a **FAIL**, never a WARN: `commit-work` and
+   `skill-judge` are hard skills, and a hard skill reported as advisory is the
+   same defect as a check that cannot fail. It delegates to
+   `factory-skills.mjs check --json` rather than re-parsing the catalog — two
+   parsers of one file drift, and the second one is the one that quietly
+   disagrees. On failure it names the missing skill and the fix
+   (`factory-skills.mjs install`).
 
 Why re-runs are safe (and how they behave): the config merge is a union (no
 destructive overwrite of your keys), the two graft patch scripts are idempotent
@@ -203,7 +231,8 @@ Checks covered: all three plugins loaded with zero failures in the latest
 opencode run that loaded plugins (run-scoped evidence taken from the structured
 `msg="loading plugin"` / `message="failed to load plugin"` lines of the
 opencode log), `bd` and `graft` respond, the factory skill is deployed to
-`~/.agents/skills/factory/SKILL.md`, and a beads store is present.
+`~/.agents/skills/factory/SKILL.md`, a beads store is present, both mandatory
+hard skills are present, and DCP is actually pruning rather than merely loaded.
 Failure output says `N check(s) failed. Re-run install.ps1/install.sh.`
 
 ## Troubleshooting
@@ -216,6 +245,7 @@ Failure output says `N check(s) failed. Re-run install.ps1/install.sh.`
 | Installer aborts at the selfcheck | The failing check names the problem (e.g. `bd present` FAIL on very first run). Fix it and re-run — the installer is fail-stop by design. |
 | Selfcheck keeps failing on the plugin checks | Look at the log the selfcheck reads: `%USERPROFILE%\.local\share\opencode\log\opencode.log` (Windows) / `~/.local/share/opencode/log/opencode.log` (Unix). |
 | Want a preview before touching anything | Re-run with `-DryRun` — prints every step, changes nothing, exits 0. |
+| `mandatory skills: present` FAILs | A hard skill is missing or half-installed. Run `node scripts/factory-skills.mjs install`, then re-check with `node scripts/factory-skills.mjs check`. If the install itself failed, the printed command is the one that failed — usually no network for `npx skills add`. |
 
 ## Reference — paths
 

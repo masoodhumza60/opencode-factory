@@ -261,12 +261,13 @@ function Install-Skills {
     $srcDocs = @(
         (Join-Path $bundle 'docs\conductor.md'),
         (Join-Path $bundle 'docs\how-factory-works.md'),
-        (Join-Path $bundle 'docs\plan-format.md')
+        (Join-Path $bundle 'docs\plan-format.md'),
+        (Join-Path $bundle 'docs\discovery.md')
     )
     $dstDocs = Join-Path (Split-Path $dstSk) 'docs'
     if ($DryRun) {
         Say "[dry-run] Copy-Item '$srcSk' -> '$dstSk'"
-        Say "[dry-run] Copy-Item '$bundle\docs\conductor.md', '$bundle\docs\how-factory-works.md', '$bundle\docs\plan-format.md' -> '$dstDocs'"
+        Say "[dry-run] Copy-Item '$bundle\docs\conductor.md', '$bundle\docs\how-factory-works.md', '$bundle\docs\plan-format.md', '$bundle\docs\discovery.md' -> '$dstDocs'"
     }
     elseif (Test-Path $srcSk) {
         Copy-Item $srcSk $dstSk -Force
@@ -276,6 +277,28 @@ function Install-Skills {
     }
     else { SayErr "warning: $srcSk not in bundle yet (conductor skill lands with the docs/discovery task); skip - re-run install once it is present." }
     # NOTE: .agents/skills/skills.lock.json is created by `factory discover`, not by install.
+}
+
+function Install-MandatorySkills {
+    # The catalog is data; factory-skills.mjs is the only thing that acts on it.
+    # This runs BEFORE the selfcheck on purpose - the selfcheck FAILs when a
+    # mandatory skill is missing, so installing afterwards would guarantee a red
+    # install on a fresh machine. A network failure is not hidden: the script
+    # prints the fix line and this throws, the same way a missing graft does,
+    # because a machine that reaches phase 7 with no commit-work to run has
+    # already failed quietly at install time.
+    $skillScript = Join-Path $bundle 'scripts\factory-skills.mjs'
+    if ($DryRun) {
+        Say "[dry-run] & node '$script:NodePath' '$skillScript' install --dry-run"
+        return
+    }
+    if (-not (Test-Path $skillScript)) {
+        SayErr "warning: $skillScript not in bundle yet; mandatory skills not installed."
+        return
+    }
+    & $script:NodePath $skillScript install
+    if ($LASTEXITCODE -ne 0) { throw 'factory-skills.mjs install failed - fix the line it printed, then re-run install.' }
+    Say 'mandatory skills: OK'
 }
 
 function Install-DcpPrompts {
@@ -301,9 +324,10 @@ function Run-Tests {
         Say "[dry-run] & node '$script:NodePath' scripts/test-install-idempotency.mjs"
         Say "[dry-run] & node '$script:NodePath' scripts/test-factory-phase.mjs"
         Say "[dry-run] & node '$script:NodePath' scripts/test-factory-plan.mjs"
+        Say "[dry-run] & node '$script:NodePath' scripts/test-factory-skills.mjs"
         return
     }
-    foreach ($t in @('test-selfcheck.mjs', 'test-install-idempotency.mjs', 'test-factory-phase.mjs', 'test-factory-plan.mjs')) {
+    foreach ($t in @('test-selfcheck.mjs', 'test-install-idempotency.mjs', 'test-factory-phase.mjs', 'test-factory-plan.mjs', 'test-factory-skills.mjs')) {
         $path = Join-Path $bundle "scripts\$t"
         if (-not (Test-Path $path)) { SayErr "warning: $path not in bundle yet; skipping."; continue }
         # Capture rather than discard: a suite that fails without showing why is
@@ -350,6 +374,7 @@ Install-Plugins
 Install-Commands
 Merge-Config
 Install-Skills
+Install-MandatorySkills
 Install-DcpPrompts
 Run-Tests
 Run-Selfcheck

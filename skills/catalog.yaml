@@ -1,15 +1,53 @@
-# opencode-factory skill catalog — DATA, not an engine.
-# Discovery looks up the feature's keywords here first; nothing else reads this.
-# rank: 1 = best fit for the actual work, 2 = official/verified, 3 = most-used.
-version: 1
+# opencode-factory skill catalog - DATA, not an engine.
+# Read by scripts/factory-skills.mjs. This file never installs anything itself.
+#
+# mandatory: installed on EVERY machine by the bundle installer, because a
+#            phase depends on them. A missing mandatory skill is a FAIL in
+#            `factory selfcheck`, never a warning - a gate that only warns is a
+#            gate people learn to ignore, which is how a pipeline ends up
+#            shipping without the skill that was supposed to stop it.
+# topics:    consulted during discovery, best fit first. Installed only when a
+#            feature actually needs one, and recorded in the decision file.
+#
+# The parser in factory-skills.mjs is deliberately small: it understands exactly
+# this shape and refuses anything else rather than guessing. A config file read
+# optimistically is a config file that silently does the wrong thing.
+version: 2
+
+mandatory:
+  - name: commit-work
+    source: softaworks/agent-toolkit
+    official: true
+    phases: '7'
+    why: 'Phase 7 ships as one commit per logical unit, so a reviewer can read the history and a revert is a single step instead of a archaeology dig.'
+  - name: skill-judge
+    source: softaworks/agent-toolkit
+    official: true
+    phases: '1'
+    why: 'Discovery has to rank a candidate skill against alternatives on evidence. Judging by name-match picks whichever option sounds most plausible.'
+
 topics:
   brainstorming:
     - name: brainstorming
       source: obra/superpowers
       rank: 1
-      why: enforcing mandatory skill for phase 1 (project's superpowers set)
+      official: true
+      why: 'enforcing mandatory skill for phase 1 (the project superpowers set)'
   skill-discovery:
     - name: find-skills
       source: vercel-labs/skills
       rank: 1
-      why: official Vercel skill; leaderboard-first search with skills.sh
+      official: true
+      why: 'official Vercel skill; leaderboard-first search against skills.sh'
+  git-workflow:
+    - name: commit-work
+      source: softaworks/agent-toolkit
+      rank: 1
+      official: true
+      why: 'also a topic candidate - per-unit commits while implementing, not just at ship'
+  skill-review:
+    - name: skill-judge
+      source: softaworks/agent-toolkit
+      rank: 1
+      official: true
+      why: 'also a topic candidate - grading third-party skill quality on evidence'

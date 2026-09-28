@@ -41,7 +41,7 @@ Role boundaries:
 | 4' | debug (as needed) | `systematic-debugging` | — |
 | 5 | verify | `verification-before-completion` | — |
 | 6 | review | `requesting-code-review` → `receiving-code-review` | — |
-| 7 | ship | `finishing-a-development-branch` | **C — human** |
+| 7 | ship | `finishing-a-development-branch` + `commit-work` | **C — human** |
 | 8 | close | session-close protocol | — |
 
 4' is not a separate command — the conductor routes any bug/test failure into
@@ -62,7 +62,7 @@ factory <feature-name>            # create beads issue, start phase 1
   → 4' debug (routed on failure)   # systematic-debugging
   → 5 verify                       # verification-before-completion (evidence gate)
   → 6 review                       # requesting/receiving code review
-  → 7 ship                         # finishing-a-development-branch
+  → 7 ship                         # finishing-a-development-branch + commit-work
   → GATE C                         # human approves ship  ── STOP, wait
   → 8 close                        # bd update, session-close protocol
 ```
@@ -233,8 +233,17 @@ approval; a resolved gate is.
 
 - **Gate A — spec approved** (between phase 2 and phase 3): the spec doc
   exists at `docs/superpowers/specs/`, `brainstorming` (spec section) ran and
-  is reported, and the human approves the spec. If skipped skills were
+  is reported, the technology-discovery sub-step of phase 1 completed and was
+  reported, and the human approves the spec. If skipped skills were
   reported at the gate, the spec phase re-runs first.
+  **Gate A re-opens if the stack changes.** A spec approved against a stack
+  that discovery later contradicts — a library the human approved is not
+  maintained, the chosen approach is no longer supported, or phase 3 turns
+  up a dependency the spec never mentioned — is no longer the spec that was
+  approved. Re-open A, re-run discovery, and get the change re-approved rather
+  than quietly implementing around it. The cost of a re-opened gate is one
+  conversation; the cost of skipping it is a feature built on a premise the
+  human already rejected.
 - **Gate B — plan approved** (between phase 3 and phase 4): the plan doc and
   task breakdown were produced with `writing-plans`, the execution method was
   chosen (B decides between `executing-plans` and
@@ -245,7 +254,8 @@ approval; a resolved gate is.
   are met — verification passed (`verification-before-completion`, the
   evidence gate), review completed (`requesting-code-review` then
   `receiving-code-review`), the branch was finished with
-  `finishing-a-development-branch` — and the human approves the ship.
+  `finishing-a-development-branch`, and the commits were made with
+  `commit-work` — and the human approves the ship.
 
 **No implementation files before spec AND plan approval.** Gates A and B are
 hard human gates before any implementation; the plan is shared mutable state
@@ -282,7 +292,55 @@ plan is fingerprinted and a second application exits `2` rather than creating a
 second set of issues. The format, every field bd accepts and the ones it drops,
 is in `docs/plan-format.md`.
 
-## Brainstorm: vision questions + self-research (spec §5.4)
+## Hard skills - the non-negotiable ones
+
+Most skills are *optional*: discovery may install them if a feature fits, and
+the run is still correct if none are found. Hard skills are different. They are
+required for the pipeline to work at all, they are declared as data in
+`skills/catalog.yaml`, the installer puts them on the machine, and **the
+selfcheck FAILs when one is missing** — not warns. A hard skill reported as a
+WARN is just a suggestion wearing a warning's clothing, and this bundle has
+already shipped that defect once.
+
+```bash
+node <bundle>/scripts/factory-skills.mjs check     # exit 0 = all present, 1 = missing/unreadable
+node <bundle>/scripts/factory-skills.mjs install   # install the mandatory set
+node <bundle>/scripts/factory-skills.mjs check --json
+```
+
+Two ship today, both from `softaworks/agent-toolkit`:
+
+| Skill | Phase | Why it is hard |
+|---|---|---|
+| `commit-work` | **7 ship** | The commit is the artifact a reviewer reads first. Splitting it properly and writing a message that says what changed and why is not something to be improvised at the end of a long session, and a rushed squash-commit hides exactly the logical unit the human is approving at Gate C. It runs beside `finishing-a-development-branch`. |
+| `skill-judge` | discovery | A third-party skill is executable instructions from a stranger. Grading it against a rubric — before it is trusted with a phase — is the only check that is not "it looked fine in the description". |
+
+**Official-origin-first.** When a mandatory skill exists from the vendor who
+owns the thing it teaches, that one is used and a community equivalent is
+rejected with a recorded reason. A maintained upstream skill gets security
+fixes and breaking-change notes; a fork does not. Prefer the boring canonical
+source over the cleverer copy.
+
+**A candidate below grade C is rejected, not installed.** `skill-judge` scores
+120 points across 8 dimensions. Anything under **C (70/120)** does not get
+installed, and the score plus the reason go into the project record. This is a
+floor, not a ranking: a 70 that is *the only* option is still a no, because a
+mediocre instruction set is worse than none — the phase engine already covers
+the competent case, and a weak skill actively misdirects.
+
+The catalog is **data, and it never installs anything by being read**. The
+parser is deliberately strict — it throws on an unknown version, an unknown
+top-level key, a mis-indented entry or anything else it does not understand,
+because a permissive parser turns a typo into a silently empty list, and an
+empty mandatory list means "nothing is required", which is the most dangerous
+possible failure for this file.
+
+Verify from disk, never from an installer's exit code: the CLI printing a
+success banner is not evidence, the `SKILL.md` being on disk is. That is why
+`check` looks for a real `SKILL.md` file rather than trusting a directory name
+(an interrupted install can leave a directory behind and look complete).
+
+## Brainstorm: vision questions + self-research (spec §5.4) + self-research (spec §5.4)
 
 Phase 1 runs two tracks that feed each other:
 
@@ -299,6 +357,21 @@ Phase 1 runs two tracks that feed each other:
   first external research action (web search/fetch) the conductor asks the
   human ("may I research this?"). A yes covers the feature's brainstorm; a no
   keeps research to in-repo context only, and the phase still runs.
+- **Technology discovery (mandatory sub-step, hard stop before the spec)** —
+  phase 1 also answers *"what technology does this feature need, and how do I
+  know?"* It runs `factory discover` per `docs/discovery.md` and reports:
+  the stack actually in use, the candidates found, and for each one a verdict
+  of **adopt** or **reject with a reason**. Proposing new technology requires
+  research **with named sources**; a library suggested from memory is a guess
+  wearing a citation. Every reject is recorded, because a rejected candidate
+  with a stated reason is what stops the next session from re-litigating it.
+
+  **Phase 2 may not begin until this has run and been reported.** The hard stop
+  exists because the alternative is worse than a pause: a spec written on
+  unexamined assumptions becomes the shared agreement at Gate A, and by then
+  the human is approving a premise nobody ever checked. A degraded discovery
+  run is *not* a reason to skip it — run it, report `DISCOVERY_DEGRADED` with
+  its reason, and let the human decide. See `docs/discovery.md`.
 
 Interaction model: light research first → sharper opening questions; answers
 shape deeper research (follow-ups, docs, comparisons); research produces

@@ -6,17 +6,18 @@ Run the factory feature pipeline for: $ARGUMENTS
 This is a factory flow — NOT a shell command. Follow the installed factory skill: read docs/how-factory-works.md and docs/conductor.md and obey them literally. If $ARGUMENTS is empty, ask the user what feature to run.
 
 1. Create/target a beads issue for this feature (`bd create`), and use its id throughout.
-2. **brainstorm** — ask vision questions one at a time; the first external research action only after the user grants permission; summarize sources, never dump raw research.
-3. **spec** → **GATE A — HARD STOP**: write the spec to docs/superpowers/specs/, report the mandatory skills that ran, and WAIT for the user's approval. Nothing further until approved.
+2. **brainstorm** — ask vision questions one at a time; the first external research action only after the user grants permission; summarize sources, never dump raw research. Then run the **technology-discovery sub-step** (docs/discovery.md): report the stack the repo is actually on (a declared dependency AND a real import — prose is never evidence), and an adopt-or-reject-with-reason verdict for every candidate, each judged with `skill-judge` (floor: grade C / 70 of 120, official origin wins). **Hard stop: the spec phase does not begin until this has run and been reported.** A degraded run is not a reason to skip it — report `DISCOVERY_DEGRADED <reason>` and let the user decide.
+3. **spec** → **GATE A — HARD STOP**: write the spec to docs/superpowers/specs/, report the mandatory skills that ran, and WAIT for the user's approval. Nothing further until approved. Gate A re-opens if the stack changes — a library the user approved turns out to be unmaintained, or the plan surfaces a dependency the spec never mentioned. Re-open, re-discover, re-approve rather than building around it.
 4. **plan** → **GATE B — HARD STOP**: produce the plan + task breakdown with writing-plans, get the user to approve the plan AND pick the execution method (executing-plans or subagent-driven-development). No implementation files before gates A and B.
 5. **implement** (phase chosen at B) — TDD everywhere; on any bug/test failure route through the debug phase (systematic-debugging) before fixes. At implement/debug entry, check graft freshness and rebuild if the graph is empty or stale.
 6. **verify** (verification-before-completion), then **review** (requesting-code-review → receiving-code-review).
-7. **ship** → **GATE C — HARD STOP**: finish the branch with finishing-a-development-branch and WAIT for the user's decision (merge / push-PR / keep as-is).
+7. **ship** → **GATE C — HARD STOP**: finish the branch with finishing-a-development-branch, make the commits with `commit-work` (it is a hard skill — it must be on disk; verify with `node <bundle>/scripts/factory-skills.mjs check`), and WAIT for the user's decision (merge / push-PR / keep as-is).
 8. **close** — record the final audit and wrap up.
 
 Record every phase transition in beads with the audit format:
 `bd update <feature-id> --append-notes "phase:<name> ✓ <skill>"`
 and every graft rebuild as `"graft: rebuilt (N nodes)"` / `"graft: fresh"` / `"graft: degraded <reason>"`.
+Record every discovery verdict too: `"skills: <name>@<version> <source> grade <B>"` on adopt, `"skills: rejected <name> <reason>"` on reject, `"skills: DISCOVERY_DEGRADED <reason>"` when a source failed. A candidate with no recorded verdict was never actually decided.
 
 ## Session discipline (not a phase — these rules run underneath the pipeline)
 

@@ -233,10 +233,10 @@ EOF
 # --- skills ---------------------------------------------------------------------
 install_skills() {
     local src_sk="$bundle/skills/factory/SKILL.md"
-    local docs=(conductor.md how-factory-works.md plan-format.md)
+    local docs=(conductor.md how-factory-works.md plan-format.md discovery.md)
     if [ "$DRY_RUN" = 1 ]; then
         dry "cp \"$src_sk\" \"$agents_skills/factory/\""
-        dry "cp \"$bundle/docs/conductor.md\" \"$bundle/docs/how-factory-works.md\" \"$bundle/docs/plan-format.md\" \"$agents_skills/factory/docs/\""
+        dry "cp \"$bundle/docs/conductor.md\" \"$bundle/docs/how-factory-works.md\" \"$bundle/docs/plan-format.md\" \"$bundle/docs/discovery.md\" \"$agents_skills/factory/docs/\""
         return
     fi
     if [ -f "$src_sk" ]; then
@@ -248,6 +248,26 @@ install_skills() {
         say "warning: $src_sk not in bundle yet (conductor skill lands with the docs/discovery task); skip - re-run install once it is present."
     fi
     # NOTE: .agents/skills/skills.lock.json is created by `factory discover`, not by install.
+}
+
+# --- mandatory third-party skills ----------------------------------------------------
+# The catalog is data; factory-skills.mjs is the only thing that acts on it. This
+# runs BEFORE the selfcheck on purpose - the selfcheck FAILs when a mandatory skill
+# is missing, so installing afterwards would guarantee a red install on a fresh
+# machine. A network failure is not hidden: the script prints the fix line and this
+# exits, the same way a missing graft does, because a machine that reaches phase 7
+# with no commit-work to run has already failed quietly at install time.
+install_mandatory_skills() {
+    local skill_script="$bundle/scripts/factory-skills.mjs"
+    if [ "$DRY_RUN" = 1 ]; then
+        dry "node \"$skill_script\" install --dry-run"
+        return
+    fi
+    if [ -f "$skill_script" ]; then
+        node "$skill_script" install || { echo "install: factory-skills.mjs install failed - fix the line it printed, then re-run install." >&2; exit 1; }
+    else
+        say "warning: $skill_script not in bundle yet; mandatory skills not installed."
+    fi
 }
 
 # --- dcp turn-nudge -----------------------------------------------------------------
@@ -277,9 +297,10 @@ run_tests() {
         dry "node \"$bundle/scripts/test-install-idempotency.mjs\""
         dry "node \"$bundle/scripts/test-factory-phase.mjs\""
         dry "node \"$bundle/scripts/test-factory-plan.mjs\""
+        dry "node \"$bundle/scripts/test-factory-skills.mjs\""
         return
     fi
-    for t in test-selfcheck.mjs test-install-idempotency.mjs test-factory-phase.mjs test-factory-plan.mjs; do
+    for t in test-selfcheck.mjs test-install-idempotency.mjs test-factory-phase.mjs test-factory-plan.mjs test-factory-skills.mjs; do
         local path="$bundle/scripts/$t"
         if [ ! -f "$path" ]; then
             say "warning: $path not in bundle yet; skipping."
@@ -320,6 +341,7 @@ install_plugins
 install_commands
 merge_config
 install_skills
+install_mandatory_skills
 install_dcp_prompts
 run_tests
 run_selfcheck

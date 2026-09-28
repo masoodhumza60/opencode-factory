@@ -2,7 +2,8 @@
 // opencode-factory selfcheck. Exits 0 when the factory environment is intact.
 // --tokens additionally prints the token-cost estimate of injected context.
 import { readFileSync, existsSync, openSync, readSync, closeSync, fstatSync, readdirSync, statSync } from "node:fs";
-import { join, basename } from "node:path";
+import { join, basename, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 
@@ -97,9 +98,22 @@ for (const [name, cmd, args] of [
   const r = process.platform === "win32" ? spawnSync(cmd + " " + args.join(" "), { shell: true, timeout: 15000 }) : spawnSync(cmd, args, { timeout: 15000 });
   ok(name + " present", r.status === 0, r.stdout?.toString().trim().slice(0, 80) ?? "no output");
 }
-// 3. Conductor skill deployed
-const factorySkill = join(homedir(), ".agents", "skills", "factory", "SKILL.md");
-ok("factory skill deployed", existsSync(factorySkill), factorySkill);
+// 3. Conductor skill deployed - and its docs. Checking SKILL.md alone is how a
+//    machine ends up passing this check with every reference the conductor
+//    makes dangling: the doc is what tells the agent where conductor.md,
+//    plan-format.md and discovery.md live, so their absence is a real fault,
+//    not a packaging detail.
+const factorySkillDir = join(homedir(), ".agents", "skills", "factory");
+const factorySkill = join(factorySkillDir, "SKILL.md");
+const requiredDocs = ["conductor.md", "how-factory-works.md", "plan-format.md", "discovery.md"];
+const missingDocs = requiredDocs.filter((d) => !existsSync(join(factorySkillDir, "docs", d)));
+ok(
+  "factory skill deployed",
+  existsSync(factorySkill) && missingDocs.length === 0,
+  missingDocs.length === 0
+    ? factorySkill
+    : `${factorySkill} - missing docs: ${missingDocs.join(", ")} (re-run install.ps1/install.sh)`,
+);
 // 4. Beads state accessible (git repo has .beads store)
 const beadsMarker = existsSync(join(homedir(), ".beads")) || existsSync(".beads") || existsSync(".agit");
 ok("beads store present", beadsMarker, "in cwd tree");
@@ -201,7 +215,53 @@ if ((!dcpStateArg && !dcpSessionArg && dcpFiles.length === 0) || dcpFiles.some((
 const dcpOverride = join(homedir(), ".config", "opencode", "dcp-prompts", "overrides", "turn-nudge");
 if (existsSync(dcpOverride)) ok("dcp: turn-nudge override installed", true, dcpOverride);
 else warn("dcp: turn-nudge override installed", `missing — re-run the installer to write ${dcpOverride}`);
-// 7. Repo-scoped warnings (informational — these never affect the exit code,
+// 7. Mandatory third-party skills present. A FAIL, not a WARN, and the reasoning
+//    is the whole point of P4: a mandatory skill that is merely warned about is a
+//    gate people learn to ignore, and a machine that reaches phase 7 with no
+//    commit-work to run has failed at install time, not at ship time.
+//
+//    This delegates to factory-skills.mjs rather than re-reading the catalog.
+//    Two parsers of one file drift, and the second one to be written is the one
+//    that quietly disagrees — the defect this project has already shipped twice
+//    (docs/superpowers as a second source of truth; gates described in prose
+//    while bd reported none). One reader, one answer, machine-checkable.
+//
+//    `--catalog <path>` exists so scripts/test-selfcheck.mjs can drive the
+//    failure path with a catalog whose skills are not installed, rather than
+//    mutating the real machine's skills directory.
+const skillsScript = join(dirname(fileURLToPath(import.meta.url)), "factory-skills.mjs");
+if (!existsSync(skillsScript)) {
+  ok("mandatory skills: present", false, `factory-skills.mjs missing from the bundle (${skillsScript})`);
+} else {
+  const catalogArg = flagValue("--catalog");
+  const skillsArgs = [skillsScript, "check", "--json"];
+  if (catalogArg) skillsArgs.push("--catalog", catalogArg);
+  const sr = process.platform === "win32"
+    ? spawnSync("node " + skillsArgs.join(" "), { shell: true, timeout: 30000, encoding: "utf8" })
+    : spawnSync("node", skillsArgs, { timeout: 30000, encoding: "utf8" });
+  let report = null;
+  try { report = JSON.parse((sr.stdout ?? "").trim().split("\n").pop()); } catch { /* handled below */ }
+  // `ok: false` is ambiguous and reading it as one meaning is how this check
+  // shipped a TypeError instead of a verdict. factory-skills.mjs uses the same
+  // flag for two different failures: skills are missing (and it reports
+  // `missing` + `total`), or the catalog itself could not be read (and it
+  // reports `error`). Trusting the flag without checking the shape reached for
+  // `report.missing.length` on undefined and crashed the whole selfcheck — so
+  // the verdict must be derived from the shape, never from the flag alone.
+  const wellFormed = report && typeof report.ok === "boolean" && Array.isArray(report.missing) && typeof report.total === "number";
+  if (!wellFormed) {
+    const why = report?.error
+      ? `catalog unreadable - ${String(report.error).slice(0, 60)}`
+      : `check produced no usable report (exit ${sr.status}) — ${(sr.stderr || sr.stdout || "no output").trim().slice(0, 60)}`;
+    ok("mandatory skills: present", false, why);
+  } else if (report.ok) {
+    ok("mandatory skills: present", true, `${report.total}/${report.total} — ${(report.results ?? []).map((r) => r.name).join(", ")}`);
+  } else {
+    ok("mandatory skills: present", false,
+      `${report.missing.length} of ${report.total} missing: ${report.missing.join(", ")} — fix: node scripts/factory-skills.mjs install`);
+  }
+}
+// 8. Repo-scoped warnings (informational — these never affect the exit code,
 //    so installers stay green on healthy machines).
 try {
   const wiring = join(process.cwd(), "graft", ".graph", "wiring.json");
