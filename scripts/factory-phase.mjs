@@ -49,6 +49,23 @@ const DONE_DIM = "phase_done";
 // there overwrote whatever phase had actually been completed. See cmdComplete.
 const REPAIR_DIM = "repair_done";
 
+// The phases whose completion needs a record of the thing actually running, not
+// just its tests passing. Verify is the only one today, and the reason is
+// evidence from a real run: a project in that condition reached 22 tasks and
+// ~11,600 messages, and the person driving it still had to ask "how do I run
+// it", then "run it and check its working properly". Every gate in the pipeline
+// had passed by then. A green suite is not a running app, and nothing in the
+// pipeline was able to tell the difference.
+const BOOT_PHASES = new Set(["5"]);
+const BOOT_DIM = "booted";
+
+// Probed against bd 1.3.0 rather than assumed: a dimension value longer than
+// this is REJECTED ("field exceeds maximum length"), and one containing a
+// double quote is split by bd's own argument parser ("accepts 2 arg(s),
+// received 3"). Both are loud, so nothing is silently mangled - but a raw bd
+// error is not something an agent can act on, so both are checked here first.
+const BOOT_MAX = 255;
+
 const args = process.argv.slice(2);
 const cmd = args[0];
 const flag = (name) => {
@@ -59,13 +76,13 @@ const asJson = args.includes("--json");
 const quiet = args.includes("--quiet");
 // The complete set of flags this script understands, so a flag used as a
 // positional can be reported as exactly that. Every flag is read by name above
-// (flag("reason"), flag("evidence"), flag("next")) or tested with includes(), so
-// this list and those reads must stay in step.
-const FLAG_NAMES = new Set(["reason", "evidence", "next", "json", "quiet"]);
+// (flag("reason"), flag("evidence"), flag("booted"), flag("next")) or tested with
+// includes(), so this list and those reads must stay in step.
+const FLAG_NAMES = new Set(["reason", "evidence", "booted", "next", "json", "quiet"]);
 // The flags that consume the argument after them. Needed to tell a positional
 // from a flag's value: counting `--reason "why"` as two positionals is what made
 // this check reject every correct invocation.
-const VALUE_FLAGS = new Set(["reason", "evidence", "next"]);
+const VALUE_FLAGS = new Set(["reason", "evidence", "booted", "next"]);
 
 let BD = "bd";
 function bd(args2, { allowFail = false } = {}) {
@@ -365,12 +382,39 @@ function cmdEnter(bead, target, reason) {
   }
 }
 
-function cmdComplete(bead, target, evidence) {
+function cmdComplete(bead, target, evidence, bootedArg) {
   if (!byId.has(target)) throw new Illegal(`unknown phase "${target}"`);
   if (!evidence) throw new Illegal("--evidence is required: completion must be checkable, not asserted");
   const phase = readPhase(bead);
   if (phase !== target)
     throw new Illegal(`${bead} is in phase ${phase ?? "(none)"}, cannot complete ${target}`);
+  // --booted is validated and RECORDED before phase_done, in that order. If the
+  // boot claim cannot be written, phase_done must stay unset so the machine
+  // still refuses to advance. Writing phase_done first would leave a run able to
+  // move past verify having never recorded the app running, which is precisely
+  // the defect this exists to prevent: the guard present, the effect absent.
+  let booted = null;
+  if (BOOT_PHASES.has(target)) {
+    if (!bootedArg)
+      throw new Illegal(
+        `--booted is required to complete ${target} (${byId.get(target).name}): a passing test suite is not a running app. ` +
+          `Record what you started and what it answered, e.g. --booted "ran: npm run dev -> 200 OK on GET /health". ` +
+          `Keep it under ${BOOT_MAX} characters and use no double quotes.`
+      );
+    const v = String(bootedArg).trim();
+    if (!v) throw new Illegal("--booted was given but is empty: say what you started and what it answered");
+    if (v.includes('"'))
+      throw new Illegal(
+        "--booted cannot contain a double quote: bd's argument parser splits on it, so the claim would be recorded broken. " +
+          "Describe the same request without quotes."
+      );
+    if (v.length > BOOT_MAX)
+      throw new Illegal(
+        `--booted is ${v.length} characters; the state field holds at most ${BOOT_MAX}. Shorten it to the command you ran ` +
+          `and the one thing it answered. Do not truncate it yourself - a half-recorded boot claim is worse than none.`
+      );
+    booted = v;
+  }
   // A detour is an ACTION, not a phase of the run, so completing it must not
   // write to phase_done. Found by a real 7b run that deadlocked: completion is a
   // SET of phases, but phase_done holds one scalar, so `complete 4p` overwrote
@@ -381,6 +425,10 @@ function cmdComplete(bead, target, evidence) {
   // back-door protection free: enter 4 -> 4p -> complete 4p still leaves
   // phase_done empty, so phase 5 is still correctly refused.
   const dim = byId.get(target).detour ? REPAIR_DIM : DONE_DIM;
+  if (booted) {
+    bd(["set-state", bead, `${BOOT_DIM}=${booted}`, "--reason", `booted: ${booted}`]);
+    say(`booted: ${booted}`);
+  }
   bd(["set-state", bead, `${dim}=${target}`, "--reason", `completed ${target} (${byId.get(target).name}): ${evidence}`]);
   const n = legalNext(bead);
   say(`completed ${target} (${byId.get(target).name}) - recorded as ${dim}=${target}`);
@@ -433,7 +481,7 @@ try {
   if (cmd === "status") cmdStatus(bead);
   else if (cmd === "next") cmdNext(bead);
   else if (cmd === "enter") cmdEnter(bead, args[2], flag("reason"));
-  else if (cmd === "complete") cmdComplete(bead, args[2], flag("evidence"));
+  else if (cmd === "complete") cmdComplete(bead, args[2], flag("evidence"), flag("booted"));
   else if (cmd === "handoff") cmdHandoff(bead, flag("next"));
   else throw new Illegal(`unknown command "${cmd}"`);
 } catch (e) {

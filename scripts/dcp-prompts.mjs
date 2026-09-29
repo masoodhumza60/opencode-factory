@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Pair the factory with DCP (dynamic context pruning) so pruning gets a target.
 //
-// Why this file exists: the factory's own rules cap a session at ~100 turns and
+// Why this file exists: the factory's own rules say to hand off rather than keep
 // require a handoff, and DCP is the thing that keeps each session's context from
 // bloating in the meantime. But DCP's automatic strategies (dedup, purge-errors)
 // need no cooperation, while its compress tool is model-invoked — which means
@@ -47,9 +47,11 @@ session's cost grows with its turn count, not just its size.
 
 If earlier work in this conversation is now closed, run the compress tool on it now.
 
-Also watch the turn count: this factory's budget is about 100 turns per session.
-If you are near it, or a phase just ended, hand off instead of continuing —
-record where you are with \`bd set-state <id> <dim>=<val> --reason "..."\`, leave
+Also watch the turn count: there is no number this factory enforces, so you decide
+when to stop. Hand off the moment the next step needs something you cannot see -
+a decision you are not authorised to make, a value only the human has, a file
+large enough that reading it is itself the cost - or when a phase just ended.
+To hand off, record where you are with \`bd set-state <id> <dim>=<val> --reason "..."\`, leave
 the next action with \`bd update <id> --append-notes "next: <action>"\`, tell the
 human one line (done / next / blocked), then stop. The next session resumes from
 beads, not from your scrollback.

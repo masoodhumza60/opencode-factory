@@ -73,6 +73,21 @@ function openGate() {
 }
 const legalOf = (o) => (o.match(/legal next:.*/) || [""])[0];
 
+// Completing verify requires a boot claim (see the boot-condition block below).
+// Every walk in this file that passes through phase 5 supplies one, so it lives
+// in a helper rather than a literal at each call site: a forgotten call site then
+// fails as a test-setup problem rather than reading like a machine defect.
+const BOOT_CLAIM = "ran: npm run dev -> 200 OK on GET /health";
+const completeVerify = (b, evidence) =>
+  phase(["complete", b, "5", "--evidence", evidence, "--booted", BOOT_CLAIM, "--quiet"]);
+// Completing verify needs a boot claim; every other phase does not. A single
+// literal for all six phases of a walk silently skipped the claim and produced
+// eight correct failures downstream, so the distinction lives in one helper
+// rather than being repeated - and forgotten - inside each walk loop.
+const completePhase = (b, p, evidence) =>
+  p === "5" ? completeVerify(b, evidence)
+            : phase(["complete", b, p, "--evidence", evidence, "--quiet"]);
+
 const bead = newBead("test feature");
 if (!bead) process.exit(1);
 
@@ -324,7 +339,7 @@ const findings = newBead("verify found defects feature");
 if (findings) {
   for (const p of ["0", "1", "2", "3", "4", "5"]) {
     phase(["enter", findings, p, "--reason", `walk toward verify (${p})`, "--quiet"]);
-    phase(["complete", findings, p, "--evidence", `phase ${p} done`, "--quiet"]);
+    completePhase(findings, p, `phase ${p} done`);
     openGate();
   }
   r = phase(["next", findings, "--quiet"]);
@@ -334,7 +349,7 @@ if (findings) {
   check("a verify finding can be routed to the repair detour", r.code === 0, r.out);
   r = phase(["enter", findings, "5", "--reason", "re-verify the fix", "--quiet"]);
   check("and the fix can be re-verified from the detour", r.code === 0, r.out);
-  phase(["complete", findings, "5", "--evidence", "re-verified", "--quiet"]);
+  completeVerify(findings, "re-verified");
   phase(["enter", findings, "6", "--reason", "review", "--quiet"]);
   phase(["complete", findings, "6", "--evidence", "reviewed", "--quiet"]);
   r = phase(["next", findings, "--quiet"]);
@@ -362,7 +377,7 @@ const deadlock = newBead("detour must not erase completion");
 if (deadlock) {
   for (const p of ["0", "1", "2", "3", "4", "5"]) {
     phase(["enter", deadlock, p, "--reason", `walk to verify (${p})`, "--quiet"]);
-    phase(["complete", deadlock, p, "--evidence", `phase ${p} done`, "--quiet"]);
+    completePhase(deadlock, p, `phase ${p} done`);
     openGate();
   }
   r = phase(["enter", deadlock, "4p", "--reason", "fix what verify found", "--quiet"]);
@@ -382,7 +397,7 @@ if (deadlock) {
   // after the re-verification, and before the fix it could not do even that.
   r = phase(["enter", deadlock, "5", "--reason", "re-verify the repair", "--quiet"]);
   check("and the repair can be re-verified - the livelock is gone", r.code === 0, r.out);
-  phase(["complete", deadlock, "5", "--evidence", "re-verified after the repair", "--quiet"]);
+  completeVerify(deadlock, "re-verified after the repair");
   r = phase(["enter", deadlock, "6", "--reason", "review the repaired feature", "--quiet"]);
   check("and the run advances past the repaired verify", r.code === 0, r.out);
 }
@@ -407,6 +422,70 @@ if (backdoor) {
   r = phase(["enter", backdoor, "5", "--reason", "skipping verify", "--quiet"]);
   check("but verify is STILL refused - the detour is not a back door",
     r.code !== 0 && has(r.out, "has not been completed"), r.out);
+}
+
+// ---- the boot condition on phase 5 (verify) -----------------------------------
+// A real run reached 22 tasks with every gate passing and nobody had ever
+// started the app. The last test in this block is the one that matters most: the
+// guards are easy, and the original 31-test suite had 31 of them while the
+// recording effect was never checked once. That is how four defects shipped.
+
+// Walk a fresh bead all the way into phase 5, resolving the human gates on the
+// way. Every phase is COMPLETED, not merely entered, because leaving a phase
+// unfinished is refused by design and would make these tests fail for a reason
+// that has nothing to do with the boot condition.
+function intoVerify(title) {
+  const b = newBead(title);
+  for (const p of ["0", "1", "2", "3", "4"]) {
+    phase(["enter", b, p, "--reason", `walk to ${p}`]);
+    phase(["complete", b, p, "--evidence", `walk evidence for ${p}`]);
+    openGate();
+  }
+  phase(["enter", b, "5", "--reason", "walk to verify"]);
+  return b;
+}
+
+const bootBead = intoVerify("boot condition");
+if (bootBead) {
+  r = phase(["status", bootBead, "--quiet"]);
+  check("the walk lands in phase 5", has(r.out, "5"), r.out);
+
+  r = phase(["complete", bootBead, "5", "--evidence", "tests pass"]);
+  check("completing verify without --booted is refused", r.code !== 0, `code ${r.code}`);
+  check("the refusal names --booted", has(r.out, "--booted"), r.out);
+  check("the refusal says a test suite is not a running app", has(r.out, "not a running app"), r.out);
+
+  r = bd(["state", bootBead, "phase_done"]);
+  check("a refused completion left phase_done at 4, not 5", has(r.out, "4"), r.out);
+
+  // bd's own argument parser splits on a double quote, so a claim like this one
+  // is realistic. Caught here so the message is something an agent can act on
+  // rather than bd's raw "accepts 2 arg(s), received 3".
+  r = phase(["complete", bootBead, "5", "--evidence", "e", "--booted", 'ran: curl -H "X-Test: 1" /health -> ok']);
+  check("a double quote in --booted is refused", r.code !== 0, `code ${r.code}`);
+  check("the quote refusal explains why", has(r.out, "double quote"), r.out);
+
+  // bd rejects a value over 255 characters. Refused rather than truncated: a
+  // half-recorded boot claim is a claim nobody can check.
+  r = phase(["complete", bootBead, "5", "--evidence", "e", "--booted", "x".repeat(300)]);
+  check("an over-long --booted is refused", r.code !== 0, `code ${r.code}`);
+  check("the length refusal names the limit", has(r.out, "255"), r.out);
+  r = bd(["state", bootBead, "booted"]);
+  check("neither refusal wrote a booted value", !has(r.out, "x"), r.out.slice(0, 80));
+
+  r = phase(["complete", bootBead, "5", "--evidence", "tests pass, app answered",
+             "--booted", "ran: npm run dev -> 200 OK on GET /health"]);
+  check("completing verify WITH --booted succeeds", r.code === 0, `code ${r.code} ${r.out}`);
+  const readBack = bd(["state", bootBead, "booted"]);
+  check("the boot claim is recorded in the state layer",
+    has(readBack.out, "npm run dev") && has(readBack.out, "/health"), readBack.out);
+  const doneBack = bd(["state", bootBead, "phase_done"]);
+  check("and phase_done=5 is recorded too", has(doneBack.out, "5"), doneBack.out);
+
+  r = phase(["next", bootBead]);
+  check("after a boot claim the run advances to review", has(legalOf(r.out), "6"), legalOf(r.out));
+} else {
+  check("could walk a bead into verify", false, "newBead returned null");
 }
 
 const badBead = newBead("corrupt");

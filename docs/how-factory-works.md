@@ -110,7 +110,7 @@ The factory deliberately does not try to become:
   turn re-sends the turns before it, so a long session gets quadratically
   worse even when each turn is small. A real run spent 78.3M tokens across 955
   turns with its context climbing to 191k and never dropping. The conductor
-  therefore runs a **~100-turn soft session budget** and hands off to a fresh
+  therefore **hands off to a fresh
   session rather than pushing on — see "Cost discipline" in `docs/conductor.md`,
   which also covers picking work with `bd ready` (not `bd list`) and keeping a
   subagent's report rather than its raw output. Automatic context pruning on the

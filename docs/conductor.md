@@ -88,7 +88,7 @@ For every phase after onboard:
    `node <bundle>/scripts/factory-phase.mjs enter <bead> <phase> --reason "…"`
    then `complete <bead> <phase> --evidence "…"`. The `--reason` becomes an
    append-only event bead, so the audit survives restarts and device moves
-   (Dolt) — and an illegal transition is refused outright.
+   (Dolt) — and an illegal transition is refused outright. Completing phase 5 (verify) additionally requires `--booted "..."` — see the phase machine section for why, and for the format limits.
 6. At each human gate, **report which mandatory skills ran per phase**. Any
    skipped skill forces the phase to re-run before the gate can pass.
 
@@ -106,13 +106,14 @@ node <bundle>/scripts/factory-phase.mjs status   <bead> [--json]
 node <bundle>/scripts/factory-phase.mjs next     <bead> [--json]
 node <bundle>/scripts/factory-phase.mjs enter    <bead> <phase> --reason "…"
 node <bundle>/scripts/factory-phase.mjs complete <bead> <phase> --evidence "…"
+node <bundle>/scripts/factory-phase.mjs complete <bead> 5 --evidence "…" --booted "…"
 node <bundle>/scripts/factory-phase.mjs handoff  <bead> --next "<action>"
 ```
 
 Exit codes: **0** ok · **1** illegal transition or error · **2** blocked, a
 human gate is still pending.
 
-Three properties worth relying on:
+Four properties worth relying on:
 
 - **Legality is checked on every transition, including the first.** A bead with
   no recorded phase may enter `0` or `1`; it may not jump to `5`.
@@ -122,6 +123,16 @@ Three properties worth relying on:
 - **`--evidence` is mandatory on complete.** Completion has to be checkable
   rather than asserted, which is the difference MAST's "not recognizing
   completion" failures actually turn on.
+- **`--booted` is mandatory on completing phase 5 (verify).** A green test suite
+  is not a running app, and a real run reached 22 tasks with every gate passing
+  while nobody had ever started the thing. Record what you started and what it
+  answered: `--booted "ran: npm run dev -> 200 OK on GET /health"`. It is
+  written to the state layer *before* `phase_done`, so a claim that cannot be
+  recorded leaves the machine correctly refusing to advance. Under 255
+  characters, no double quotes (bd's argument parser splits on them); the script
+  refuses rather than truncating, because half a boot claim is worse than none.
+  The machine cannot tell whether the claim is *honest* - that stays a human
+  judgement at Gate C - but it does make the claim impossible to skip.
 
 If the script refuses you, that is the gate working, not a bug to route
 around. Fix the state or ask the human — do not start writing files anyway.
@@ -134,14 +145,22 @@ The work it did was good. The session shape was the failure. Three rules prevent
 it, and none of them is "be more careful" — each is mechanical, and each exists
 because the softer version was already tried and did not hold.
 
-### 1. Session turn budget, and a mandatory handoff (default 100 turns)
+### 1. A mandatory handoff, with no turn count attached
 
 Cost is driven by **turn count**, not by how much any single turn says. Turn N
 re-sends every turn before it, so a session that simply keeps going pays
 quadratically. That is why the 78M run's context never came back down.
 
-**100 turns is a soft budget: a cap on one session, never on the total work.**
-Reaching it is not a suggestion to push on. It is a handoff:
+**There is deliberately no turn number here.** An earlier version said 100, then
+30; both were guesses from a single observed run, and a number like that gets
+treated as a threshold whether or not it is one. A budget set too low causes
+*premature handoff* - a failure mode the factory did not otherwise have - so
+trading a real risk for a precise-looking fiction is a bad trade. The rule is
+instead: **hand off when the next step needs something you cannot see** - a
+decision you are not authorised to make, a value only the human has, a file large
+enough that reading it is itself the cost. Measure your own spend with
+`node <bundle>/scripts/measure.mjs` and judge it. Reaching that point is not a
+suggestion to push on. It is a handoff:
 
 1. Record where things stand — `node <bundle>/scripts/factory-phase.mjs handoff <bead> --next "<action>"`
    (which writes `bd set-state` and the next action for you).
