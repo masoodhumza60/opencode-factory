@@ -35,6 +35,19 @@ const PHASES = [
 ];
 const byId = new Map(PHASES.map((p) => [p.id, p]));
 const GATE_KEY = { A: "gate_a", B: "gate_b", C: "gate_c" };
+// Which phase was last COMPLETED, as distinct from which phase is CURRENT.
+// These were the same fact until 7b ran a real phase and found `complete`
+// persisted nothing: it printed the evidence and threw it away, so
+// `phase=1` could mean "working on it" or "finished it" and nothing in the
+// state layer could tell the difference. A crash between enter and complete was
+// indistinguishable from an abandoned phase. Completion needs its own recorded
+// value, or resume is guesswork and the `--evidence` gate is decoration.
+const DONE_DIM = "phase_done";
+
+// The detour's own dimension, kept separate from DONE_DIM on purpose. A run
+// completes a SET of phases; phase_done holds one value, so recording a detour
+// there overwrote whatever phase had actually been completed. See cmdComplete.
+const REPAIR_DIM = "repair_done";
 
 const args = process.argv.slice(2);
 const cmd = args[0];
@@ -97,6 +110,26 @@ function readPhase(bead) {
   return id;
 }
 
+// The last phase recorded as complete, or null if none. Same fail-closed
+// posture as readPhase: bd's unset sentinel is trusted, a shape we do not
+// recognise throws rather than being guessed at. This is NOT validated against
+// the phase table the way `phase` is, because a detour's completion is recorded
+// under its own id and a hand-edited value should surface as "not the phase I
+// expect" rather than as a parse crash.
+function readDone(bead) {
+  let raw;
+  try {
+    raw = bd(["state", bead, DONE_DIM]);
+  } catch (e) {
+    throw new BdError(`cannot read ${DONE_DIM} for ${bead}: ${e.message}`);
+  }
+  const s = String(raw).trim();
+  if (!s || /^\(no .* state set\)$/i.test(s)) return null;
+  const m = s.match(/(?:^|\s)phase_done[:=]\s*(\S+)/) || s.match(/^(\S+)$/);
+  if (!m) throw new Illegal(`unrecognized ${DONE_DIM} state for ${bead}: ${JSON.stringify(s)}`);
+  return m[1];
+}
+
 function readMeta(bead) {
   const raw = bd(["show", bead, "--json"], { allowFail: true });
   if (!raw) return {};
@@ -127,61 +160,152 @@ function gatePending(bead, meta, key) {
   return status === "open" || status === "pending" ? id : null;
 }
 
+// The one detour in the pipeline, derived from the table rather than hardcoded,
+// so changing the table cannot silently leave a magic "4p" behind.
+const REPAIR = PHASES.find((p) => p.detour);
+
+// Phases that exist to FIND defects, and therefore need somewhere to go and fix
+// them. Ship (7) is deliberately absent: once you are shipping, a human decides
+// at Gate C, not the machine.
+const FINDING_PHASES = new Set(["5", "6"]);
+
 // ---- legality ------------------------------------------------------------------
 
 function legalNext(bead) {
   const phase = readPhase(bead);
+  const done = readDone(bead);
   const meta = readMeta(bead);
-  if (phase === null) return { phase: null, candidates: ["0", "1"] };
+  if (phase === null) return { phase, done, candidates: ["0", "1"] };
   const cur = byId.get(phase);
-  const outp = [];
   if (cur.detour) {
-    // 4p (debug) is a detour: you return to 4 when it's done, or fall through
-    // to 5. It never blocks forward progress.
-    return { phase, candidates: ["4", "5"], note: "debug detour: return to 4 or proceed to 5" };
+    // Falling through to 5 is allowed when the phase you arrived from was
+    // completed - 4, 5 or 6, because the detour is now reachable from all three.
+    // It is refused when nothing from implement onwards is done, which is the
+    // back door this check exists to close: enter 4, never complete it, hop
+    // through the detour, land on verify with implement unfinished. The first
+    // version of the broadened detour tested `done === "4"`, so arriving from a
+    // completed verify was told implement was unfinished - found by the tests
+    // added with that change.
+    const arrivedFromFinished = done === "4" || done === "5" || done === "6";
+    return arrivedFromFinished
+      ? { phase, done, candidates: ["4", "5"], note: "debug detour: return to 4 or proceed to 5" }
+      : {
+          // 5 is still listed, because "5 is not next" is a less useful thing
+          // to tell someone than "5 is blocked because implement is unfinished".
+          phase, done, candidates: ["4", "5"], blockedOn: "4", alwaysLegal: ["4"],
+          note: "debug detour: no phase from implement onwards is complete yet, so falling through to 5 is refused",
+        };
   }
   const i = PHASES.findIndex((p) => p.id === phase);
   const nxt = PHASES[i + 1];
-  if (!nxt) return { phase, candidates: [], note: "final phase reached" };
-  outp.push(nxt.id);
-  return { phase, candidates: outp, meta };
+  if (!nxt) return { phase, done, candidates: [], note: "final phase reached" };
+  // A detour is a BRANCH off the current phase, not the next step in a sequence.
+  // From phase 4 both the detour (4p, debug) and the phase after it (5, verify)
+  // are legal, because a run that implemented cleanly must be able to verify
+  // without first inventing a debug detour to pass through. Modelling 4p as the
+  // next list entry forced every successful implement through it - found by a
+  // real 7b run, which could not enter verify at all. The conductor has always
+  // described 4p as reachable FROM 4, never as a step that must be taken.
+  if (nxt.detour) {
+    const after = PHASES[i + 2];
+    const cands = after ? [nxt.id, after.id] : [nxt.id];
+    if (done !== phase) {
+      return {
+        phase, done, candidates: cands, blockedOn: phase, alwaysLegal: [nxt.id],
+        note: `phase ${phase} (${cur.name}) is in progress - complete it before verifying; the ${nxt.id} debug detour is always available`,
+      };
+    }
+    return {
+      phase, done, candidates: cands,
+      note: after ? `${nxt.id} is an optional debug detour; ${after.id} is next` : `${nxt.id} is an optional debug detour`,
+    };
+  }
+  // Advancing requires the current phase to have been completed. The one
+  // exception is entering the debug detour, because debugging is exactly what
+  // you do when a phase is NOT complete, and requiring completion first would
+  // make the detour unreachable. Everything else must go through `complete`.
+  //
+  // `candidates` still lists the next phase while completion is outstanding:
+  // the gate blocker is the more immediate thing to tell someone, and
+  // `bd ready`-style emptiness would hide "GATE A pending" behind a phase that
+  // is merely unfinished. `blockedOn` is what actually refuses the entry.
+  if (done !== phase && !nxt.detour) {
+    return {
+      phase, done, candidates: [nxt.id], blockedOn: phase,
+      note: `phase ${phase} (${cur.name}) is in progress - complete it before advancing`,
+    };
+  }
+  // The debug detour is a BRANCH off every phase that can surface a defect, not
+  // just off implement. Verify and review exist to find things that are wrong,
+  // so a run that reaches them carrying a finding has to be able to go and fix
+  // it. Found by a real 7b run: verify returned four findings and the machine's
+  // only legal next move was to advance past them - which is either a route
+  // around the guard or a review of known-broken code. Both are worse than a
+  // detour. Coming back out is already handled: 4p's own candidates are 4 and
+  // 5, so a fix made from verify can be re-verified.
+  if (FINDING_PHASES.has(phase)) {
+    return {
+      phase, done, candidates: [nxt.id, REPAIR.id], meta,
+      note: `${REPAIR.id} is the repair detour; ${nxt.id} is next`,
+    };
+  }
+  return { phase, done, candidates: [nxt.id], meta };
 }
 
 // ---- commands -------------------------------------------------------------------
 
 function cmdStatus(bead) {
   const phase = readPhase(bead);
+  const done = readDone(bead);
   const meta = readMeta(bead);
   const pending = Object.entries(GATE_KEY)
     .map(([g, k]) => [g, gatePending(bead, meta, k)])
     .filter(([, v]) => v);
   const cur = phase ? byId.get(phase) : null;
+  // "current" alone is not enough for a resuming session: phase 1 with nothing
+  // completed is a phase to finish, and phase 1 with phase 1 complete is a phase
+  // to leave. Reporting both is the difference between resuming and guessing.
+  const state = phase === null
+    ? "not started"
+    : done === phase
+      ? `IN PROGRESS (complete, ready to advance)`
+      : `IN PROGRESS (not completed)`;
   out({
     text: [
       `bead:     ${bead}`,
-      `phase:    ${phase === null ? "(none - not started)" : `${phase} ${cur.name}`}`,
+      `phase:    ${phase === null ? "(none - not started)" : `${phase} ${cur.name} - ${state}`}`,
+      `done:     ${done === null ? "(no phase completed yet)" : `${done} ${byId.get(done)?.name ?? ""}`.trim()}`,
       `gates:    ${pending.length ? pending.map(([g, id]) => `${g} PENDING (${id})`).join(", ") : "none pending"}`,
       `blockers: ${gatePending(bead, meta, "gate_a") ? "GATE A" : ""}${gatePending(bead, meta, "gate_b") ? " GATE B" : ""}${gatePending(bead, meta, "gate_c") ? " GATE C" : ""}`.trim() || "none",
     ].join("\n"),
-    bead, phase, gates_pending: pending.map(([g]) => g),
+    bead, phase, done, completed: done === phase, gates_pending: pending.map(([g]) => g),
   });
 }
 
 function cmdNext(bead) {
-  const { phase, candidates, note } = legalNext(bead);
+  const { phase, done, candidates, note, blockedOn, alwaysLegal } = legalNext(bead);
   const meta = readMeta(bead);
   const blocked = [];
   for (const c of candidates) {
     if (c === "3" && gatePending(bead, meta, "gate_a")) blocked.push("3 (GATE A pending)");
     if (c === "4" && gatePending(bead, meta, "gate_b")) blocked.push("4 (GATE B pending)");
     if (c === "8" && gatePending(bead, meta, "gate_c")) blocked.push("8 (GATE C pending)");
+    // An unfinished phase blocks its successor just as a pending gate does.
+    // Reporting it here is what lets a resuming session see both problems at
+    // once instead of discovering the second one after fixing the first.
+    // String + number concatenates: "1" + 1 is "11", which matches nothing, and
+    // the blocker silently disappeared from `next`. Phases are strings
+    // everywhere else, so the conversion has to be explicit.
+    if (blockedOn != null && c === String(Number(blockedOn) + 1) && !(alwaysLegal || []).includes(c))
+      blocked.push(`${c} (phase ${blockedOn} not completed)`);
   }
   const open = candidates.filter((c) => !blocked.some((b) => b.startsWith(c)));
   out({
-    text: [`current:  ${phase ?? "(none)"}`, `legal next: ${open.join(", ") || "(none)"}`,
+    text: [`current:  ${phase ?? "(none)"}`, `done:     ${done ?? "(none)"}`,
+      `legal next: ${open.join(", ") || "(none)"}`,
       blocked.length ? `blocked:  ${blocked.join(", ")}` : null, note ? `note:     ${note}` : null]
       .filter(Boolean).join("\n"),
-    bead, phase, candidates, open, blocked,
+    bead, phase, done, candidates, open, blocked, completed: blockedOn == null,
   });
   if (!open.length && blocked.length) process.exitCode = 2;
 }
@@ -189,7 +313,7 @@ function cmdNext(bead) {
 function cmdEnter(bead, target, reason) {
   if (!byId.has(target)) throw new Illegal(`unknown phase "${target}"`);
   if (!reason) throw new Illegal("--reason is required: every transition is an event bead");
-  const { phase, candidates } = legalNext(bead);
+  const { phase, candidates, blockedOn, alwaysLegal } = legalNext(bead);
   const meta = readMeta(bead);
 
   if (target === "3" && gatePending(bead, meta, "gate_a"))
@@ -201,10 +325,22 @@ function cmdEnter(bead, target, reason) {
   // Legality applies to a virgin bead too. An earlier draft guarded this with
   // `phase !== null &&`, which meant a feature with no recorded phase could
   // enter ANY phase - exactly the transition the tests exist to forbid.
-  if (!candidates.includes(target))
+  if (!candidates.includes(target)) {
+    // A skipped phase is the failure this must explain well, and the generic
+    // "legal: (nothing)" message explains nothing. Say which phase is
+    // unfinished and what to run instead.
     throw new Illegal(
       `illegal transition ${phase === null ? "(none)" : phase} -> ${target} (legal: ${candidates.join(", ")})`
     );
+  }
+  // An unfinished current phase refuses the advance, but NOT the debug detour
+  // back to it - that is how you get back to a phase you are still working on.
+  if (blockedOn != null && !(alwaysLegal || []).includes(target)) {
+    throw new Illegal(
+      `phase ${blockedOn} (${byId.get(blockedOn).name}) has not been completed - ` +
+      `run: factory-phase.mjs complete ${bead} ${blockedOn} --evidence "..." (then enter ${target})`
+    );
+  }
 
   bd(["set-state", bead, `phase=${target}`, "--reason", reason]);
   say(`entered phase ${target} (${byId.get(target).name}) on ${bead}`);
@@ -235,9 +371,21 @@ function cmdComplete(bead, target, evidence) {
   const phase = readPhase(bead);
   if (phase !== target)
     throw new Illegal(`${bead} is in phase ${phase ?? "(none)"}, cannot complete ${target}`);
+  // A detour is an ACTION, not a phase of the run, so completing it must not
+  // write to phase_done. Found by a real 7b run that deadlocked: completion is a
+  // SET of phases, but phase_done holds one scalar, so `complete 4p` overwrote
+  // the record that verify had been completed. From then on the machine was
+  // livelocked in 4 <-> 4p and could never reach verify, review, ship or close -
+  // the repair destroyed the state it was supposed to restore. The detour
+  // records its own work in its own dimension instead, which leaves the
+  // back-door protection free: enter 4 -> 4p -> complete 4p still leaves
+  // phase_done empty, so phase 5 is still correctly refused.
+  const dim = byId.get(target).detour ? REPAIR_DIM : DONE_DIM;
+  bd(["set-state", bead, `${dim}=${target}`, "--reason", `completed ${target} (${byId.get(target).name}): ${evidence}`]);
   const n = legalNext(bead);
-  say(`completed ${target} (${byId.get(target).name}) - evidence: ${evidence}`);
-  say(`next legal: ${n.candidates.join(", ")}`);
+  say(`completed ${target} (${byId.get(target).name}) - recorded as ${dim}=${target}`);
+  say(`evidence: ${evidence}`);
+  say(`next legal: ${n.candidates.join(", ") || "(none - see status)"}`);
 }
 
 function cmdHandoff(bead, next) {
