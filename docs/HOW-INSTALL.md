@@ -244,9 +244,15 @@ The installer runs the selfcheck itself; to re-check on demand:
 
 - **Inside opencode**: `factory selfcheck` — or `factory selfcheck --tokens`,
   which additionally prints a rough estimate of the token footprint of the
-  injected beads context.
+  injected beads context, and the current orchestrator session's own input
+  and cache-read spend.
 - **Bare**: `node scripts/factory-selfcheck.mjs` (`--tokens` flag works here
   too).
+
+To see a project's token spend split by role, run
+`node scripts/measure.mjs` (optionally `--dir <path>`, `--since <iso>`,
+`--json`). It is a report: it blocks nothing, and a directory with no recorded
+sessions exits 1 rather than printing a misleading zero.
 
 Checks covered: all three plugins loaded with zero failures in the latest
 opencode run that loaded plugins (run-scoped evidence taken from the structured

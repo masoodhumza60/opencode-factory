@@ -328,9 +328,48 @@ try {
     warn("skills.lock.json missing", "run `factory discover` to record the (possibly empty) outcome");
 } catch { /* subdirs unreadable — skip */ }
 // 10. Token footprint (--tokens only)
+// These are REPORTING lines, not checks. They are deliberately not ok()/warn():
+// a health check that cannot fail is a check in a costume, and the one thing
+// worth surfacing here -- your own spend -- is not a health signal at all. It
+// is a number the human reads when deciding whether to keep going or hand off.
 if (process.argv.includes("--tokens")) {
   const beadsCtx = (readFileSync(join(homedir(), ".config", "opencode", "plugins", "opencode-beads.ts"), "utf8").length);
   ok("context footprint rough est.", true, `beads plugin approx ${(beadsCtx / 4000).toFixed(1)}k chars → ~${Math.round(beadsCtx / 4)} tokens`);
+
+  // The orchestrator's own spend in this project. The 7b run measured the
+  // orchestrator at ~92% of input-equivalent and the subagents at ~8%, so the
+  // number that decides whether to hand off is this one, not the total.
+  // parent_id IS NULL picks the orchestrator: a subagent is a session WITH a
+  // parent, so without that filter the fresh, cheap sessions get averaged in
+  // and the expensive one disappears into the mean.
+  try {
+    const { DatabaseSync } = await import("node:sqlite");
+    const db = new DatabaseSync(join(homedir(), ".local", "share", "opencode", "opencode.db"), { readOnly: true });
+    const cwdNorm = process.cwd().replace(/\\/g, "/").toLowerCase();
+    const s = db
+      .prepare(
+        `select tokens_input, tokens_cache_read from session_v2
+          where parent_id is null
+            and lower(replace(directory,'\\','/')) = ?
+          order by time_updated desc limit 1`,
+      )
+      .get(cwdNorm);
+    if (s) {
+      const input = Number(s.tokens_input || 0);
+      const cache = Number(s.tokens_cache_read || 0);
+      console.log(
+        `\nthis orchestrator session: ${input.toLocaleString("en-US")} input` +
+          (cache ? `, ${cache.toLocaleString("en-US")} cache-read` : "") +
+          `\n  (cache reads are ~0.1x, so input is what to compare against a per-task baseline)` +
+          `\n  full report: node scripts/measure.mjs   ·   ~300-400k input/task was the pre-phase-machine figure`,
+      );
+    } else {
+      console.log("\norchestrator spend: no session recorded for this directory yet (paths in the DB use forward slashes).");
+    }
+    db.close();
+  } catch (e) {
+    console.log(`\norchestrator spend: unavailable (${e.message.split("\n")[0]}) — node scripts/measure.mjs for the full report.`);
+  }
 }
 const failed = checks.filter((c) => !c.pass);
 if (failed.length) {
