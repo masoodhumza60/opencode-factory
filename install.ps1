@@ -266,11 +266,21 @@ function Install-Skills {
         (Join-Path $bundle 'docs\mcp-judging.md')
     )
     $dstDocs = Join-Path (Split-Path $dstSk) 'docs'
+    # The verify-app generator ships beside the factory skill. It is what turns
+    # the phase-5 --booted claim into something a later agent can re-check.
+    $srcVerify = Join-Path $bundle 'skills\verify-app\SKILL.md'
+    $dstVerify = Join-Path $agentsSkills 'verify-app\SKILL.md'
     if ($DryRun) {
+        Say "[dry-run] Copy-Item '$srcVerify' -> '$dstVerify'"
         Say "[dry-run] Copy-Item '$srcSk' -> '$dstSk'"
         Say "[dry-run] Copy-Item '$bundle\docs\conductor.md', '$bundle\docs\how-factory-works.md', '$bundle\docs\plan-format.md', '$bundle\docs\discovery.md', '$bundle\docs\mcp-judging.md' -> '$dstDocs'"
     }
     elseif (Test-Path $srcSk) {
+        if (Test-Path $srcVerify) {
+            New-Item -ItemType Directory -Force -Path (Split-Path $dstVerify) | Out-Null
+            Copy-Item $srcVerify $dstVerify -Force
+            Say "verify-app skill installed -> $dstVerify (generates the project's own verification skill)"
+        }
         Copy-Item $srcSk $dstSk -Force
         New-Item -ItemType Directory -Force -Path $dstDocs | Out-Null
         Copy-Item $srcDocs $dstDocs -Force

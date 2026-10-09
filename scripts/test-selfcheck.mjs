@@ -214,6 +214,35 @@ try {
     );
   }
 
+  console.log("verify-app skill");
+  // 15. The verify-app generator must be able to FAIL. It is what turns the
+  //     phase-5 --booted claim into a committed artifact, so a machine that has
+  //     the guard without this is the guard-without-effect shape all over again.
+  {
+    const home = join(tmp, "home-verify");
+    mkdirSync(join(home, ".agents", "skills", "verify-app"), { recursive: true });
+    writeFileSync(join(home, ".agents", "skills", "verify-app", "SKILL.md"), "---\nname: verify-app\n---\n", "utf8");
+    const pass = runSelfcheck([], { env: { USERPROFILE: home, HOME: home } });
+    report(
+      "verify-app skill deployed PASSes when it is present",
+      pass.line(/^PASS\s+verify-app skill deployed/) !== "",
+      pass.line(/verify-app skill deployed/) || "(no verdict)",
+    );
+
+    rmSync(join(home, ".agents", "skills", "verify-app"), { recursive: true, force: true });
+    const fail = runSelfcheck([], { env: { USERPROFILE: home, HOME: home } });
+    report(
+      "verify-app skill deployed FAILs when it is missing",
+      fail.line(/^FAIL\s+verify-app skill deployed/) !== "",
+      fail.line(/verify-app skill deployed/) || "(no verdict)",
+    );
+    report(
+      "that failure names the fix",
+      /install\.(ps1|sh)/.test(fail.out),
+      fail.line(/verify-app skill deployed/) || "(no verdict)",
+    );
+  }
+
   console.log("mcp: graft handshake - the real wire protocol, both directions");
   // A fake MCP server that answers `initialize` and `tools/list` over
   // newline-delimited JSON-RPC. The PASS path needs a server that genuinely

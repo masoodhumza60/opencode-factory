@@ -102,6 +102,9 @@ Both installers run the same steps in the same order:
    its `docs/` subdir ships every document the conductor and the commands point
    at, so nothing is a dangling path on the machine. All four matter — a
    machine with only the conductor has references that resolve to nothing.
+   The `verify-app` skill ships alongside it at `~/.agents/skills/verify-app/`
+   and the selfcheck FAILS without it, because it is what makes the phase-5
+   `--booted` claim checkable rather than merely asserted.
 8. **Install the mandatory hard skills** — run
    `node scripts/factory-skills.mjs install`, which installs the `mandatory`
    section of `skills/catalog.yaml` into `~/.agents/skills/` via
@@ -190,7 +193,10 @@ Both installers run the same steps in the same order:
    a `WARN`, not a failure, so a fresh install stays green.
    `mandatory skills: present` is a **FAIL**, never a WARN: `commit-work` and
    `skill-judge` are hard skills, and a hard skill reported as advisory is the
-   same defect as a check that cannot fail. It delegates to
+   same defect as a check that cannot fail. `verify-app skill deployed` is a
+   FAIL for the same shape of reason: shipping the phase-5 boot guard without the
+   thing that makes its claim checkable would be the guard-without-effect defect
+   a second time. It delegates to
    `factory-skills.mjs check --json` rather than re-parsing the catalog — two
    parsers of one file drift, and the second one is the one that quietly
    disagrees. On failure it names the missing skill and the fix
@@ -284,7 +290,8 @@ Failure output says `N check(s) failed. Re-run install.ps1/install.sh.`
 | Installer aborts at the selfcheck | The failing check names the problem (e.g. `bd present` FAIL on very first run). Fix it and re-run — the installer is fail-stop by design. |
 | Selfcheck keeps failing on the plugin checks | Look at the log the selfcheck reads: `%USERPROFILE%\.local\share\opencode\log\opencode.log` (Windows) / `~/.local/share/opencode/log/opencode.log` (Unix). |
 | Want a preview before touching anything | Re-run with `-DryRun` — prints every step, changes nothing, exits 0. |
-| `mandatory skills: present` FAILs | A hard skill is missing or half-installed. Run `node scripts/factory-skills.mjs install`, then re-check with `node scripts/factory-skills.mjs check`. If the install itself failed, the printed command is the one that failed — usually no network for `npx skills add`. |
+| `mandatory skills: present` FAILs | A hard skill is missing or half-installed. Run `node scripts/factory-skills.mjs install`, then re-check with `node scripts/factory-skills.mjs check`. If the install itself failed, the printed command is the one that failed - usually no network for `npx skills add`. |
+| `verify-app skill deployed` FAILs | `~/.agents/skills/verify-app/SKILL.md` is absent. Re-run the installer (`install.ps1` / `install.sh`). It ships with the bundle; nothing downloads it. Without it, phase 5 can accept a `--booted` claim that nothing ever re-checks. |
 
 ## Reference — paths
 

@@ -236,10 +236,16 @@ install_skills() {
     local docs=(conductor.md how-factory-works.md plan-format.md discovery.md mcp-judging.md)
     if [ "$DRY_RUN" = 1 ]; then
         dry "cp \"$src_sk\" \"$agents_skills/factory/\""
+        dry "cp \"$bundle/skills/verify-app/SKILL.md\" \"$agents_skills/verify-app/\""
         dry "cp \"$bundle/docs/conductor.md\" \"$bundle/docs/how-factory-works.md\" \"$bundle/docs/plan-format.md\" \"$bundle/docs/discovery.md\" \"$bundle/docs/mcp-judging.md\" \"$agents_skills/factory/docs/\""
         return
     fi
     if [ -f "$src_sk" ]; then
+        if [ -f "$bundle/skills/verify-app/SKILL.md" ]; then
+            mkdir -p "$agents_skills/verify-app"
+            cp "$bundle/skills/verify-app/SKILL.md" "$agents_skills/verify-app/"
+            say "verify-app skill installed -> $agents_skills/verify-app/SKILL.md (generates the project's own verification skill)"
+        fi
         cp "$src_sk" "$agents_skills/factory/"
         mkdir -p "$agents_skills/factory/docs"
         for d in "${docs[@]}"; do cp "$bundle/docs/$d" "$agents_skills/factory/docs/"; done

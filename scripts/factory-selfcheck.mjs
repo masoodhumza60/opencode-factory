@@ -114,6 +114,16 @@ ok(
     ? factorySkill
     : `${factorySkill} - missing docs: ${missingDocs.join(", ")} (re-run install.ps1/install.sh)`,
 );
+// 3b. The verify-app generator. Phase 5 refuses to complete without a --booted
+//     claim, and this skill is what turns that one sentence into a committed,
+//     re-runnable artifact. Shipping the guard without the thing that makes the
+//     claim checkable would be the guard-without-effect shape again.
+const verifyAppSkill = join(homedir(), ".agents", "skills", "verify-app", "SKILL.md");
+ok(
+  "verify-app skill deployed",
+  existsSync(verifyAppSkill),
+  existsSync(verifyAppSkill) ? verifyAppSkill : `${verifyAppSkill} (re-run install.ps1/install.sh)`,
+);
 // 4. Beads state accessible (git repo has .beads store)
 const beadsMarker = existsSync(join(homedir(), ".beads")) || existsSync(".beads") || existsSync(".agit");
 ok("beads store present", beadsMarker, "in cwd tree");

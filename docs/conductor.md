@@ -125,12 +125,21 @@ Seven properties worth relying on:
   completion" failures actually turn on.
 - **`--booted` is mandatory on completing phase 5 (verify).** A green test suite
   is not a running app, and a real run reached 22 tasks with every gate passing
-  while nobody had ever started the thing. Record what you started and what it
-  answered: `--booted "ran: npm run dev -> 200 OK on GET /health"`. It is
+  while nobody had ever started the thing. The `verify-app` skill generates the
+  per-project, committed way to drive it (a feature map plus Launch / Doctor /
+  Drive / Evidence / Cleanup); run it at phase 1 and its claim here becomes
+  checkable instead of asserted. Record what you started, what you drove, and
+  where the evidence is: `--booted "verify-app: drove export, evidence at
+  .verify/2026-10-09.md"`. It is
   written to the state layer *before* `phase_done`, so a claim that cannot be
   recorded leaves the machine correctly refusing to advance. Under 255
   characters, no double quotes (bd's argument parser splits on them); the script
   refuses rather than truncating, because half a boot claim is worse than none.
+- **The `verify-app` skill makes that claim re-checkable.** `--booted` proves the
+  app answered once. `verify-app` writes a per-project skill - committed, so every
+  person and every agent drives the app the same way - naming the launch command,
+  the selectors, the features, and where evidence lands. Generate it at phase 1,
+  before there is anything to verify.
   The machine cannot tell whether the claim is *honest* - that stays a human
   judgement at Gate C - but it does make the claim impossible to skip.
 - **Entering phase 2 (spec) requires a brainstorm to exist.** A real run produced
