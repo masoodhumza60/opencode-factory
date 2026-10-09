@@ -295,6 +295,10 @@ Failure output says `N check(s) failed. Re-run install.ps1/install.sh.`
 
 ## Reference — paths
 
+Every path below is reached through `scripts/platform.mjs`, not written into a
+script. To run this factory under a different agent harness, add one profile
+there — see **Porting to another harness** below.
+
 | Thing | Location |
 |---|---|
 | opencode config (user) | `~/.config/opencode/` (`%USERPROFILE%\.config\opencode` on Windows) |
@@ -304,3 +308,36 @@ Failure output says `N check(s) failed. Re-run install.ps1/install.sh.`
 | bd CLI (Windows) | `%LOCALAPPDATA%\Programs\bd\bd.exe` |
 | graft | the package manager's global root (`npm root -g` / `pnpm root -g` / `bun pm root -g`) |
 | selfcheck log | `~/.local/share/opencode/log/opencode.log` |
+| project MCP overrides | `<project root>/opencode.json` (nearest `.git` above the working directory) |
+
+### Porting to another harness
+
+`scripts/platform.mjs` is the only file in this bundle that knows which agent it
+is running under. It exists because four scripts used to hardcode
+`~/.config/opencode`, and a bundle pointed at the wrong config is worse than one
+that fails: a toggle can edit a file nobody reads and still exit 0.
+
+A profile answers four questions:
+
+| Field | Question | OpenCode's answer |
+|---|---|---|
+| `config()` | where is the user-level config file? | `~/.config/opencode/opencode.json` |
+| `configDir()` | where does config live, for tools that write siblings? | `~/.config/opencode/` |
+| `state` | where does the harness keep its **own** data? | `log()`, `db()`, `pluginData(name)` |
+| `skillAgent` | what does the skills CLI call this agent? | `opencode` |
+
+`state` is deliberately separate from `configDir()`. A harness's session
+database and log are its own, and guessing one path for both is how a bundle ends
+up reading a file that was never written.
+
+Resolution order: `--platform <name>`, then `OPENCODE_FACTORY_PLATFORM`, then
+OpenCode. **An unknown platform fails loudly** with the list of known names
+rather than falling back, because the fallback is the failure this file exists
+to prevent.
+
+`claude_code`, `codex` and `cursor` are listed in `ALL_PROFILES` with
+`verified: false` — note the key is `claude_code`, underscored, because that is
+the name `--platform` expects. That flag means the profile exists as a claim but
+has **not** been checked against that harness's real paths. Nothing is written
+for them on purpose: an invented path is exactly the failure above.
+`isUnverified(name)` lets a caller refuse instead of proceeding on hope.

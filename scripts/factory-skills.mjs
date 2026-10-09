@@ -33,6 +33,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSy
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import { platform as plat } from "./platform.mjs";
 import { homedir } from "node:os";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -255,9 +256,11 @@ function check(catalog) {
 //               elevation, and a machine-global install that fails on a fresh
 //               Windows box is worse than a slightly larger install)
 //   -y          no prompt; this runs unattended inside the installer
-// Note: `npx skills find` is INTERACTIVE and is never used by any script.
+// The -a <agent> value comes from the platform profile: it is the vocabulary
+// the `npx skills` CLI uses, which is a different namespace from the config
+// layout, so guessing it from a filename would be a second source of truth.
 function installOne(entry, { dryRun }) {
-  const args = ["--yes", "skills", "add", entry.source, "-s", entry.name, "-g", "-a", "opencode", "--copy", "-y"];
+  const args = ["--yes", "skills", "add", entry.source, "-s", entry.name, "-g", "-a", plat().skillAgent, "--copy", "-y"];
   if (dryRun) return { name: entry.name, action: "would-install", cmd: `npx ${args.join(" ")}` };
   const env = { ...process.env, DISABLE_TELEMETRY: "1" };
   const r = process.platform === "win32"

@@ -27,8 +27,22 @@ import { existsSync } from "node:fs";
 export const PROFILES = {
   opencode: {
     label: "OpenCode",
+    // The name the `npx skills` CLI wants for this harness (-a <agent>). It is
+    // a different vocabulary from the config layout, which is exactly why it
+    // belongs in the profile rather than beside the install call site.
+    skillAgent: "opencode",
     config: () => join(homedir(), ".config", "opencode", "opencode.json"),
     configDir: () => join(homedir(), ".config", "opencode"),
+    // Harness STATE, which is not config: the run log, the session DB, and the
+    // plugin's own storage. A second harness stores these somewhere else again,
+    // so they get their own accessor rather than being folded into configDir() -
+    // guessing one path for both is how a bundle ends up reading a file that was
+    // never written.
+    state: {
+      log: () => join(homedir(), ".local", "share", "opencode", "log", "opencode.log"),
+      db: () => join(homedir(), ".local", "share", "opencode", "opencode.db"),
+      pluginData: (name) => join(homedir(), ".local", "share", "opencode", "storage", "plugin", name),
+    },
     // OpenCode reads config once at startup; a config edit cannot reach the
     // running process. Every script that writes config says this out loud,
     // because a toggle that appears to work and silently does not is the worst

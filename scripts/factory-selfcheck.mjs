@@ -26,7 +26,9 @@ const warn = (name, msg) => console.log(`WARN ${name} — ${msg}`);
 //    (bounded, cheap even on huge logs) and group by the `run=<id>` token: all
 //    three factory plugin ids must have loaded in the newest run that loaded
 //    any plugins, and that same run must show zero load failures.
-const log = join(homedir(), ".local", "share", "opencode", "log", "opencode.log");
+const { platform } = await import("./platform.mjs");
+const plat = platform();
+const log = plat.state.log();
 const MAX_TAIL = 2 * 1024 * 1024;   // start: read the last 2 MB
 const MAX_GROW = 64 * 1024 * 1024;  // hard bound on expansion for huge logs
 if (existsSync(log)) {
@@ -148,7 +150,7 @@ ok("beads store present", beadsMarker, "in cwd tree");
 //    `--dcp-session <id>` targets one session by name. Both exist so the
 //    negative tests in scripts/test-selfcheck.mjs can drive the failure paths.
 const DCP_RECENT = 5;
-const dcpDir = join(homedir(), ".local", "share", "opencode", "storage", "plugin", "dcp");
+const dcpDir = plat.state.pluginData("dcp");
 const dcpRead = (file) => {
   const s = JSON.parse(readFileSync(file, "utf8"));
   // The config has manualMode as an object ({enabled, automaticStrategies});
@@ -222,7 +224,7 @@ if ((!dcpStateArg && !dcpSessionArg && dcpFiles.length === 0) || dcpFiles.some((
 // 6. The turn-nudge override. A WARN, not a FAIL: it is deliberately deletable
 //    by a user who prefers dcp's stock wording, and it only activates after an
 //    OpenCode restart, so a missing file right after install is not an error.
-const dcpOverride = join(homedir(), ".config", "opencode", "dcp-prompts", "overrides", "turn-nudge");
+const dcpOverride = join(plat.configDir(), "dcp-prompts", "overrides", "turn-nudge");
 if (existsSync(dcpOverride)) ok("dcp: turn-nudge override installed", true, dcpOverride);
 else warn("dcp: turn-nudge override installed", `missing — re-run the installer to write ${dcpOverride}`);
 // 7. Mandatory third-party skills present. A FAIL, not a WARN, and the reasoning
@@ -343,7 +345,7 @@ try {
 // worth surfacing here -- your own spend -- is not a health signal at all. It
 // is a number the human reads when deciding whether to keep going or hand off.
 if (process.argv.includes("--tokens")) {
-  const beadsCtx = (readFileSync(join(homedir(), ".config", "opencode", "plugins", "opencode-beads.ts"), "utf8").length);
+  const beadsCtx = (readFileSync(join(plat.configDir(), "plugins", "opencode-beads.ts"), "utf8").length);
   ok("context footprint rough est.", true, `beads plugin approx ${(beadsCtx / 4000).toFixed(1)}k chars → ~${Math.round(beadsCtx / 4)} tokens`);
 
   // The orchestrator's own spend in this project. The 7b run measured the
@@ -354,7 +356,7 @@ if (process.argv.includes("--tokens")) {
   // and the expensive one disappears into the mean.
   try {
     const { DatabaseSync } = await import("node:sqlite");
-    const db = new DatabaseSync(join(homedir(), ".local", "share", "opencode", "opencode.db"), { readOnly: true });
+    const db = new DatabaseSync(plat.state.db(), { readOnly: true });
     const cwdNorm = process.cwd().replace(/\\/g, "/").toLowerCase();
     const s = db
       .prepare(
