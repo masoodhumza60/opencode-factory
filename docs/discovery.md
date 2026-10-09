@@ -163,26 +163,44 @@ because it is easy to install is not evidence that it is any good.
 - **Every run writes `.agents/skills/skills.lock.json` — including runs that
   install nothing.** Its absence means discovery never provably ran.
 
+Write it with the script, which refuses an incomplete record:
+
+```bash
+node <bundle>/scripts/factory-skills.mjs record < record.json
+```
+
+It reads the JSON on stdin (or `--from <file>`), writes
+`.agents/skills/skills.lock.json`, and **stamps `run.at` itself** — an agent
+that supplies its own timestamp records when it meant to, not when the run
+happened, and that drift is how a record goes stale unnoticed. `--dry-run`
+validates and prints without writing.
+
 ```json
 {
+  "version": 1,
   "installed": [
-    { "name": "<name>", "version": "<version>", "source": "<owner/repo>",
-      "sha256": "<hash of SKILL.md>", "grade": "B",
-      "why": "<feature-id: reason>" }
+    { "repo": "<owner/repo>", "skill": "<name>", "score": "<e.g. 92/120>",
+      "rationale": "<what this adds that the repo does not already have>",
+      "command": "<the exact command that installed it>" }
   ],
   "rejected": [
-    { "name": "<name>", "score": 54, "reason": "below floor C (70/120)" }
+    { "skill": "<name>", "reason": "below floor C (70/120)" }
   ],
   "run": {
-    "at": "<ISO timestamp>",
+    "at": "<stamped by the script, not by you>",
     "keywords": ["<queried terms>"],
     "sources": ["skills.sh", "find-skills", "catalog.yaml"],
     "degraded": false,
-    "reason": "",
-    "note": ""
+    "degraded_reason": ""
   }
 }
 ```
+
+Five facts per adoption and two per rejection, all required. `record` reports
+**every** problem it finds rather than the first, and writes nothing when it
+refuses. A run marked `"degraded": true` **must** carry a `degraded_reason` —
+without one the record cannot say "discovery ran, nothing else needed", which is
+the sentence that once caused a session to skip discovery.
 
 ### Two lockfiles, two jobs — do not confuse them
 

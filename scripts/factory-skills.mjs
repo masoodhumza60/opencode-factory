@@ -29,7 +29,7 @@
 //    Per-project skills belong to `factory discover`, which records its choices
 //    in the project's decision file. Keeping those two apart is what makes
 //    `check` mean the same thing on every machine.
-import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
@@ -270,6 +270,124 @@ function installOne(entry, { dryRun }) {
   };
 }
 
+// ----------------------------------------------------------------- record ---
+// The decision record exists because docs/discovery.md already required it and
+// nothing wrote it: nine skills landed in a real project with no recorded
+// verdict, and the record that was there predated them by four days, so a later
+// session read "discovery ran, nothing else needed". A documented contract with
+// no mechanism is not a contract.
+//
+// The split is deliberate. Scoring a skill is judgement work, and a script cannot
+// do it, so the agent produces the verdicts and this file persists them. What
+// this file DOES own is completeness: an entry missing its repo, score,
+// rationale or command is refused rather than written, because a half-recorded
+// verdict is worse than none - it reads as a decision that was made.
+const RECORD_FIELDS = ["repo", "skill", "score", "rationale", "command"];
+
+function problem(text) {
+  if (typeof text !== "string" || !text.trim()) return "must be a non-empty string";
+  return null;
+}
+
+// Returns every problem found rather than the first. An agent fixing a record
+// wants the whole list, not one error per run.
+function validateRecord(rec) {
+  const errs = [];
+  if (!rec || typeof rec !== "object" || Array.isArray(rec)) return ["record must be a JSON object"];
+  const run = rec.run;
+  if (!run || typeof run !== "object") errs.push("run: must be an object");
+  else {
+    // run.at is deliberately NOT validated. The script stamps it (see recordCmd),
+    // so demanding one here would force the agent to supply the very timestamp
+    // we do not trust - a record claiming to be from 2026-01-01 is not a failure,
+    // it is a field we are about to overwrite anyway.
+    if (typeof run.degraded !== "boolean") errs.push("run.degraded: must be true or false");
+    // A degraded run must say why. This is the whole of fix #4: a record that
+    // cannot claim "discovery ran, nothing needed" unless it really did.
+    if (run.degraded === true) {
+      const why = problem(run.degraded_reason);
+      if (why) errs.push(`run.degraded_reason: ${why} (required when degraded is true)`);
+    }
+  }
+  if (!Array.isArray(rec.installed)) errs.push("installed: must be an array");
+  else rec.installed.forEach((e, i) => {
+    if (!e || typeof e !== "object") return void errs.push(`installed[${i}]: must be an object`);
+    for (const f of RECORD_FIELDS) {
+      const p = problem(e[f]);
+      if (p) errs.push(`installed[${i}].${f}: ${p}`);
+    }
+  });
+  if (rec.rejected !== undefined) {
+    if (!Array.isArray(rec.rejected)) errs.push("rejected: must be an array when present");
+    else rec.rejected.forEach((e, i) => {
+      if (!e || typeof e !== "object") return void errs.push(`rejected[${i}]: must be an object`);
+      for (const f of ["skill", "reason"]) {
+        const p = problem(e[f]);
+        if (p) errs.push(`rejected[${i}].${f}: ${p}`);
+      }
+    });
+  }
+  return errs;
+}
+
+function recordCmd(args, { json, dryRun }) {
+  const fi = args.indexOf("--from");
+  const oi = args.indexOf("--out");
+  const out = oi !== -1 && args[oi + 1]
+    ? resolve(args[oi + 1])
+    : resolve(process.cwd(), ".agents", "skills", "skills.lock.json");
+
+  let raw;
+  try {
+    raw = fi !== -1 && args[fi + 1]
+      ? readFileSync(resolve(args[fi + 1]), "utf8")
+      : readFileSync(0, "utf8");
+  } catch (e) {
+    const msg = e.code === "ENOENT" ? `no record supplied (pass --from <file> or pipe JSON on stdin): ${e.message}` : e.message;
+    if (json) process.stdout.write(JSON.stringify({ ok: false, error: msg }) + "\n");
+    else process.stdout.write(`FAIL skills record: ${msg}\n`);
+    return 1;
+  }
+
+  let rec;
+  try {
+    rec = JSON.parse(raw);
+  } catch (e) {
+    if (json) process.stdout.write(JSON.stringify({ ok: false, error: `record is not valid JSON: ${e.message}` }) + "\n");
+    else process.stdout.write(`FAIL skills record: not valid JSON - ${e.message}\n`);
+    return 1;
+  }
+
+  const errs = validateRecord(rec);
+  if (errs.length) {
+    const detail = errs.map((e) => `  - ${e}`).join("\n");
+    if (json) process.stdout.write(JSON.stringify({ ok: false, written: false, errors: errs }) + "\n");
+    else process.stdout.write(`FAIL skills record: ${errs.length} problem(s); nothing written\n${detail}\n`);
+    return 1;
+  }
+
+  // Stamp the time ourselves. An agent that supplies `run.at` is a record of
+  // when it meant to, not of when the run happened, and the drift between those
+  // two is precisely how a record goes stale without anyone noticing.
+  const stamped = { version: 1, ...rec, run: { ...rec.run, at: new Date().toISOString() } };
+
+  if (dryRun) {
+    const note = `would write ${stamped.installed.length} install(s), ${(stamped.rejected || []).length} rejection(s) -> ${out}`;
+    if (json) process.stdout.write(JSON.stringify({ ok: true, written: false, dryRun: true, ...stamped }) + "\n");
+    else process.stdout.write(`skills record: ${note} (dry-run - nothing written)\n`);
+    return 0;
+  }
+
+  mkdirSync(dirname(out), { recursive: true });
+  writeFileSync(out, JSON.stringify(stamped, null, 2) + "\n");
+  if (json) process.stdout.write(JSON.stringify({ ok: true, written: true, path: out, ...stamped }) + "\n");
+  else {
+    process.stdout.write(`skills record: wrote ${stamped.installed.length} install(s), ${(stamped.rejected || []).length} rejection(s) -> ${out}\n`);
+    if (stamped.run.degraded) process.stdout.write(`  degraded: ${stamped.run.degraded_reason}\n`);
+  }
+  return 0;
+}
+
 // ------------------------------------------------------------------- main ---
 
 function main(argv) {
@@ -280,8 +398,10 @@ function main(argv) {
   const ci = args.indexOf("--catalog");
   const catalogPath = ci !== -1 && args[ci + 1] ? resolve(args[ci + 1]) : DEFAULT_CATALOG;
 
+  if (cmd === "record") return recordCmd(args, { json, dryRun });
+
   if (cmd !== "check" && cmd !== "install") {
-    process.stderr.write("usage: factory-skills.mjs check|install [--json] [--dry-run] [--catalog <path>]\n");
+    process.stderr.write("usage: factory-skills.mjs check|install|record [--json] [--dry-run] [--catalog <path>] [--from <record.json>]\n");
     return 1;
   }
 

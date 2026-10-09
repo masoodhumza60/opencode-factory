@@ -343,6 +343,7 @@ already shipped that defect once.
 node <bundle>/scripts/factory-skills.mjs check     # exit 0 = all present, 1 = missing/unreadable
 node <bundle>/scripts/factory-skills.mjs install   # install the mandatory set
 node <bundle>/scripts/factory-skills.mjs check --json
+node <bundle>/scripts/factory-skills.mjs record < record.json   # write the decision record
 ```
 
 Two ship today, both from `softaworks/agent-toolkit`:
@@ -493,12 +494,13 @@ Pull-only, on demand, deduped, and locked. Idempotent.
 5. **Record the choice** —
    `bd update <id> --append-notes "skills: <name>@<version> <source>"`.
 6. **Dedupe** — skip if already in global or project skills, below the
-   relevance threshold, or not expected to be invoked; `skills.lock.json` is
+   relevance threshold, or not expected to be invoked; `skills-lock.json` is
    the dedupe authority and enables deterministic reinstalls. **Every run —
-   including one that installs nothing — must end by writing/updating
+   including one that installs nothing — must end by writing
    `.agents/skills/skills.lock.json`** with an `installed` array and a `run`
-   record (`at`, `keywords`, `sources`, `degraded`, `note`); see
-   `docs/discovery.md` for the schema.
+   record (`keywords`, `sources`, `degraded`, `degraded_reason`). Write it with
+   `factory-skills.mjs record`, which refuses an incomplete record and stamps
+   `run.at` itself; see `docs/discovery.md` for the schema.
 7. **Fail loudly** — if EVERY candidate source fails (skills.sh CLI absent,
    API/site unreachable, search unavailable, catalog empty), the run is
    `DISCOVERY_DEGRADED`: record it in the lockfile (`degraded: true` + reason)

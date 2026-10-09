@@ -68,6 +68,17 @@ function run(args, env = {}) {
   return { code: r.status, out: r.stdout || "", err: r.stderr || "" };
 }
 
+// `record` reads its JSON from stdin, and `run` cannot supply stdin without
+// changing the helper 21 existing tests depend on. Same body, one extra field.
+function runRecord(args, input, env = {}) {
+  const base = env.fresh || freshEnv();
+  const e = { ...process.env, HOME: base.home, USERPROFILE: base.home };
+  const r = spawnSync(process.execPath, [SCRIPT, ...args], {
+    encoding: "utf8", env: e, cwd: env.cwd || base.cwd, timeout: 60000, input,
+  });
+  return { code: r.status, out: r.stdout || "", err: r.stderr || "" };
+}
+
 function catalog(name, body) {
   const p = join(TMP, `${name}.yaml`);
   writeFileSync(p, body, "utf8");
@@ -303,6 +314,122 @@ t("each test ran against its own isolated HOME", () => {
   assert(a.home !== b.home, "freshEnv must hand out a distinct HOME each call");
   installFakeSkill(a.home, "alpha");
   assert(!existsSync(join(b.home, ".agents", "skills", "alpha")), "skills must not leak between sandboxes");
+});
+
+// --------------------------------------- the decision record is writable ----
+// Nine skills sat installed in a real project with no recorded verdict. The
+// contract for recording them was written in docs/discovery.md and nothing
+// implemented it, so the last test in this block matters as much as the first:
+// the guards below are easy, and it is the EFFECT (the file, and its stamped
+// timestamp) that was entirely missing.
+
+const RECORD = {
+  version: 1,
+  run: { at: "2026-01-01T00:00:00.000Z", degraded: false },
+  installed: [{
+    repo: "owner/one", skill: "alpha", score: "92/120",
+    rationale: "adds the missing capability and nothing this repo already has",
+    command: "npx --yes skills add owner/one -s alpha -g -a opencode --copy -y",
+  }],
+  rejected: [{ skill: "beta", reason: "duplicates what alpha already provides" }],
+};
+const recOut = (cwd) => join(cwd, ".agents", "skills", "skills.lock.json");
+const readRec = (cwd) => JSON.parse(readFileSync(recOut(cwd), "utf8"));
+
+t("a complete record is written where the docs say it lives", () => {
+  const env = freshEnv();
+  const r = runRecord(["record"], JSON.stringify(RECORD), env);
+  assert(r.code === 0, `expected exit 0, got ${r.code}: ${r.out}${r.err}`);
+  assert(existsSync(recOut(env.cwd)), "must write .agents/skills/skills.lock.json");
+  const w = readRec(env.cwd);
+  assert(Array.isArray(w.installed) && w.installed.length === 1, "one install recorded");
+  for (const f of ["repo", "skill", "score", "rationale", "command"]) {
+    assert(typeof w.installed[0][f] === "string" && w.installed[0][f].length > 0,
+      `installed[0].${f} must be recorded - this is the whole of fix #5`);
+  }
+});
+
+t("run.at is stamped by the script, not taken from the agent", () => {
+  // The record shipped in customer-support-deshboard said run.at = 2026-09-30
+  // while four more skills were installed on 2026-10-04, and a later session
+  // read that as "discovery already ran". An agent that supplies its own
+  // timestamp records when it meant to, not when the run happened.
+  const env = freshEnv();
+  runRecord(["record"], JSON.stringify(RECORD), env);
+  const at = readRec(env.cwd).run.at;
+  assert(at !== RECORD.run.at, `run.at must be overwritten, still ${at}`);
+  const age = Date.now() - Date.parse(at);
+  assert(Number.isFinite(age) && age >= 0 && age < 120000,
+    `stamped run.at should be about now, got ${at}`);
+});
+
+t("a record missing any required fact is refused and NOTHING is written", () => {
+  const env = freshEnv();
+  const bad = { ...RECORD, installed: [{ repo: "owner/one" }] };
+  const r = runRecord(["record"], JSON.stringify(bad), env);
+  assert(r.code === 1, `expected exit 1, got ${r.code}`);
+  const all = r.out + r.err;
+  for (const f of ["skill", "score", "rationale", "command"]) {
+    assert(all.includes(f), `refusal must name the missing ${f}`);
+  }
+  assert(!existsSync(recOut(env.cwd)), "a refused record must leave no file behind");
+});
+
+t("degraded:true without a reason is refused", () => {
+  // This is the whole of fix #4: a record must not be able to say "degraded"
+  // without saying why, because an unexplained degraded run is what a later
+  // session reads as "discovery ran, nothing else needed".
+  const env = freshEnv();
+  const bad = { ...RECORD, run: { at: "2026-01-01T00:00:00.000Z", degraded: true } };
+  const r = runRecord(["record"], JSON.stringify(bad), env);
+  assert(r.code === 1, `expected exit 1, got ${r.code}`);
+  assert((r.out + r.err).includes("degraded_reason"), "refusal must name degraded_reason");
+  assert(!existsSync(recOut(env.cwd)), "nothing written");
+});
+
+t("every problem is reported at once, not one per run", () => {
+  const env = freshEnv();
+  const bad = { run: { degraded: false }, installed: [{}], rejected: [{}] };
+  const r = runRecord(["record"], JSON.stringify(bad), env);
+  const all = r.out + r.err;
+  for (const f of ["repo", "skill", "score", "rationale", "command"]) {
+    assert(all.includes(f), `an agent fixing a record wants the whole list - ${f} missing from it`);
+  }
+  assert(all.includes("rejected"), "a rejection also needs its skill and reason");
+});
+
+t("a degraded run still records its reason", () => {
+  const env = freshEnv();
+  const rec = { ...RECORD, run: { degraded: true, degraded_reason: "RESEARCH_DENIED" } };
+  const r = runRecord(["record"], JSON.stringify(rec), env);
+  assert(r.code === 0, `a degraded run must still be recorded, got ${r.code}: ${r.out}${r.err}`);
+  assert(readRec(env.cwd).run.degraded_reason === "RESEARCH_DENIED", "the reason must survive to disk");
+  assert(readRec(env.cwd).run.degraded === true, "and so must the degraded flag");
+});
+
+t("no input and malformed input are both refused loudly", () => {
+  const a = runRecord(["record"], "", freshEnv());
+  assert(a.code === 1, `empty input must be refused, got ${a.code}`);
+  const b = runRecord(["record"], "{ not json", freshEnv());
+  assert(b.code === 1, `malformed JSON must be refused, got ${b.code}`);
+  assert((a.out + a.err).length > 0 && (b.out + b.err).length > 0, "both must say something");
+});
+
+t("--dry-run validates without writing", () => {
+  const env = freshEnv();
+  const r = runRecord(["record", "--dry-run"], JSON.stringify(RECORD), env);
+  assert(r.code === 0, `dry-run on a valid record exits 0, got ${r.code}`);
+  assert(!existsSync(recOut(env.cwd)), "dry-run must not write");
+  const bad = runRecord(["record", "--dry-run"], JSON.stringify({ ...RECORD, installed: [{}] }), env);
+  assert(bad.code === 1, "dry-run still validates - it is not a way to skip the check");
+});
+
+t("record needs no catalog, unlike check and install", () => {
+  // The dispatcher runs record before the catalog is parsed on purpose: a
+  // degraded discovery run must still be able to record why it degraded, even
+  // if the catalog is the thing that is broken.
+  const r = runRecord(["record"], JSON.stringify(RECORD), freshEnv());
+  assert(r.code === 0, `record must not require a catalog, got ${r.code}: ${r.out}${r.err}`);
 });
 
 process.stdout.write(`\n${pass} passed, ${failed} failed\n`);

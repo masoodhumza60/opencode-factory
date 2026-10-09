@@ -158,7 +158,12 @@ Both installers run the same steps in the same order:
    malformed key. See `docs/plan-format.md`.
    `test-factory-skills.mjs` runs the real script against temporary catalogs
    with a **sandboxed HOME per test**, so it can neither install into nor be
-   satisfied by the real `~/.agents/skills`. It asserts the fail-closed
+   satisfied by the real `~/.agents/skills`. It also covers `record`: that a
+   complete decision record lands where the docs say, that `run.at` is stamped
+   by the script rather than accepted from the agent, that a record missing any
+   of the five per-skill facts is refused and writes nothing, that every problem
+   is reported at once, and that a degraded run cannot claim `degraded` without
+   a `degraded_reason`. It asserts the fail-closed
    behaviour the catalog depends on: a mis-indented entry, a missing version,
    an unknown future version and an unknown top-level key are each **rejected**
    rather than read as an empty mandatory list, and a `SKILL.md` that is a
