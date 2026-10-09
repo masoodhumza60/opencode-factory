@@ -60,10 +60,14 @@ for.
 
 ## 2. Find candidates
 
-Primary: the skills.sh CLI. Use only the non-interactive forms below — a
-command that can open a prompt will hang an agent forever.
+Primary: the skills.sh CLI. Every form listed below is non-interactive and exits
+on its own - a command that can open a prompt will hang an agent forever, so
+check that property when the CLI adds new ones rather than assuming it.
 
 ```bash
+# search the registry (non-interactive, exits 0, prints links + install counts)
+DISABLE_TELEMETRY=1 npx --yes skills find "<query>"
+
 # enumerate what a source actually offers (plain text, non-interactive)
 DISABLE_TELEMETRY=1 npx --yes skills add <owner/repo> --list --yes
 
@@ -71,8 +75,13 @@ DISABLE_TELEMETRY=1 npx --yes skills add <owner/repo> --list --yes
 DISABLE_TELEMETRY=1 npx --yes skills use <pkg>@<skill>
 ```
 
-**Never run `npx skills find` from a script or an agent.** It is interactive
-and will block. It is fine for a human at a terminal.
+`npx skills find` is **safe for an agent** - this was verified, not assumed,
+after an earlier version of this document called it interactive and therefore
+forbidden. It was wrong: the command exits 0 and prints one `<owner/repo@skill>
++ URL + install count` block per hit. One caveat that is real: its output is
+ANSI-coloured and it has **no `--json` form**, so a script parsing links out of
+it is matching against escape codes. Use `find` to discover *which* packages
+exist, then `add <owner/repo> --list` to get the authoritative skill names.
 
 CLI contract, verified: `-g/--global`, `-a/--agent`, `-s/--skill`, `-l/--list`,
 `-y/--yes`, `--copy`. `--json` cannot be combined with `--list`, and `--json`

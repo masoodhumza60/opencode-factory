@@ -20,6 +20,8 @@
 // start implementing.
 
 import { execFileSync } from "node:child_process";
+import { existsSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 
 const PHASES = [
   { id: "0", name: "onboard", gate: null },
@@ -65,6 +67,64 @@ const BOOT_DIM = "booted";
 // received 3"). Both are loud, so nothing is silently mangled - but a raw bd
 // error is not something an agent can act on, so both are checked here first.
 const BOOT_MAX = 255;
+
+// ---- artifacts and staleness (added after a real run stalled for ten days) -----
+//
+// A run entered implement on 2026-09-29 and was still sitting in phase 4 on
+// 2026-10-09, with nobody looking at it. Every guard in this file was working
+// the entire time - they simply never got asked a question. A machine that only
+// speaks when spoken to cannot notice that it has been abandoned, and that is
+// the failure this section exists to catch.
+
+// Phases that must have left a file behind before the run may leave them. The
+// path is the one the factory's own docs and a real 7b run both used; if a
+// project puts it elsewhere the check says so and names what it looked for,
+// rather than silently passing because the directory was missing.
+const ARTIFACTS = {
+  2: { dir: join("docs", "superpowers", "brainstorms"), ext: ".md",
+       what: "a brainstorm from phase 1" },
+};
+
+// How long a run may sit in one phase with no recorded activity before status
+// says so out loud. This is a REPORTING threshold, not an enforced one: it can
+// only change what you see, never cause you to stop, which is exactly why a
+// number is defensible here and was not on the handoff rule.
+const STALE_DAYS = 3;
+
+function artifactPath(phase) { return ARTIFACTS[phase]; }
+
+function missingArtifact(phase) {
+  const a = artifactPath(phase);
+  if (!a) return null;
+  const dir = join(process.cwd(), a.dir);
+  let found;
+  try {
+    found = existsSync(dir)
+      ? readdirSync(dir).filter((f) => f.endsWith(a.ext))
+      : [];
+  } catch { return `${a.what}: could not read ${a.dir}`; }
+  return found.length ? null : `${a.what}: no ${a.ext} file in ${a.dir}`;
+}
+
+// Days since the bead was last touched, or null if the shape is not recognised.
+// Several field names are tried because bd's JSON shape is not something to
+// assume; returning null (rather than 0) on an unrecognised shape is the whole
+// point, because a wrong "0 days" reads as "healthy" and that is the failure.
+function staleDays(bead) {
+  // Read the ISSUE, not readMeta: readMeta returns only the metadata sub-object,
+  // and the timestamps are fields on the issue itself. Reading the wrong object
+  // returns null, which is indistinguishable from "never updated" - the exact
+  // ambiguity this function exists to remove.
+  const raw = bd(["show", bead, "--json"], { allowFail: true });
+  if (!raw) return null;
+  let j;
+  try { j = JSON.parse(raw); } catch { return null; }
+  const issue = Array.isArray(j) ? j[0] : (j.issue || j);
+  if (!issue || typeof issue !== "object") return null;
+  const t = Date.parse(issue.updated_at || issue.time_updated || issue.modified || "");
+  if (Number.isNaN(t)) return null;
+  return Math.floor((Date.now() - t) / 86400000);
+}
 
 const args = process.argv.slice(2);
 const cmd = args[0];
@@ -145,6 +205,20 @@ function readDone(bead) {
   const m = s.match(/(?:^|\s)phase_done[:=]\s*(\S+)/) || s.match(/^(\S+)$/);
   if (!m) throw new Illegal(`unrecognized ${DONE_DIM} state for ${bead}: ${JSON.stringify(s)}`);
   return m[1];
+}
+
+// The detour's recorded completion, or null if none. Never read by any legality
+// check (they use `done`), so this exists purely to report that a record outlived
+// the phase that created it.
+function readRepair(bead) {
+  let raw;
+  try {
+    raw = bd(["state", bead, REPAIR_DIM]);
+  } catch { return null; }
+  const s = String(raw).trim();
+  if (!s || /^\(no .* state set\)$/i.test(s)) return null;
+  const m = s.match(/^(\S+)$/) || s.match(/repair_done[:=]\s*(\S+)/);
+  return m ? m[1] : null;
 }
 
 function readMeta(bead) {
@@ -279,6 +353,17 @@ function cmdStatus(bead) {
     .map(([g, k]) => [g, gatePending(bead, meta, k)])
     .filter(([, v]) => v);
   const cur = phase ? byId.get(phase) : null;
+  // Staleness is computed here, not guessed at: a run sitting in an unfinished
+  // phase with nothing recorded for days is the shape of the ten-day stall, and
+  // status is the one command someone opens when they wonder what happened.
+  const idle = staleDays(bead);
+  const stale = idle !== null && phase !== null && done !== phase && idle >= STALE_DAYS;
+  // repair_done is never cleared by bd (1.3.0 offers no documented way to unset a
+  // dimension), so a run that returned from a debug detour to phase 4 kept
+  // asserting a completed detour as standing state. It broke no legality check,
+  // because those read `done`, but a state layer that asserts something untrue is
+  // the exact thing this file exists to prevent. Report it rather than clear it.
+  const repairStale = !byId.get(phase)?.detour && readRepair(bead) !== null;
   // "current" alone is not enough for a resuming session: phase 1 with nothing
   // completed is a phase to finish, and phase 1 with phase 1 complete is a phase
   // to leave. Reporting both is the difference between resuming and guessing.
@@ -294,8 +379,11 @@ function cmdStatus(bead) {
       `done:     ${done === null ? "(no phase completed yet)" : `${done} ${byId.get(done)?.name ?? ""}`.trim()}`,
       `gates:    ${pending.length ? pending.map(([g, id]) => `${g} PENDING (${id})`).join(", ") : "none pending"}`,
       `blockers: ${gatePending(bead, meta, "gate_a") ? "GATE A" : ""}${gatePending(bead, meta, "gate_b") ? " GATE B" : ""}${gatePending(bead, meta, "gate_c") ? " GATE C" : ""}`.trim() || "none",
+      `idle:     ${idle === null ? "(could not be read)" : `${idle} day${idle === 1 ? "" : "s"} since last activity`}${stale ? `  ** STALE ** nothing has moved in ${idle} days while phase ${phase} is unfinished` : ""}`,
+      ...(repairStale ? [`warning:  repair_done is still set but the run is in phase ${phase}. bd cannot unset a dimension, so that record is stale - treat it as history, not standing state.`] : []),
     ].join("\n"),
     bead, phase, done, completed: done === phase, gates_pending: pending.map(([g]) => g),
+    idle_days: idle, stale, repair_done_stale: repairStale,
   });
 }
 
@@ -328,6 +416,11 @@ function cmdNext(bead) {
 }
 
 function cmdEnter(bead, target, reason) {
+  // A spec written on a brainstorm that was never written down is a spec resting
+  // on nothing. Checked on the way IN to the phase that depends on it, because
+  // that is the moment the dependency becomes real.
+  const gap = missingArtifact(target);
+  if (gap) throw new Illegal(`${bead} cannot enter ${target} (${byId.get(target).name}): ${gap}`);
   if (!byId.has(target)) throw new Illegal(`unknown phase "${target}"`);
   if (!reason) throw new Illegal("--reason is required: every transition is an event bead");
   const { phase, candidates, blockedOn, alwaysLegal } = legalNext(bead);

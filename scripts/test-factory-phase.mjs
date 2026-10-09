@@ -10,7 +10,7 @@
 // Exit 0 = every case behaved as specified.
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -47,8 +47,20 @@ const has = (s, sub) => String(s).includes(sub);
 
 // ---------------------------------------------------------------- setup
 mkdirSync(BEADS, { recursive: true });
+// Declared before it is used. A const below its first call site is a temporal
+// dead zone ReferenceError, which is exactly what happened when this helper was
+// defined further down beside the other helpers.
+const BRAINSTORM_DIR = join(SANDBOX, "docs", "superpowers", "brainstorms");
+function ensureBrainstorm() {
+  mkdirSync(BRAINSTORM_DIR, { recursive: true });
+  const f = join(BRAINSTORM_DIR, "0000-00-00-test-brainstorm.md");
+  if (!existsSync(f)) writeFileSync(f, "# test brainstorm\n");
+  return f;
+}
+const removeBrainstorm = () => { try { rmSync(BRAINSTORM_DIR, { recursive: true, force: true }); } catch { /* locked */ } };
 const init = run("bd", ["init"], { BEADS_DIR: BEADS, BEADS_NO_DOLT: "1" });
 if (init.code !== 0) { console.error("bd init failed:\n" + init.out); process.exit(1); }
+ensureBrainstorm();
 function newBead(title) {
   const r = bd(["create", "--title", title, "--json"]);
   try {
@@ -78,6 +90,9 @@ const legalOf = (o) => (o.match(/legal next:.*/) || [""])[0];
 // in a helper rather than a literal at each call site: a forgotten call site then
 // fails as a test-setup problem rather than reading like a machine defect.
 const BOOT_CLAIM = "ran: npm run dev -> 200 OK on GET /health";
+// (ensureBrainstorm / removeBrainstorm are declared up in the setup block, above
+// their first use.)
+
 const completeVerify = (b, evidence) =>
   phase(["complete", b, "5", "--evidence", evidence, "--booted", BOOT_CLAIM, "--quiet"]);
 // Completing verify needs a boot claim; every other phase does not. A single
@@ -486,6 +501,82 @@ if (bootBead) {
   check("after a boot claim the run advances to review", has(legalOf(r.out), "6"), legalOf(r.out));
 } else {
   check("could walk a bead into verify", false, "newBead returned null");
+}
+
+// ---- staleness, artifacts and repair_done (added after a real 10-day stall) ----
+// A run entered implement on 2026-09-29 and was still in phase 4 on 2026-10-09.
+// Every guard worked the whole time; nobody asked one a question. These are the
+// three checks that would have made the silence visible.
+
+console.log("\nthe spec cannot rest on a brainstorm nobody wrote");
+const noBrain = newBead("missing brainstorm feature");
+if (noBrain) {
+  removeBrainstorm();
+  r = phase(["enter", noBrain, "0", "--reason", "walk", "--quiet"]);
+  phase(["complete", noBrain, "0", "--evidence", "onboarded", "--quiet"]);
+  phase(["enter", noBrain, "1", "--reason", "walk", "--quiet"]);
+  phase(["complete", noBrain, "1", "--evidence", "brainstormed", "--quiet"]);
+  r = phase(["enter", noBrain, "2", "--reason", "write the spec", "--quiet"]);
+  check("entering spec with NO brainstorm on disk is REFUSED", r.code !== 0, `code ${r.code}`);
+  check("the refusal names the missing artifact", has(r.out, "brainstorm"), r.out);
+  check("the refusal names the directory it looked in", has(r.out, "docs"), r.out);
+  r = bd(["state", noBrain, "phase"]);
+  check("and the refused transition did not enter phase 2", !has(r.out, "2"), r.out);
+  // With the artifact present the same transition is allowed - otherwise this
+  // check is a wall, not a gate.
+  ensureBrainstorm();
+  r = phase(["enter", noBrain, "2", "--reason", "write the spec", "--quiet"]);
+  check("once the brainstorm exists, entering spec succeeds", r.code === 0, r.out);
+} else {
+  check("could create a bead for the artifact test", false, "newBead returned null");
+}
+
+console.log("\nstaleness and incoherent state are reported, not hidden");
+const idleBead = newBead("stale run feature");
+if (idleBead) {
+  phase(["enter", idleBead, "0", "--reason", "walk", "--quiet"]);
+  phase(["complete", idleBead, "0", "--evidence", "onboarded", "--quiet"]);
+  phase(["enter", idleBead, "1", "--reason", "walk", "--quiet"]);
+  r = phase(["status", idleBead, "--json"]);
+  // An unfinished phase is the precondition; a fresh bead is 0 days idle, so the
+  // honest assertion here is that the field EXISTS and is a number, not that it
+  // says "stale". Claiming a 3-day stall for a bead created seconds ago would be
+  // the exact invention the STALE_DAYS constant is trying not to be.
+  const j = (() => { try { return JSON.parse(r.out); } catch { return {}; } })();
+  check("status reports an idle_days field", typeof j.idle_days === "number", r.out.slice(0, 120));
+  check("a just-created run is not reported as stale", j.stale === false, `stale=${j.stale}`);
+  check("status prints an idle line", /idle:/.test(r.out), r.out.slice(0, 160));
+  // And the STALE constant is real: a walk that has finished is never stale even
+  // though done === phase, so the flag cannot fire on completed work.
+  phase(["complete", idleBead, "1", "--evidence", "brainstormed", "--quiet"]);
+  r = phase(["status", idleBead, "--json"]);
+  const j2 = (() => { try { return JSON.parse(r.out); } catch { return {}; } })();
+  check("a COMPLETED phase is not stale no matter how old", j2.stale === false, `stale=${j2.stale}`);
+} else {
+  check("could create a bead for the staleness test", false, "newBead returned null");
+}
+
+// repair_done outliving its phase is asserted by bd with no way to unset it, so
+// status must say so rather than let a stale record read as standing state.
+const repBead = newBead("repair record outlives the detour");
+if (repBead) {
+  ensureBrainstorm();
+  for (const p of ["0", "1", "2", "3", "4"]) {
+    phase(["enter", repBead, p, "--reason", `walk to ${p}`, "--quiet"]);
+    completePhase(repBead, p, `phase ${p} done`);
+    openGate();
+  }
+  phase(["enter", repBead, "4p", "--reason", "found a defect", "--quiet"]);
+  phase(["complete", repBead, "4p", "--evidence", "fixed", "--quiet"]);
+  phase(["enter", repBead, "4", "--reason", "back to implement", "--quiet"]);
+  r = phase(["status", repBead, "--json"]);
+  const j3 = (() => { try { return JSON.parse(r.out); } catch { return {}; } })();
+  check("status flags a repair_done that outlived its phase", j3.repair_done_stale === true, r.out.slice(0, 200));
+  check("and says so in the human-readable output", has(r.out, "repair_done"), r.out.slice(0, 300));
+  // Reporting it must not break the run: the legality checks read `done`, and a
+  // warning that stops the pipeline would be worse than the bug it reports.
+  r = phase(["enter", repBead, "5", "--reason", "re-verify", "--quiet"]);
+  check("but the run can still advance past it", r.code === 0 || has(r.out, "--booted"), r.out);
 }
 
 const badBead = newBead("corrupt");
