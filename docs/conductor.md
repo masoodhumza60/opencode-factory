@@ -113,7 +113,7 @@ node <bundle>/scripts/factory-phase.mjs handoff  <bead> --next "<action>"
 Exit codes: **0** ok · **1** illegal transition or error · **2** blocked, a
 human gate is still pending.
 
-Four properties worth relying on:
+Seven properties worth relying on:
 
 - **Legality is checked on every transition, including the first.** A bead with
   no recorded phase may enter `0` or `1`; it may not jump to `5`.
@@ -133,6 +133,24 @@ Four properties worth relying on:
   refuses rather than truncating, because half a boot claim is worse than none.
   The machine cannot tell whether the claim is *honest* - that stays a human
   judgement at Gate C - but it does make the claim impossible to skip.
+- **Entering phase 2 (spec) requires a brainstorm to exist.** A real run produced
+  no brainstorm at all - the string appears nowhere in the project - and the spec
+  was written anyway, resting on nothing. `ARTIFACTS` in the script maps a phase
+  to the artifact it depends on; entering a phase whose artifact is missing is
+  refused and the refusal names the file and the directory it looked in.
+- **`status` reports staleness.** It reads the issue's own `updated_at` and
+  reports `idle:` days, flagging a run as stale at 3 days idle while its current
+  phase is unfinished. This is a REPORTING threshold, never an enforced one - it
+  can only change what you see, never stop you - which is why a number belongs
+  here and did not belong on the handoff rule. It exists because a machine that
+  only speaks when spoken to cannot notice it has been abandoned: one real run
+  sat in implement for ten days with every guard in this file still working and
+  nobody having asked any of them a question. Run `factory-phase.mjs status
+  <bead>` before you trust that a run is moving.
+- **`status` flags a `repair_done` record that outlived its phase.** bd 1.3.0
+  offers no way to unset a dimension, so a completed debug detour can still read
+  as standing state after the run has returned to implement. It is reported as
+  incoherent rather than cleared, and it does not block anything.
 
 If the script refuses you, that is the gate working, not a bug to route
 around. Fix the state or ask the human — do not start writing files anyway.

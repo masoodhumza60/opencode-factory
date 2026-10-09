@@ -143,7 +143,14 @@ Both installers run the same steps in the same order:
    database and asserts that every illegal transition is **refused**: jumping
    phases, entering a phase while its human gate is still pending, completing a
    phase you are not in, and reading a state that cannot be parsed. That suite
-   is the proof the pipeline's enforcement can actually say no.
+   is the proof the pipeline's enforcement can actually say no. It also covers
+    the boot condition on phase 5 (`--booted` required, a double-quoted or
+    over-long value refused rather than truncated), the artifact check on phase 2
+    (a spec cannot rest on a brainstorm nobody wrote), the `status` staleness
+    report (`idle_days`, `stale`) and the `repair_done_stale` coherence flag. Those
+    three fields are reported, never enforced: `status` tells you a run has been
+    idle too long or carries a stale repair record, and what you do about that
+    is a human's call.
    `test-factory-plan.mjs` drives the plan-to-graph compiler against a
    throwaway bd database and asserts that a bad plan is **refused before it can
    reach the database** — 17 must-fail cases covering a silently-ignored field,
