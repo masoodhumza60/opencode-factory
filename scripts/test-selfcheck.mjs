@@ -284,7 +284,7 @@ try {
   }
   // 13. A disabled server must FAIL: a server nobody can reach is not healthy.
   {
-    const p = mcpConfig("mcp-disabled", { graft: { type: "local", command: [process.execPath, fakeMcp], disabled: true } });
+    const p = mcpConfig("mcp-disabled", { graft: { type: "local", command: [process.execPath, fakeMcp], enabled: false } });
     const r = runSelfcheck(["--mcp-config", p]);
     report("disabled server FAILs", r.line(/^FAIL\s+mcp: graft handshake/) !== "", r.line(/mcp: graft handshake/));
     report("disabled failure says it is disabled", /disabl/i.test(r.line(/mcp: graft handshake/)), r.line(/mcp: graft handshake/));

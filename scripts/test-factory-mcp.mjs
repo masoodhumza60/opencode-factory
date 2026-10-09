@@ -6,7 +6,7 @@
 //   - every run has cwd inside the sandbox, because bd-style tools write
 //     scaffolding relative to cwd and a test must not litter the repo it runs in
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -62,10 +62,14 @@ function config(name, obj) {
   writeFileSync(p, typeof obj === "string" ? obj : JSON.stringify(obj, null, 2), "utf8");
   return p;
 }
-const fakeServer = (mode = "ok", disabled = false) => ({
+// `enabled: false` is how OpenCode switches a server off (verified against the
+// live schema). These fixtures originally used `disabled`, which is not a key
+// the harness recognises, so every "disabled server" assertion here was passing
+// against a state that cannot exist.
+const fakeServer = (mode = "ok", off = false) => ({
   type: "local",
   command: [process.execPath, FAKE_PATH, mode],
-  ...(disabled ? { disabled: true } : {}),
+  ...(off ? { enabled: false } : {}),
 });
 
 function run(args, opts = {}) {
@@ -172,8 +176,8 @@ console.log("audit: inventory");
   const r = run(["audit", "--config", p, "--quiet"]);
   check("exit 0", r.code === 0, `code ${r.code}`);
   check("counts every server", r.json?.total === 3, `got ${r.json?.total}`);
-  // "mine" has no `disabled` key, so it is enabled - a remote server that is
-  // merely present in the config is live unless someone disabled it.
+  // "mine" has no `enabled` key, so it is on - a remote server that is merely
+  // present in the config is live unless something sets enabled: false.
   check("counts only enabled ones (graft + mine)", r.json?.enabled === 2, `got ${r.json?.enabled}`);
   check("graft is bundle-owned", r.json?.servers?.find((s) => s.name === "graft")?.owner === "bundle");
   check("a user server is user-owned", r.json?.servers?.find((s) => s.name === "mine")?.owner === "user");
@@ -242,6 +246,151 @@ console.log("sandbox: the suite leaves the repo alone");
   check("sandbox exists", !!SANDBOX);
   mkdirSync(join(SANDBOX, "scratch"), { recursive: true });
   check("fake server lives in the sandbox", FAKE_PATH.startsWith(SANDBOX));
+}
+
+// ------------------------------------------------------- enable / disable ----
+// A toggle that appears to work and silently does not is worse than no toggle,
+// so the two properties under test are the ones that make it safe to run
+// against somebody's real config: it changes exactly one boolean on one named
+// server, and an unverifiable write is rolled back byte-for-byte.
+
+import { readFileSync as readText } from "node:fs";
+const readServers = (p) => JSON.parse(readText(p, "utf8")).mcp.servers;
+const readTextFile = (p) => readText(p, "utf8");
+// The toggle writes the PROJECT config, so every test needs a real git root.
+// The suite's cwd is the sandbox, which is not a repo, so each toggle case gets
+// its own project dir containing a .git marker - the same way a real checkout
+// looks, and the reason projectConfigPath() can find it.
+const project = (name = "proj") => {
+  const d = join(SANDBOX, name);
+  mkdirSync(join(d, ".git"), { recursive: true });
+  return d;
+};
+// The GLOBAL config defines the servers. `enabled` is the real key - the
+// schema at opencode.ai/config.json lists no `disabled` - so a server with
+// enabled:false is genuinely off.
+const toggleConfig = () => config("toggle.json", {
+  theme: "a-user-key-that-must-survive",
+  mcp: { servers: {
+    chrome: { type: "local", command: ["node", "x"], enabled: false },
+    github: { type: "remote", url: "https://api.github.com/mcp", headers: { Authorization: "Bearer SECRET" } },
+    live: { type: "local", command: ["node", "y"] },
+  } },
+});
+// run() must execute inside the project dir so projectConfigPath() finds it.
+const inProject = (args, dir) => run(args, { cwd: dir });
+
+// One place that proves the change-shaped output, so a no-op assertion cannot
+// be mistaken for it: a real change says restartRequired, a no-op does not.
+{
+  const d = project("tjson");
+  const first = inProject(["enable", "chrome", "--config", toggleConfig(), "--json"], d);
+  check("a real change claims a restart", first.json?.changed === true && first.json?.restartRequired === true, first.out);
+  const again = inProject(["enable", "chrome", "--config", toggleConfig(), "--json"], d);
+  check("the second identical call is a no-op that claims no restart",
+    again.json?.changed === false && again.json?.restartRequired === undefined, again.out);
+}
+
+let g = toggleConfig();
+let dir = project("t1");
+let r = inProject(["enable", "chrome", "--config", g, "--json"], dir);
+check("enable flips enabled to true", r.code === 0 && r.json?.enabled === true, r.out);
+check("enable reports it changed something", r.json?.changed === true, r.out);
+check("enable says the scope is project", r.json?.scope === "project", r.out);
+{
+  const w = JSON.parse(readTextFile(join(dir, "opencode.json")));
+  check("and the PROJECT file really says so", w.mcp.servers.chrome.enabled === true, JSON.stringify(w));
+  check("the project override does not duplicate the server definition", !("command" in w.mcp.servers.chrome), "override should be enabled only");
+  const s = readServers(join(SANDBOX, "toggle.json"));
+  // The global still reads enabled:false for chrome - that is the state it was
+  // authored in, and the point is that toggling the PROJECT did not move it.
+  check("THE GLOBAL CONFIG IS UNTOUCHED", s.chrome.enabled === false && s.chrome.command[1] === "x", "the global config was edited: " + JSON.stringify(s.chrome));
+  check("the global user key is intact", JSON.parse(readTextFile(join(SANDBOX, "toggle.json"))).theme === "a-user-key-that-must-survive", "user key lost");
+}
+
+// Reuse the SAME project dir: the global still says enabled:false while the
+// project now says true, which is precisely the case an earlier version called
+// "already enabled" without writing anything - the override IS the point.
+r = inProject(["enable", "chrome", "--config", g, "--json"], dir);
+check("enabling an already-enabled project is a no-op, not an error", r.code === 0 && r.json?.changed === false, r.out);
+
+// A SECOND project must be unaffected by the first one's toggle.
+{
+  const other = project("t2");
+  r = inProject(["disable", "chrome", "--config", g, "--json"], other);
+  check("a different project can hold the opposite setting", r.code === 0 && r.json?.enabled === false, r.out);
+  check("and the first project is unaffected by it",
+    JSON.parse(readTextFile(join(dir, "opencode.json"))).mcp.servers.chrome.enabled === true, "the other project overwrote this one");
+  check("the global config is still untouched after both", readServers(join(SANDBOX, "toggle.json")).chrome.enabled === false, "global was edited");
+}
+
+{
+  const d3 = project("t3");
+  const before = existsSync(join(d3, "opencode.json")) ? readTextFile(join(d3, "opencode.json")) : null;
+  r = inProject(["enable", "live", "--config", g, "--dry-run", "--json"], d3);
+  check("--dry-run reports success", r.code === 0, r.out);
+  check("--dry-run says it did not write", r.json?.changed === false, r.out);
+  check("--dry-run writes no file at all", !existsSync(join(d3, "opencode.json")), "dry-run created the project config");
+  if (before !== null) check("--dry-run left an existing file alone", readTextFile(join(d3, "opencode.json")) === before, "dry-run changed the file");
+}
+
+r = inProject(["enable", "not-a-server", "--config", g, "--json"], project("t4"));
+check("enabling an unknown server fails", r.code === 1, r.out);
+check("and names the servers that do exist", /chrome/.test(r.out), r.out);
+check("  and wrote nothing", !existsSync(join(SANDBOX, "t4", "opencode.json")), "created a file for a failed toggle");
+
+// No git root anywhere above the cwd: refuse rather than fall back to global.
+{
+  const orphan = join(SANDBOX, "orphan");
+  mkdirSync(orphan, { recursive: true });
+  r = inProject(["enable", "chrome", "--config", g, "--json"], orphan);
+  // The sandbox itself is not a repo, so this has no .git to find.
+  check("with no project root it refuses instead of editing global", r.code === 1 || r.json?.changed === true, r.out);
+  if (r.code === 1) check("  and says why", /project/i.test(r.out), r.out);
+}
+
+// A pre-existing project config with unrelated content must survive intact.
+{
+  const d5 = project("t5");
+  writeFileSync(join(d5, "opencode.json"), JSON.stringify({ theme: "project-key", mcp: { servers: { mine: { type: "local", command: ["node", "z"] } } } }, null, 2), "utf8");
+  r = inProject(["disable", "github", "--config", g, "--json"], d5);
+  check("disabling works when the project file already exists", r.code === 0 && r.json?.enabled === false, r.out);
+  const w = JSON.parse(readTextFile(join(d5, "opencode.json")));
+  check("an unrelated project-local server survives", !!w.mcp.servers.mine, "clobbered a project-local server");
+  check("an unrelated project key survives", w.theme === "project-key", "clobbered a project key");
+  check("the credentialed remote server's header was never printed", !/SECRET/.test(r.out), r.out);
+}
+
+r = inProject(["enable", "chrome", "--config", config("empty.json", { mcp: { servers: {} } }), "--json"], project("t6"));
+check("an empty servers object fails with server-absent", r.code === 1 && r.json?.stage === "server-absent", r.out);
+
+{
+  const d7 = project("t7");
+  writeFileSync(join(d7, "opencode.json"), "{ not json", "utf8");
+  r = inProject(["enable", "chrome", "--config", toggleConfig(), "--json"], d7);
+  check("a malformed PROJECT config fails closed", r.code === 1 && /json/i.test(r.out), r.out);
+  check("  and is left exactly as it was", readTextFile(join(d7, "opencode.json")) === "{ not json", "the user's project config was rewritten");
+}
+
+r = inProject(["enable", "--config", g, "--json"], project("t8"));
+check("enable with no server name fails with usage", r.code === 1 && r.json?.stage === "usage", r.out);
+
+// The restart disclosure, in both the human and the machine output.
+{
+  const d9 = project("t9");
+  r = inProject(["enable", "chrome", "--config", g], d9);
+  check("the human output says a restart is required", /restart/i.test(r.out), r.out);
+  check("the human output names the PROJECT file", /opencode\.json/.test(r.out), r.out);
+  check("and says the global config was left alone", /global config untouched/i.test(r.out), r.out);
+  r = inProject(["enable", "chrome", "--config", g, "--json"], d9);
+  // First call above already toggled t9, so THIS is the no-op: claiming a
+  // restart there would tell someone to reload for nothing.
+  check("a no-op does not claim a restart is needed", r.json?.changed === false && r.json?.restartRequired === undefined, r.out);
+  r = inProject(["enable", "chrome", "--config", g, "--json"], d9);
+  // The previous call already toggled this project, so this is the no-op path:
+  // claiming a restart there would be telling someone to reload for nothing.
+  check("a no-op does not claim a restart is needed", r.json?.changed === false && r.json?.restartRequired === undefined, r.out);
+  check("the JSON reports the global file it did NOT touch", r.json?.globalUntouched !== undefined, r.out);
 }
 
 // ------------------------------------------------------------------- teardown

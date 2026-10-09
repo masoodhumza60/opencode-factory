@@ -32,7 +32,8 @@ const flag = (name, dflt) => {
   const i = argv.indexOf(name);
   return i !== -1 && argv[i + 1] ? argv[i + 1] : dflt;
 };
-const configDir = flag("--config-dir", join(homedir(), ".config", "opencode"));
+const { platform: plat, configPath: platConfig } = await import("./platform.mjs");
+const configDir = flag("--config-dir", plat().configDir());
 const dcpConfig = join(configDir, "dcp.jsonc");
 const overridePath = join(configDir, "dcp-prompts", "overrides", "turn-nudge");
 
@@ -158,4 +159,4 @@ if (cfg.action === "skipped")
   console.warn(
     "dcp prompts: WARNING the override is INERT — fix dcp.jsonc by hand (set experimental.customPrompts to true) or the nudge will never fire."
   );
-else console.log("dcp prompts: restart OpenCode for this to take effect (dcp reads config at startup).");
+else console.log(`dcp prompts: ${plat().reloadHint(platConfig())} (dcp reads config at startup).`);

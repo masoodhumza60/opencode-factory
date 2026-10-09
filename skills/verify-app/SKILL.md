@@ -27,10 +27,32 @@ Answer from the codebase. Ask the user only what cannot be observed.
    mobile, or a library. A repo can have several: pick the primary, note the rest.
 2. **Run** — how does it start locally? Prefer the repo's own documented dev
    command. Note ports, env vars, seed data, auth.
-3. **Drive** — how can an agent interact programmatically? **Existing harnesses
-   first**: Playwright/Cypress specs, expect scripts, PTY helpers, a debug port,
-   a curl-able health endpoint. Only then a generic recipe — browser/CDP for web
-   and Electron, tmux/PTY for CLI-TUI, plain HTTP for services.
+3. **Drive** — how can an agent interact programmatically? Two passes, in this
+   order, because hand-writing Playwright when a browser is already connected is
+   the most common wasted effort here:
+
+   **Pass 1 — what is already available on this machine?** Run
+   `node <bundle>/scripts/factory-mcp.mjs audit`. It lists every configured MCP
+   server, who owns it, whether it is live or disabled, and what it can reach.
+   For a **web surface, a live `chrome-devtools` (or any browser) MCP is the
+   harness** — drive the real app through it rather than generating test code
+   that then has to be maintained. A connected MCP is already handshaken and
+   costs you nothing to use; generated Playwright costs a file you must keep
+   correct forever. If a browser MCP exists but is switched off (`audit` reports
+   its state as disabled), say so and offer to connect it with
+   `node <bundle>/scripts/factory-mcp.mjs enable <server>` rather than silently
+   writing the fallback — that is a decision the human should see, not one to
+   make by omission. That command writes **this project's** `opencode.json`, so
+   nothing else on the machine is affected; say so when you offer it, and tell
+   the human OpenCode needs a restart before the server appears.
+
+   **Pass 2 — only then the repo's own harnesses**: existing Playwright/Cypress
+   specs, expect scripts, PTY helpers, a debug port, a curl-able health endpoint.
+   Only after both passes, a generic recipe — browser/CDP for web and Electron,
+   tmux/PTY for CLI-TUI, plain HTTP for services.
+
+   Record which pass supplied the harness in the Drive section, so a later reader
+   knows whether the choice was made or just inherited.
 4. **Observe** — what evidence can be captured? Screenshots, terminal
    transcripts, response bodies, logs, exit codes, database state.
 5. **Isolate** — can two instances run side by side? If not, say so plainly.

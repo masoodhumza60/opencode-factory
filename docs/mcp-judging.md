@@ -26,7 +26,32 @@ Both live in the bundle and speak only to the config, never to the network.
 ```bash
 node scripts/factory-mcp.mjs audit                    # what is configured, and what it costs
 node scripts/factory-mcp.mjs handshake --name graft   # does it actually answer?
+node scripts/factory-mcp.mjs enable  <server>         # connect it, for THIS project
+node scripts/factory-mcp.mjs disable <server>         # disconnect it, for THIS project
 ```
+
+**`enable` and `disable` write the PROJECT's `opencode.json`, never the global
+one.** A global toggle switches a server on and off for every project on the
+machine, including ones somebody is working in right now. Project config has the
+highest precedence of the standard files and merges rather than replaces, so
+writing `mcp.<server>.enabled` there changes this checkout and nothing else.
+Two projects can hold opposite settings for the same server. With no `.git`
+anywhere above the working directory the command **refuses** rather than falling
+back to global.
+
+The key is `enabled: false`, verified against the published schema at
+`https://opencode.ai/config.json` — `disabled` is not a key OpenCode
+recognises. An earlier version of this command wrote `disabled`, reported
+success, and changed nothing, because a key the harness does not read is
+indistinguishable from one it is ignoring. If a config of yours says
+`disabled`, those servers are almost certainly **live**, not off; run `audit`
+and read what it actually reports.
+
+Every write is followed by a re-read: if the file cannot be parsed back, or
+does not read back as the state requested, the original bytes are restored.
+OpenCode reads its config at startup, so both forms of output say a restart is
+required — and say *nothing* about restarting when nothing changed, because
+telling someone to reload for a no-op trains them to ignore the line.
 
 `audit` reports every configured server with its owner (bundle-owned or the
 user's), its type, whether it is live, and whether it needs a credential.

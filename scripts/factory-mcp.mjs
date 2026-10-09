@@ -12,7 +12,7 @@
 // Redaction is structural, not a filter: every field in the output is copied
 // through an explicit allowlist, so a future config field carrying a secret
 // cannot leak into a decision record that gets committed to a repo.
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
 import { join, basename } from "node:path";
 import { homedir } from "node:os";
 import { spawn } from "node:child_process";
@@ -44,10 +44,21 @@ function fail(msg, stage, extra = {}) {
   process.exit(1);
 }
 
-function configPath() {
-  if (get("--config")) return get("--config");
-  return join(homedir(), ".config", "opencode", "opencode.json");
+// The original bytes, kept so a write that cannot be verified can be undone.
+// Restoring the exact text (not a re-serialised copy) matters: a user's config
+// may carry formatting and key order they did not ask us to rewrite.
+function rawConfig(p) {
+  try {
+    return readFileSync(p, "utf8");
+  } catch {
+    fail(`cannot read opencode config at ${p}`, "config-unreadable", { config: p });
+  }
 }
+
+// The config path and the reload sentence both come from scripts/platform.mjs
+// rather than being literals here, so this script has no opinion about which
+// harness it is driving. That is what lets a second one use it unchanged.
+const { configPath, platform, projectConfigPath } = await import("./platform.mjs");
 
 // Strict JSON, like merge-config.mjs. A config we cannot parse is a failure we
 // must report, never a reason to assume there is nothing to check.
@@ -89,7 +100,10 @@ function displayPath(p) {
 
 function describe(name, s) {
   const type = s?.type === "remote" ? "remote" : "local";
-  const enabled = s?.disabled === true ? "disabled" : "enabled";
+  // `enabled: false` is how a server is switched off (verified against
+// opencode.ai/config.json). Reading `disabled` here would report every server as
+// live, which is the error this file previously shipped.
+const enabled = s?.enabled === false ? "disabled" : "enabled";
   const hasHeaders = s?.headers != null && Object.keys(s.headers).length > 0;
   const urlQuery = type === "remote" && s?.url ? /[?&](token|key|apikey|api_key|access_token|password)=/i.test(s.url) : false;
   return {
@@ -115,8 +129,8 @@ async function handshake() {
   if (!server) {
     fail(`no MCP server named "${name}" in ${path}`, "server-absent", { server: name, configured: Object.keys(config?.mcp?.servers ?? {}) });
   }
-  if (server.disabled === true) {
-    fail(`MCP server "${name}" is disabled in the config; it cannot serve`, "server-disabled", { server: name, state: "disabled" });
+  if (server.enabled === false) {
+    fail(`MCP server "${name}" has enabled=false in the config; it cannot serve`, "server-disabled", { server: name, state: "disabled" });
   }
   if (server.type === "remote" || !Array.isArray(server.command) || server.command.length === 0) {
     fail(`MCP server "${name}" is not a local server with a command; this check speaks stdio JSON-RPC only`, "server-not-stdio", { server: name, type: server.type ?? "local" });
@@ -233,11 +247,137 @@ function audit() {
   out(payload);
 }
 
+// ---------------------------------------------------------------- enable/disable
+// Flips `mcp.<server>.enabled` on ONE server in THIS PROJECT's opencode.json,
+// never the global one. Project config has the highest precedence of the
+// standard files and merges rather than replaces, so this changes the checkout
+// you are in and nothing else. A global toggle would switch servers on and off
+// for every project on the machine including ones somebody is working in right
+// now - which is the reason this scope exists, not a preference.
+//
+// The key is `enabled`, verified against https://opencode.ai/config.json (the
+// schema's mcp properties list `enabled` and nothing else). An earlier version
+// wrote `disabled`, reported success, exited 0, and changed nothing: it wrote a
+// key the harness does not recognise. The 21 tests that passed against it were
+// testing my assumption rather than the schema, which is the defect this bundle
+// has been fixing all along, committed here instead.
+//
+// Deliberately NOT a general config editor: it touches exactly one boolean on
+// exactly one named server. A command that could add servers would need to
+// decide ownership, credentials and blast radius, and `audit` is where that
+// judgement belongs. Nothing here prints a header value or a remote URL beyond
+// what safeUrl already strips.
+function toggle() {
+  const which = argv[0];
+  // The name is whatever positional follows the verb and is not a flag's value.
+  // Taking argv[1] blindly breaks the obvious invocation `enable chrome-devtools
+  // --config <path>`, because argv[1] is the verb and argv[2] is the name but a
+  // flag placed between them shifts both. Walk the args instead.
+  const positional = [];
+  for (let i = 1; i < argv.length; i++) {
+    if (argv[i].startsWith("--")) {
+      if (get(argv[i]) === argv[i + 1]) i++; // skip this flag's value
+      continue;
+    }
+    positional.push(argv[i]);
+  }
+  const name = get("--name") || positional[0];
+  if (which !== "enable" && which !== "disable")
+    fail("usage: factory-mcp.mjs enable|disable <server>", "usage", {});
+  if (!name) fail("which server? name it, or pass --name <server>", "usage", {});
+
+  // Read the GLOBAL config to answer "is this server defined, and is it on
+  // right now" - that is where definitions live. Write the PROJECT config to
+  // change it. Those are deliberately different files, and conflating them is
+  // how this command ended up editing every project on the machine.
+  const { config, path: globalPath } = loadConfig();
+  const servers = config.mcp && config.mcp.servers;
+  if (!servers || typeof servers !== "object")
+    fail(`no mcp.servers in ${displayPath(globalPath)}`, "no-servers-object", { config: globalPath });
+  const s = servers[name];
+  if (!s || typeof s !== "object") {
+    const have = Object.keys(servers).sort().join(", ") || "(none)";
+    fail(`no server named "${name}". configured: ${have}`, "server-absent", { config: globalPath });
+  }
+
+  // Effective state = the project override if there is one, else the global.
+  // Overriding to the same value it already has is not "no change", because the
+  // global may disagree - that is the whole reason this command exists.
+  const target = projectConfigPath();
+  if (!target)
+    fail("no project found (no .git above this directory) - refusing to write a global config, " +
+      "which would change every project on the machine", "no-project", { cwd: process.cwd() });
+  const projectRaw = existsSync(target) ? readFileSync(target, "utf8") : "{}";
+  let projectCfg;
+  try {
+    projectCfg = JSON.parse(projectRaw);
+  } catch (e) {
+    fail(`${displayPath(target)} is not valid JSON (${e.message}) - fix it by hand rather than losing it`, "config-invalid-json", { config: target });
+  }
+  const override = projectCfg.mcp && projectCfg.mcp.servers && projectCfg.mcp.servers[name];
+  const current = override && typeof override === "object" && typeof override.enabled === "boolean"
+    ? override.enabled
+    : (s.enabled !== false);
+
+  const want = which === "enable";
+
+  if (current === want) {
+    say(`mcp ${name} is already ${which}d (no change)`);
+    out({ ok: true, changed: false, scope: "project", server: name, enabled: want, config: target, globalUntouched: globalPath });
+    return;
+  }
+
+  if (has("--dry-run")) {
+    say(`mcp ${name}: would set enabled=${want} for THIS PROJECT in ${displayPath(target)}`);
+    out({ ok: true, changed: false, dryRun: true, scope: "project", server: name, enabled: want, config: target, globalUntouched: globalPath });
+    return;
+  }
+
+  // Rebuild rather than patch a string: a half-applied edit to a user's config
+  // is the worst outcome available, and JSON round-tripping cannot produce one.
+  const before = projectRaw;
+  const next = JSON.parse(before);
+  next.mcp = next.mcp || {};
+  next.mcp.servers = next.mcp.servers || {};
+  // Spread any project-local entry so this adds an override, not a replacement:
+  // a project file may legitimately carry the command or url for a server that
+  // only exists locally.
+  next.mcp.servers[name] = { ...(typeof override === "object" ? override : {}), enabled: want };
+  writeFileSync(target, JSON.stringify(next, null, 2) + "\n", "utf8");
+
+  // Re-read and re-parse. A write that cannot be read back is not a write, and
+  // "I think it saved" is exactly the class of claim this repo keeps refusing.
+  let verify;
+  try {
+    verify = JSON.parse(readFileSync(target, "utf8"));
+  } catch (e) {
+    if (before === "{}") rmSync(target, { force: true });
+    else writeFileSync(target, before, "utf8"); // roll back a config we cannot parse
+    fail(`wrote ${name} but could not re-read the config (${e.message}); original restored`, "write-unreadable", { config: target });
+  }
+  const got = verify.mcp && verify.mcp.servers && verify.mcp.servers[name];
+  if (!got || got.enabled !== want) {
+    if (before === "{}") rmSync(target, { force: true });
+    else writeFileSync(target, before, "utf8");
+    fail(`wrote ${name} but the file does not read back as enabled=${want}; original restored`, "write-unverified", { config: target });
+  }
+
+  say(`mcp ${name} ${which}d (enabled=${want}) for THIS PROJECT in ${displayPath(target)}`);
+  say(`  global config untouched - other projects are unaffected`);
+  // OpenCode reads its config at startup, so a toggle that appears to work and
+  // silently does not is worse than one that says when it will take effect.
+  say(platform().reloadHint(displayPath(target)));
+  out({ ok: true, changed: true, scope: "project", server: name, enabled: want, config: target, globalUntouched: globalPath, restartRequired: true });
+}
+
 const cmd = argv[0];
 if (cmd === "handshake") await handshake();
 else if (cmd === "audit") audit();
+else if (cmd === "enable" || cmd === "disable") toggle();
 else {
   console.error("usage: factory-mcp.mjs handshake [--name <server>] [--config <path>] [--timeout <ms>] [--quiet] [--json]");
   console.error("       factory-mcp.mjs audit    [--config <path>] [--quiet] [--json]");
+  console.error("       factory-mcp.mjs enable   <server> [--config <path>] [--dry-run] [--quiet] [--json]");
+  console.error("       factory-mcp.mjs disable  <server> [--config <path>] [--dry-run] [--quiet] [--json]");
   process.exit(1);
 }

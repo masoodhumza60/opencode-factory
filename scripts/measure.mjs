@@ -35,7 +35,12 @@ import { DatabaseSync } from "node:sqlite";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-const DB = join(homedir(), ".local", "share", "opencode", "opencode.db");
+const { platform } = await import("./platform.mjs");
+// The session DB is OpenCode's own state, not part of its config, so it needs
+// its own accessor rather than the config path. Adding a second harness means
+// adding one function here - which is the point of the comment, not an
+// oversight that the profile is incomplete.
+const DB = join(homedir(), ".local", "share", platform().name, "opencode.db");
 
 // Cache reads cost about 0.1x a base input token. Used only to put a rough
 // input-equivalent figure on the same line; it is an estimate, not a bill.
