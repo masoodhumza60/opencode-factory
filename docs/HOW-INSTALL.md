@@ -310,7 +310,33 @@ there — see **Porting to another harness** below.
 | selfcheck log | `~/.local/share/opencode/log/opencode.log` |
 | project MCP overrides | `<project root>/opencode.json` (nearest `.git` above the working directory) |
 
-### Porting to another harness
+### Re-creating the test app (why the template is committed)
+
+`scripts/seed-testapp.mjs <target-dir>` copies `testapps/orderboard` into a
+fresh directory, runs `git init` with one seed commit, and runs `npm ci`, so
+`tsc` and `vitest` genuinely work.
+
+Three refusals, each because the alternative quietly invalidates a measurement:
+
+- **The template must not already contain the feature.** If
+  `src/orders/csv.ts` (or `range.ts`) ever appears in the template the seed
+  ships the finished work and nothing can measure building it.
+- **The target must be empty.** A run that inherits the last run's state is not
+  a second run. That is what made an earlier project uninterpretable.
+- **No target means nothing happens.** There is no default directory: the
+  point is a disposable one, named by you.
+
+It refuses rather than merging, because a partial reset is how a fixture ends
+up inheriting state. `--dry-run` prints what it would copy; `--no-install`
+skips `npm ci`.
+
+**Why the template is committed here and not generated into a temp folder.** The
+first version of this test app lived only in a temp directory, and temp cleanup
+deleted it - every artifact that run had produced was gone, recoverable only
+because git objects happened to survive underneath. Anything a measurement is
+compared against has to live somewhere that cannot be swept away.
+
+## Porting to another harness
 
 `scripts/platform.mjs` is the only file in this bundle that knows which agent it
 is running under. It exists because four scripts used to hardcode

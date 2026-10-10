@@ -163,6 +163,16 @@ Seven properties worth relying on:
 If the script refuses you, that is the gate working, not a bug to route
 around. Fix the state or ask the human — do not start writing files anyway.
 
+## Before measuring anything: seed a known app
+
+Every number this factory produces is a comparison, and a comparison needs
+both sides. The historical baseline was one run of this factory; the current
+one is `testapps/orderboard`, seeded by `scripts/seed-testapp.mjs`.
+
+Use the same app each time. A different app each time measures the app, not
+the factory. Its feature is absent by construction - the seed refuses if the
+template ever contains it - so "did the factory build this" stays answerable.
+
 ## Cost discipline — the three rules that keep a session affordable
 
 A real factory run produced **78.3M tokens in a single session**: 955 turns,
