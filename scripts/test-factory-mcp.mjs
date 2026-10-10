@@ -710,7 +710,11 @@ const scopeConfig = () => config("scope.json", {
     { server: { name: "io.beta/reader", description: "Remote only, no packages key at all", version: "2.1.0",
       remotes: [{ type: "streamable-http", url: "https://reader.example/mcp" }] } },
     { server: { name: "io.gamma/broken", description: "Neither local nor remote", version: "0.1.0" } },
-  ], metadata: { count: 5 } };
+    { server: { name: "io.delta/secrets", description: "Needs a token", version: "1.2.0",
+      packages: [{ registryType: "npm", identifier: "delta-secrets-mcp", version: "1.2.0" }],
+      remotes: [{ type: "streamable-http", url: "https://delta.example/mcp" }],
+      environmentVariables: [{ name: "DELTA_TOKEN" }, { name: "DELTA_REGION", isRequired: false }] } },
+  ], metadata: { count: 6 } };
 
   let hits = 0, body = null, code = 200;
   const server = createServer((req, res) => {
@@ -847,6 +851,123 @@ const scopeConfig = () => config("scope.json", {
   // tsearch20: a nonsense --limit is a refusal, not a silent default.
   r = await inSandbox(["search", "ledger", "--registry", url, "--json", "--limit", "zero"]);
   check("tsearch20 a non-numeric --limit is refused", r.code !== 0, r.out.slice(0, 200));
+
+  // ---- add ----
+  // Every refusal here is the same failure wearing different clothes: a config
+  // that LOOKS installed and is not. An entry opencode silently ignores is worse
+  // than no entry, because the operator's next question is "why is this server
+  // missing" and the answer will be three steps of blame later.
+  const addIn = async (name, dir, extra = []) =>
+    runIn(dir, ["add", name, "--registry", url, "--json", ...extra]);
+
+  { // the local path, end to end
+    const d = project("tadd1");
+    const r = await addIn("com.acme/ledger", d);
+    check("tadd1 add exits 0 for a server with a local package", r.code === 0, r.out.slice(0, 300));
+    const w = (() => { try { return JSON.parse(readTextFile(join(d, "opencode.json"))); } catch { return {}; } })();
+    check("tadd2 it wrote into the PROJECT config", !!w.mcp?.servers?.ledger, JSON.stringify(w));
+    check("tadd3 written as type local", w.mcp?.servers?.ledger?.type === "local", JSON.stringify(w));
+    check("tadd4 with an npx command built from the package identifier",
+      JSON.stringify(w.mcp?.servers?.ledger?.command) === JSON.stringify(["npx", "-y", "acme-ledger-mcp"]),
+      JSON.stringify(w.mcp?.servers?.ledger));
+    // The user's decision: add brings the server UP, but only for this project.
+    check("tadd5 add enables it", w.mcp?.servers?.ledger?.enabled === true, JSON.stringify(w));
+    check("tadd6 and says the scope is project", r.json?.scope === "project", r.out.slice(0, 200));
+    check("tadd7 nothing was written outside the project dir",
+      !existsSync(join(SANDBOX, "opencode.json")), "wrote into the sandbox root");
+  }
+  { // remote translation - the one that silently produced ignored configs
+    const d = project("tadd2");
+    const r = await addIn("io.beta/reader", d);
+    check("tadd8 a remote-only server installs", r.code === 0, r.out.slice(0, 300));
+    const w = (() => { try { return JSON.parse(readTextFile(join(d, "opencode.json"))); } catch { return {}; } })();
+    check("tadd9 written as type remote, NOT streamable-http",
+      w.mcp?.servers?.reader?.type === "remote" && w.mcp?.servers?.reader?.type !== "streamable-http",
+      JSON.stringify(w.mcp?.servers?.reader));
+    check("tadd10 carrying the registry url", w.mcp?.servers?.reader?.url === "https://reader.example/mcp",
+      JSON.stringify(w.mcp?.servers?.reader));
+    check("tadd11 and enabled", w.mcp?.servers?.reader?.enabled === true, JSON.stringify(w));
+    check("tadd12 no npx command was invented for a remote server",
+      w.mcp?.servers?.reader?.command === undefined, JSON.stringify(w.mcp?.servers?.reader));
+  }
+  { // credentials: never invent one
+    const d = project("tadd3");
+    const r = await addIn("io.delta/secrets", d);
+    check("tadd13 a server needing a credential is refused without one", r.code !== 0, `exit ${r.code}`);
+    check("tadd14 naming the credential", /DELTA_TOKEN/.test(r.out), r.out.slice(0, 300));
+    check("tadd15 naming the stage", r.json?.stage === "credential-required", r.out.slice(0, 300));
+    check("tadd16 and writing NOTHING, rather than a placeholder that fails later",
+      !existsSync(join(d, "opencode.json")), "wrote an entry without the credential it needs");
+    const withEnv = await addIn("io.delta/secrets", d, ["--env", "DELTA_TOKEN=t0ken"]);
+    check("tadd17 supplying it installs", withEnv.code === 0, withEnv.out.slice(0, 300));
+    const w = (() => { try { return JSON.parse(readTextFile(join(d, "opencode.json"))); } catch { return {}; } })();
+    check("tadd18 and the credential is written under environment",
+      w.mcp?.servers?.secrets?.environment?.DELTA_TOKEN === "t0ken", JSON.stringify(w.mcp?.servers?.secrets));
+    check("tadd19 and it is not echoed into the human output as a claim",
+      !/t0ken/.test(withEnv.out) || /environment/.test(withEnv.out), "credential echoed");
+  }
+  { // refusals that must not look like success
+    const d = project("tadd4");
+    const r = await addIn("io.gamma/broken", d);
+    check("tadd20 a server with no runnable target is refused", r.code !== 0 && r.json?.stage === "no-target", r.out.slice(0, 300));
+    check("tadd21 and writes nothing", !existsSync(join(d, "opencode.json")), "wrote an uninstallable entry");
+    const r2 = await addIn("nothing/here", d);
+    check("tadd22 an unknown server is refused with not-found", r2.code !== 0 && r2.json?.stage === "not-found", r2.out.slice(0, 300));
+    check("tadd23 and it names nearby keys so the operator can retry",
+      /ledger|reader|secrets/.test(r2.out), r2.out.slice(0, 300));
+    const orphan = join(SANDBOX, "tadd-orphan");
+    mkdirSync(orphan, { recursive: true });
+    const r3 = await runIn(orphan, ["add", "com.acme/ledger", "--registry", url, "--json"]);
+    check("tadd24 with no project root it refuses instead of writing global",
+      r3.code !== 0 && r3.json?.stage === "no-project", r3.out.slice(0, 300));
+    check("tadd25 and created no config anywhere", !existsSync(join(orphan, "opencode.json")), "wrote without a project");
+  }
+  { // --dry-run, --force, and a bad key
+    const d = project("tadd5");
+    const r = await addIn("com.acme/ledger", d, ["--dry-run"]);
+    check("tadd26 --dry-run exits 0", r.code === 0, r.out.slice(0, 300));
+    check("tadd27 --dry-run says it changed nothing", r.json?.changed === false, r.out.slice(0, 200));
+    check("tadd28 --dry-run wrote no file", !existsSync(join(d, "opencode.json")), "dry-run wrote");
+    const first = await addIn("com.acme/ledger", d);
+    const again = await addIn("com.acme/ledger", d);
+    check("tadd29 adding an already-installed server is refused, not silently re-written",
+      again.code !== 0 && again.json?.stage === "already-defined", again.out.slice(0, 300));
+    const forced = await addIn("com.acme/ledger", d, ["--force"]);
+    check("tadd30 --force goes through", forced.code === 0, forced.out.slice(0, 300));
+    check("tadd31 first add still worked", first.code === 0, first.out.slice(0, 200));
+    const bad = await addIn("com.acme/ledger", project("tadd6"), ["--key", "not a key!"]);
+    check("tadd32 a key that is not a legal property name is refused",
+      bad.code !== 0 && bad.json?.stage === "bad-key", bad.out.slice(0, 300));
+  }
+  { // the short key works, because search prints the key and people copy it
+    const d = project("tadd7");
+    const r = await addIn("reader", d);
+    check("tadd33 add accepts the short config key that search printed", r.code === 0, r.out.slice(0, 300));
+    const w = (() => { try { return JSON.parse(readTextFile(join(d, "opencode.json"))); } catch { return {}; } })();
+    check("tadd34 and installs under that key", !!w.mcp?.servers?.reader, JSON.stringify(w));
+  }
+  { // a server offering both: say so rather than guessing silently
+    const d = project("tadd8");
+    const r = await addIn("com.acme/ledger", d);
+    check("tadd35 a server with both local and remote installs by default", r.code === 0, r.out.slice(0, 300));
+    const w = (() => { try { return JSON.parse(readTextFile(join(d, "opencode.json"))); } catch { return {}; } })();
+    check("tadd36 defaulting to the local package", w.mcp?.servers?.ledger?.type === "local", JSON.stringify(w.mcp?.servers?.ledger));
+    const d2 = project("tadd9");
+    const rr = await addIn("com.acme/ledger", d2, ["--remote"]);
+    const w2 = (() => { try { return JSON.parse(readTextFile(join(d2, "opencode.json"))); } catch { return {}; } })();
+    check("tadd37 --remote takes the remote instead", rr.code === 0 && w2.mcp?.servers?.ledger?.type === "remote",
+      rr.out.slice(0, 200) + JSON.stringify(w2.mcp?.servers?.ledger));
+    check("tadd38 with the remote's url", w2.mcp?.servers?.ledger?.url === "https://ledger.example/mcp", JSON.stringify(w2));
+  }
+  { // the environment it must not touch
+    const globalFixture = config("add-global.json", { mcp: { servers: { other: fakeServer() } } });
+    const d = project("tadd10");
+    const r = await addIn("com.acme/ledger", d);
+    check("tadd39 add succeeds with a global config present", r.code === 0, r.out.slice(0, 200));
+    const gw = JSON.parse(readTextFile(join(SANDBOX, "add-global.json")));
+    check("tadd40 and the global config has no trace of the new server",
+      gw.mcp.servers.ledger === undefined, JSON.stringify(gw));
+  }
 
   close();
   if (realHome !== undefined) process.env.USERPROFILE = realHome;
