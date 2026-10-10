@@ -243,15 +243,17 @@ function Merge-Config {
         $snip.mcp.servers | Add-Member -NotePropertyName graft -NotePropertyValue @{
             type    = 'local'
             command = @($script:NodePath, $graftCliJs, 'mcp')
-            # `enabled`, NOT `disabled`. The live McpLocalConfig schema
-            # (https://opencode.ai/config.json) lists type/command/cwd/environment/
-            # enabled/timeout with additionalProperties:false - there is no
-            # `disabled` key. Writing it is not a no-op with a bad spelling: opencode
-            # ignores the unknown property, so a server marked `disabled: true` stays
-            # ENABLED. A 2026-10-10 run found this - five servers the operator
-            # believed were off were spawning on every session, and graft was
-            # flickering in and out of the tool catalog as a result.
-            enabled  = $true
+            # `disabled`, NOT `enabled`. opencode's own V2 MCP docs say
+            # "Use `disabled`, not an `enabled` field, to keep one configured
+            # without connecting it", and both the local and remote field tables
+            # list `disabled` with no `enabled` anywhere. An earlier version of
+            # this file said the opposite, on the authority of the machine-readable
+            # schema at https://opencode.ai/config.json - which is the V1 schema.
+            # The mistake was not cosmetic: writing `enabled` is not a misspelling,
+            # it is an unknown property, so opencode ignored it and every server
+            # ran regardless. Stated here because the wrong claim was written down
+            # confidently once already.
+            disabled = $false
         } -Force
         $json = $snip | ConvertTo-Json -Depth 10
         [System.IO.File]::WriteAllText($snippetResolved, $json, (New-Object System.Text.UTF8Encoding $false))

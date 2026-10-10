@@ -17,7 +17,16 @@ import { join, basename, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { spawn } from "node:child_process";
+import { defMatches } from "./mcp-defmatch.mjs";
 import { createHash } from "node:crypto";
+
+// Only these flags take a value. Guessing from the argv shape looked harmless and
+// was not: for two consecutive boolean flags the guess is ALWAYS right, so
+// `--dry-run --refresh` ate `--refresh`, and `--refresh --registry <url>` ate the
+// url - add then quietly queried the default registry instead of the named one.
+// The cost of naming them is that a new value-flag must be added here.
+const VALUE_FLAGS = new Set(["--registry","--timeout","--limit","--config","--name","--key","--env","--allow","--requirements","--out"]);
+
 
 const argv = process.argv.slice(2);
 const get = (k) => { const i = argv.indexOf(k); return i === -1 ? undefined : argv[i + 1]; };
@@ -172,17 +181,18 @@ function displayPath(p) {
 
 function describe(name, s) {
   const type = s?.type === "remote" ? "remote" : "local";
-  // `enabled: false` is how a server is switched off (verified against
-// opencode.ai/config.json). Reading `disabled` here would report every server as
-// live, which is the error this file previously shipped.
-const enabled = s?.enabled === false ? "disabled" : "enabled";
+  // V2 inverted this. The key is `disabled`, not `enabled`: a server stays in the
+  // config with `disabled: true` and simply never connects. `enabled` does not
+  // exist in V2, and audit() reports it as an unknown key precisely because
+  // reading it here reported every server as live when it was not.
+  const on = s?.disabled !== true;
   const hasHeaders = s?.headers != null && Object.keys(s.headers).length > 0;
   const urlQuery = type === "remote" && s?.url ? /[?&](token|key|apikey|api_key|access_token|password)=/i.test(s.url) : false;
   return {
     name,
     owner: requiredServers().includes(name) ? "bundle" : "user",
     type,
-    state: enabled,
+    state: on ? "enabled" : "disabled",
     // Allowlist. A local server's absolute path is machine-specific and would
     // be wrong in every other checkout, so record the executable's name only.
     target: type === "remote" ? safeUrl(s?.url) : basename(s?.command?.[0] ?? "<unknown>"),
@@ -212,8 +222,8 @@ async function handshake() {
   if (!server) {
     fail(`no MCP server named "${name}" in ${path}`, "server-absent", { server: name, configured: Object.keys(config?.mcp?.servers ?? {}) });
   }
-  if (server.enabled === false) {
-    fail(`MCP server "${name}" has enabled=false in the config; it cannot serve`, "server-disabled", { server: name, state: "disabled" });
+  if (server.disabled === true) {
+    fail(`MCP server "${name}" has disabled=true in the config; it is configured but never connects, so it cannot serve`, "server-disabled", { server: name, state: "disabled" });
   }
   if (server.type === "remote" || !Array.isArray(server.command) || server.command.length === 0) {
     fail(`MCP server "${name}" is not a local server with a command; this check speaks stdio JSON-RPC only`, "server-not-stdio", { server: name, type: server.type ?? "local" });
@@ -315,10 +325,12 @@ async function handshake() {
 // while this script correctly read and wrote `enabled`, so our own handshake
 // reported "enabled" and agreed with opencode - the fault was upstream of both.
 const MCP_KEYS = {
-  local: new Set(["type", "command", "cwd", "environment", "enabled", "timeout"]),
-  remote: new Set(["type", "url", "enabled", "headers", "oauth", "timeout"]),
-  // The `{enabled: bool}` shorthand is a legal entry on its own.
-  toggle: new Set(["enabled"]),
+  local: new Set(["type", "command", "cwd", "environment", "disabled", "timeout", "codemode", "protocol"]),
+  remote: new Set(["type", "url", "disabled", "headers", "oauth", "timeout", "codemode", "protocol"]),
+  // A `{disabled: bool}` entry on its own is legal too - but note that a higher
+  // precedence project config REPLACES the whole server object, so a project
+  // override that carries only `disabled` also drops the command or url.
+  toggle: new Set(["disabled"]),
 };
 
 function unknownMcpKeys(s) {
@@ -328,6 +340,34 @@ function unknownMcpKeys(s) {
   const allowed = MCP_KEYS[s.type === "remote" ? "remote" : "local"];
   return Object.keys(s).filter((k) => !allowed.has(k) && !MCP_KEYS.toggle.has(k));
 }
+
+// V2 vocabulary, defined once.
+//
+// opencode's config uses `disabled`, not `enabled`: a server carrying
+// `disabled: true` is configured but never connects. Everything above this line
+// speaks "enabled" because that is the sentence we want to write out; the file
+// on disk only ever sees "disabled". Concentrating the inversion here is what
+// stops the two vocabularies drifting apart in twenty places, which is exactly
+// how the previous version ended up configuring a key opencode ignores.
+//
+// The absent case is NOT "disabled": the key defaults to false, so a server
+// with no `disabled` key connects. Reading it as absent-equals-true is what
+// made five servers the operator believed were off keep starting.
+const isOn = (s) => s?.disabled !== true;
+
+// true when the entry states its state, false when it does not. null is a real
+// answer here: an unrecorded server inherits global, and "inherits" is not the
+// same as "recorded as on".
+const stated = (s) => (s && typeof s === "object" && typeof s.disabled === "boolean" ? !s.disabled : null);
+
+// V2 replaces the whole server object when a project config names a server that
+// a global config already defines. So a project override that carries only
+// `disabled` deletes the `command`/`url` and leaves a server that cannot
+// start. Every write copies a complete definition.
+const fullDef = (override, global) =>
+  override && typeof override === "object" && override.type ? override
+  : global && typeof global === "object" ? global
+  : {};
 
 function audit() {
   const { config, path } = loadConfig();
@@ -351,8 +391,8 @@ function audit() {
   // not say what to do is the guard-without-effect shape again.
   const detail = ignored.length === 0 ? null :
     `config ${path} sets keys opencode's schema does not define, so they have no effect: ${ignored.map((x) => `${x.name} -> ${x.keys.join(", ")}`).join("; ")}. ` +
-    `The MCP schema accepts "enabled" (boolean); there is no "disabled" key, so a server marked disabled:true is still started. ` +
-    `Remove the unknown keys and set "enabled": false to actually stop a server. This audit never edits your config.`;
+    `opencode's config uses "disabled", not "enabled": a server carrying disabled:true is configured and never connects. ` +
+    `Remove the unknown keys and set "disabled": true to actually stop a server. This audit never edits your config.`;
   const payload = {
     ok: ignored.length === 0, config: displayPath(path), total: inventory.length, enabled: enabled.length,
     servers: inventory,
@@ -360,7 +400,7 @@ function audit() {
     ignoredKeys: ignored,
     ...(detail ? { stage: "unknown-mcp-keys", error: detail } : {}),
     note: detail
-      ? `keys the live schema does not define are ignored by opencode, so the config may claim a state that never happens: ${ignored.map((x) => `${x.name}(${x.keys.join(",")})`).join("; ")}. The schema accepts "enabled", never "disabled".`
+      ? `keys the live schema does not define are ignored by opencode, so the config may claim a state that never happens: ${ignored.map((x) => `${x.name}(${x.keys.join(",")})`).join("; ")}. The schema accepts "disabled"; an "enabled" key has no effect.`
       : unverified.length > 0
         ? "these enabled servers are the user's own; the factory audits them and never installs, edits, or disables them"
         : "no user-owned MCP server is enabled",
@@ -404,15 +444,10 @@ function audit() {
 // judgement belongs. Nothing here prints a header value or a remote URL beyond
 // what safeUrl already strips.
 function toggle() {
-  const which = argv[0];
-  // The name is whatever positional follows the verb and is not a flag's value.
-  // Taking argv[1] blindly breaks the obvious invocation `enable chrome-devtools
-  // --config <path>`, because argv[1] is the verb and argv[2] is the name but a
-  // flag placed between them shifts both. Walk the args instead.
   const positional = [];
   for (let i = 1; i < argv.length; i++) {
     if (argv[i].startsWith("--")) {
-      if (get(argv[i]) === argv[i + 1]) i++; // skip this flag's value
+      if (VALUE_FLAGS.has(argv[i])) i++; // skip this flag's value
       continue;
     }
     positional.push(argv[i]);
@@ -451,21 +486,20 @@ function toggle() {
     fail(`${displayPath(target)} is not valid JSON (${e.message}) - fix it by hand rather than losing it`, "config-invalid-json", { config: target });
   }
   const override = projectCfg.mcp && projectCfg.mcp.servers && projectCfg.mcp.servers[name];
-  const current = override && typeof override === "object" && typeof override.enabled === "boolean"
-    ? override.enabled
-    : (s.enabled !== false);
+  const recorded = stated(override);
+  const current = recorded === null ? isOn(s) : recorded;
 
   const want = which === "enable";
 
   if (current === want) {
     say(`mcp ${name} is already ${which}d (no change)`);
-    out({ ok: true, changed: false, scope: "project", server: name, enabled: want, config: target, globalUntouched: globalPath });
+    out({ ok: true, changed: false, scope: "project", server: name, enabled: want, disabled: !want, config: target, globalUntouched: globalPath });
     return;
   }
 
   if (has("--dry-run")) {
-    say(`mcp ${name}: would set enabled=${want} for THIS PROJECT in ${displayPath(target)}`);
-    out({ ok: true, changed: false, dryRun: true, scope: "project", server: name, enabled: want, config: target, globalUntouched: globalPath });
+    say(`mcp ${name}: would set disabled=${!want} (${want ? "enabled" : "disabled"}) for THIS PROJECT in ${displayPath(target)}`);
+    out({ ok: true, changed: false, dryRun: true, scope: "project", server: name, enabled: want, disabled: !want, config: target, globalUntouched: globalPath });
     return;
   }
 
@@ -475,10 +509,13 @@ function toggle() {
   const next = parseOrFail(before, target, "opencode config");
   next.mcp = next.mcp || {};
   next.mcp.servers = next.mcp.servers || {};
-  // Spread any project-local entry so this adds an override, not a replacement:
-  // a project file may legitimately carry the command or url for a server that
-  // only exists locally.
-  next.mcp.servers[name] = { ...(typeof override === "object" ? override : {}), enabled: want };
+  // A complete definition, not a partial merge: V2 replaces the whole server
+  // object when a project config names a server a global config defines, so an
+  // override carrying only `disabled` would delete command/url and leave a
+  // server that cannot start. A project file may also legitimately carry the
+  // whole definition for a server that exists nowhere else, so the project
+  // entry wins when it has one.
+  next.mcp.servers[name] = { ...fullDef(override, s), disabled: !want };
   writeFileSync(target, JSON.stringify(next, null, 2) + "\n", "utf8");
 
   // Re-read and re-parse. A write that cannot be read back is not a write, and
@@ -492,18 +529,18 @@ function toggle() {
     fail(`wrote ${name} but could not re-read the config (${e.message}); original restored`, "write-unreadable", { config: target });
   }
   const got = verify.mcp && verify.mcp.servers && verify.mcp.servers[name];
-  if (!got || got.enabled !== want) {
+  if (!got || got.disabled !== !want) {
     if (before === "{}") rmSync(target, { force: true });
     else writeFileSync(target, before, "utf8");
-    fail(`wrote ${name} but the file does not read back as enabled=${want}; original restored`, "write-unverified", { config: target });
+    fail(`wrote ${name} but the file does not read back as disabled=${!want}; original restored`, "write-unverified", { config: target });
   }
 
-  say(`mcp ${name} ${which}d (enabled=${want}) for THIS PROJECT in ${displayPath(target)}`);
+  say(`mcp ${name} ${which}d (disabled=${!want}) for THIS PROJECT in ${displayPath(target)}`);
   say(`  global config untouched - other projects are unaffected`);
   // OpenCode reads its config at startup, so a toggle that appears to work and
   // silently does not is worse than one that says when it will take effect.
   say(platform().reloadHint(displayPath(target)));
-  out({ ok: true, changed: true, scope: "project", server: name, enabled: want, config: target, globalUntouched: globalPath, restartRequired: true });
+  out({ ok: true, changed: true, scope: "project", server: name, enabled: want, disabled: !want, config: target, globalUntouched: globalPath, restartRequired: true });
 }
 
 // scope: the start/resume behaviour. Everything not on the allowlist is turned
@@ -555,22 +592,20 @@ function scope() {
 
   const plan = names.map((name) => {
     const override = projectCfg.mcp && projectCfg.mcp.servers && projectCfg.mcp.servers[name];
-    const current = override && typeof override === "object" && typeof override.enabled === "boolean"
-      ? override.enabled
-      : (servers[name].enabled !== false);
+    const recorded = stated(override);
+    const current = recorded === null ? isOn(servers[name]) : recorded;
     const want = allow.has(name);
     // An allowlisted server is recorded even when it already agrees with global,
     // so the project's server set is stated rather than inherited from whatever
     // global says today. Recording it once is a change; re-recording it is not,
     // so this stays idempotent rather than rewriting the same bytes forever.
-    const recorded = override && typeof override === "object" && typeof override.enabled === "boolean";
-    return { name, current, want, recorded, change: current !== want || (want && !recorded), override };
+    return { name, current, want, recorded, change: current !== want || (want && recorded === null), override };
   });
 
   const todo = plan.filter((p) => p.change);
   // current === want but allowed: recorded anyway, and reported as such.
   if (has("--dry-run")) {
-    for (const p of plan) say(`  ${p.name}: enabled=${p.current} -> ${p.want}${p.change ? "" : " (already correct)"}${p.current === p.want ? " (recorded)" : ""}`);
+    for (const p of plan) say(`  ${p.name}: disabled=${!p.current} -> ${!p.want} (${p.current ? "enabled" : "disabled"})${p.change ? "" : " (already correct)"}${p.current === p.want ? " (recorded)" : ""}`);
     say(`scope: would set ${todo.length} of ${names.length} server(s) for THIS PROJECT in ${displayPath(target)}`);
     out({ ok: true, changed: false, dryRun: true, scope: "project", config: target, globalUntouched: globalPath, allow: [...allow], servers: plan });
     return;
@@ -585,7 +620,9 @@ function scope() {
   const next = parseOrFail(before, target, "opencode config");
   next.mcp = next.mcp || {};
   next.mcp.servers = next.mcp.servers || {};
-  for (const p of todo) next.mcp.servers[p.name] = { ...(typeof p.override === "object" ? p.override : {}), enabled: p.want };
+  // A full definition per server, for the same reason as toggle: V2 replaces the
+  // whole object, so a bare {disabled} override would strip command/url.
+  for (const p of todo) next.mcp.servers[p.name] = { ...fullDef(p.override, servers[p.name]), disabled: !p.want };
   writeFileSync(target, JSON.stringify(next, null, 2) + "\n", "utf8");
 
   // Same rule as toggle: a write that cannot be read back is not a write. A
@@ -600,18 +637,18 @@ function scope() {
   }
   for (const p of todo) {
     const got = verify.mcp && verify.mcp.servers && verify.mcp.servers[p.name];
-    if (!got || got.enabled !== p.want) {
+    if (!got || got.disabled !== !p.want) {
       rollback();
-      fail(`wrote ${p.name}=${p.want} but the file does not read back that way; ALL ${todo.length} changes reverted`, "write-unverified", { config: target, server: p.name });
+      fail(`wrote ${p.name} disabled=${!p.want} but the file does not read back that way; ALL ${todo.length} changes reverted`, "write-unverified", { config: target, server: p.name });
     }
   }
 
-  for (const p of todo) say(`  ${p.name}: enabled=${p.current} -> ${p.want}${p.current === p.want ? " (recorded; already true)" : ""}`);
+  for (const p of todo) say(`  ${p.name}: disabled=${!p.current} -> ${!p.want} (${p.current ? "enabled" : "disabled"})${p.current === p.want ? " (recorded; already on)" : ""}`);
   say(`scope: set ${todo.length} of ${names.length} configured server(s) for THIS PROJECT in ${displayPath(target)}`);
   say(`  allowed: ${[...allow].join(", ")}`);
   say(`  global config untouched - other projects are unaffected`);
   say(platform().reloadHint(displayPath(target)));
-  out({ ok: true, declared: requiredServers(), declaredButAbsent: unknown, changed: true, scope: "project", config: target, globalUntouched: globalPath, allow: [...allow], servers: plan, changed_servers: todo.map((p) => p.name), restartRequired: true });
+  out({ ok: true, declared: requiredServers(), declaredButAbsent: unknown, changed: true, scope: "project", config: target, globalUntouched: globalPath, allow: [...allow], servers: plan, changed_servers: todo.map((p) => p.name), disabled: todo.map((p) => !p.want), restartRequired: true });
 }
 
 // ---------------------------------------------------------------- search ---
@@ -622,8 +659,21 @@ function scope() {
 // exist, which is worse than not looking at all. So every path below that
 // cannot reach the registry calls fail() with a stage and exits non-zero.
 
+  const which = argv[0];
+  // The name is whatever positional follows the verb and is not a flag's value.
+  // Taking argv[1] blindly breaks the obvious invocation `enable chrome-devtools
+  // --config <path>`, because argv[1] is the verb and argv[2] is the name but a
+  // flag placed between them shifts both. Walk the args instead.
+
+const NEWLINE_TAIL = String.fromCharCode(10);
 const DEFAULT_REGISTRY = "https://registry.modelcontextprotocol.io/v0/servers";
+const DEFAULT_TIMEOUT_MS = 20000;
 const CACHE_TTL_MS = 60 * 60 * 1000; // the one genuinely good idea from mcpm.sh
+
+function registryTimeout() {
+  const t = Number(get("--timeout"));
+  return Number.isFinite(t) && t > 0 ? t : DEFAULT_TIMEOUT_MS;
+}
 
 function registryUrl() {
   const flag = get("--registry");
@@ -698,7 +748,32 @@ function flattenServer(entry) {
     version: typeof s.version === "string" ? s.version : null,
     local: packages.length > 0,
     remote: remotes.length > 0,
+    pkg: packages.find((x) => x && x.identifier) || packages.find((x) => x && x.runtimeHint) || null,
+    rem: remotes.find((x) => x && x.url) || null,
+    requiredEnv: collectRequiredEnv(s, remotes, packages),
   };
+}
+
+// The registry lists credentials as bare strings OR as objects, and marks some
+// optional. Demanding an optional one refuses installs that would work; missing
+// a required one writes an entry that looks installed and dies at first use.
+function collectRequiredEnv(s, remotes, packages) {
+  const names = new Set();
+  const collect = (list) => {
+    if (!Array.isArray(list)) return;
+    for (const e of list) {
+      if (typeof e === "string") { if (e) names.add(e); continue; }
+      if (e && typeof e === "object") {
+        if (e.isRequired === false) continue;
+        const n = e.name || e.key;
+        if (typeof n === "string" && n) names.add(n);
+      }
+    }
+  };
+  collect(s.environmentVariables);
+  for (const r of remotes) if (r && typeof r === "object") collect(r.environmentVariables);
+  for (const k of packages) if (k && typeof k === "object") collect(k.environmentVariables);
+  return [...names].sort();
 }
 
 // The registry does not rank (two identical queries returned different first
@@ -715,7 +790,7 @@ function rank(s, needle) {
 async function search() {
   const positional = [];
   for (let i = 1; i < argv.length; i++) {
-    if (argv[i].startsWith("--")) { if (get(argv[i]) === argv[i + 1]) i++; continue; }
+    if (argv[i].startsWith("--")) { if (VALUE_FLAGS.has(argv[i])) i++; continue; }
     positional.push(argv[i]);
   }
   const q = get("--query") || positional[0];
@@ -805,9 +880,136 @@ function collapse(list) {
   const best = new Map();
   for (const s of list) {
     const prev = best.get(s.key);
-    best.set(s.key, prev ? { ...newer(prev, s), local: prev.local || s.local, remote: prev.remote || s.remote } : s);
+    best.set(s.key, prev ? { ...newer(prev, s), local: prev.local || s.local, remote: prev.remote || s.remote,
+           pkg: s.pkg || prev.pkg, rem: s.rem || prev.rem } : s);
   }
   return [...best.values()];
+}
+
+// A write that reads back is not the same as a write that reads back
+// CORRECTLY. opencode ignores an entry whose shape it does not recognise, so
+// presence alone is not evidence - the definition is compared in full.
+// Exported so the suite can drive it with pairs that a real write cannot produce.
+
+
+async function add() {
+  // Every refusal below is the same failure: a config that looks installed and
+  // is not. None of them writes anything, and none of them says "done".
+  const positional = [];
+  for (let i = 1; i < argv.length; i++) {
+    if (argv[i].startsWith("--")) { if (VALUE_FLAGS.has(argv[i])) i++; continue; }
+    positional.push(argv[i]);
+  }
+  const want = get("--name") || positional[0];
+  if (!want) fail("usage: factory-mcp.mjs add <registry-name>", "usage", {});
+
+  const url = registryUrl();
+  // Keyed on the exact name, not a query: search collapses versions because a
+  // human chooses; here the caller named one, so a second parser that disagreed
+  // with search about what the registry said would be the bug.
+  const ck = "add:" + want;
+  // Ask the registry FOR this server by name. Fetching unfiltered and scanning the
+  // reply looks equivalent and is not: an unfiltered request comes back as some
+  // arbitrary default page, so a name `search` just found is not in it and every
+  // real install refuses with not-found. The live registry proved that; a fixture
+  // which filters every request hides it completely.
+  const term = want.includes("/") ? want.slice(want.lastIndexOf("/") + 1) : want;
+  const fetchUrl = url + (url.includes("?") ? "&" : "?") + "search=" + encodeURIComponent(term) + "&limit=100";
+  let rows = has("--refresh") ? null : readCache(fetchUrl, ck);
+  let cached = true;
+  if (!rows) { rows = (await fetchRegistry(fetchUrl, registryTimeout())).servers; writeCache(fetchUrl, ck, rows); cached = false; }
+  if (!Array.isArray(rows)) fail("registry did not return a list of servers", "registry-shape", { url });
+  const flat = rows.map(flattenServer);
+  // filter, not find: a namespaced name appears once per published version, and
+  // taking only the first would silently discard the newest version and any remote
+  // endpoint that only an older one shipped.
+  const byExact = flat.filter((s) => s.name === want);
+  const matches = byExact.length ? byExact : flat.filter((s) => s.key === want);
+  if (!matches.length) {
+    const offered = [...new Set(flat.map((s) => s.key))].slice(0, 5);
+    fail(`no server named "${want}" in the registry. this page offers: ${offered.join(", ") || "(none)"}`,
+      "not-found", { name: want, offered });
+  }
+  const best = collapse(matches)[0];
+  const key = get("--key") || best.key;
+  if (!/^[A-Za-z0-9._-]+$/.test(key))
+    fail(`"${key}" is not usable as a config key - opencode reads it as a property name` +
+      ` (letters, digits, dot, underscore, hyphen only)`, "bad-key", { key });
+
+  const rem = best.rem;
+  const pkg = best.pkg;
+  if (!pkg && !rem)
+    fail(`${want} has no runnable target - the registry lists neither a package nor a remote`,
+      "no-target", { name: want });
+  if (has("--remote") && !rem)
+    fail(`${want} has no remote endpoint; it only ships a local package`, "no-target", { name: want });
+  // Local when a package exists, remote when it does not. --remote only forces
+  // the choice; without it a remote-only server must not fall into the local branch
+  // and dereference a package that was never there.
+  const useRemote = has("--remote") || !pkg;
+
+  // No placeholder token is ever written. An entry with an empty credential
+  // looks installed and fails the first time it is used.
+  const env = {};
+  for (let i = 1; i < argv.length; i++)
+    if (argv[i] === "--env" && argv[i + 1]) {
+      const eq = argv[i + 1].indexOf("=");
+      if (eq > 0) env[argv[i + 1].slice(0, eq)] = argv[i + 1].slice(eq + 1);
+      i++;
+    }
+  const missing = (best.requiredEnv || []).filter((n) => !(n in env));
+  if (missing.length)
+    fail(`${want} needs ${missing.join(", ")} - supply with --env NAME=value. A placeholder` +
+      ` would produce an entry that looks installed and fails at first use.`,
+      "credential-required", { name: want, missing });
+
+  const def = useRemote
+    ? { type: "remote", url: rem.url, headers: {}, disabled: false }
+    : { type: "local", command: ["npx", "-y", pkg.identifier], disabled: false };
+  if (Object.keys(env).length) def.environment = env;
+
+  const target = projectConfigPath();
+  if (!target)
+    fail("no project found (no .git above this directory) - refusing to write a global config, " +
+      "which would change every project on the machine", "no-project", { cwd: process.cwd() });
+  const projectRaw = existsSync(target) ? readFileSync(target, "utf8") : "{}";
+  const projectCfg = parseOrFail(projectRaw, target, "project config");
+  const existing = projectCfg.mcp && projectCfg.mcp.servers && projectCfg.mcp.servers[key];
+  if (existing && typeof existing === "object" && existing.command && existing.type && !has("--force"))
+    fail(`"${key}" is already defined in ${displayPath(target)}; pass --force to replace it`,
+      "already-defined", { key, config: target });
+
+  if (has("--dry-run")) {
+    say(`${key}: would write ${def.type} definition, disabled=false, to ${displayPath(target)}`);
+    out({ ok: true, changed: false, dryRun: true, scope: "project", key, from: best.name,
+      version: best.version, target: def.type, requiredEnv: best.requiredEnv || [], config: target });
+    return;
+  }
+
+  const before = projectRaw;
+  const next = JSON.parse(JSON.stringify(projectCfg));
+  next.mcp = next.mcp || {};
+  next.mcp.servers = next.mcp.servers || {};
+  next.mcp.servers[key] = { ...(typeof existing === "object" ? existing : {}), ...def };
+  const rollback = () => { if (before === "{}") rmSync(target, { force: true }); else writeFileSync(target, before, "utf8"); };
+  writeFileSync(target, JSON.stringify(next, null, 2) + NEWLINE_TAIL, "utf8");
+
+  // Deliberately NOT parseOrFail here: it fails on a bad parse, which would
+  // throw straight past the rollback below and leave the damage in place.
+  let verify;
+  try { verify = JSON.parse(stripJsonc(readFileSync(target, "utf8"))); }
+  catch (e) { rollback(); fail(`wrote ${key} but could not re-read the config (${e.message}); original restored`, "write-unreadable", { config: target }); }
+  const got = verify.mcp && verify.mcp.servers && verify.mcp.servers[key];
+  if (!defMatches(got, def)) {
+    rollback();
+    fail(`wrote ${key} but the file does not read back as the definition opencode needs; original restored`,
+      "write-unverified", { config: target });
+  }
+  say(`${key} installed (${def.type}, ${best.name}${best.version ? " " + best.version : ""}) for THIS PROJECT in ${displayPath(target)}`);
+  say(`  global config untouched - other projects are unaffected`);
+  say(platform().reloadHint(displayPath(target)));
+  out({ ok: true, changed: true, scope: "project", key, from: best.name, version: best.version,
+    target: def.type, definition: def, config: target, cached, restartRequired: true });
 }
 
 const cmd = argv[0];
@@ -816,6 +1018,7 @@ else if (cmd === "audit") audit();
 else if (cmd === "enable" || cmd === "disable") toggle();
 else if (cmd === "scope") scope();
 else if (cmd === "search") await search();
+else if (cmd === "add") await add();
 else {
   console.error("usage: factory-mcp.mjs handshake [--name <server>] [--requirements <file>] [--config <path>] [--timeout <ms>] [--quiet] [--json]");
   console.error("       factory-mcp.mjs audit    [--config <path>] [--requirements <file>] [--quiet] [--json]");

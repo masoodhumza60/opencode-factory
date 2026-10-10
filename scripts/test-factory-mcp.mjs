@@ -63,14 +63,16 @@ function config(name, obj) {
   writeFileSync(p, typeof obj === "string" ? obj : JSON.stringify(obj, null, 2), "utf8");
   return p;
 }
-// `enabled: false` is how OpenCode switches a server off (verified against the
-// live schema). These fixtures originally used `disabled`, which is not a key
-// the harness recognises, so every "disabled server" assertion here was passing
-// against a state that cannot exist.
+// `disabled: true` is how opencode switches a server off (V2 MCP docs). These
+// fixtures originally used `enabled`, which V2 does not define at all, so every
+// assertion about an off server was passing against a state that cannot exist.
+// The polarity is INVERTED: an on-fixture carries `disabled: false`, an
+// off-fixture carries `disabled: true`. Backwards gives a green suite that
+// describes nothing.
 const fakeServer = (mode = "ok", off = false) => ({
   type: "local",
   command: [process.execPath, FAKE_PATH, mode],
-  ...(off ? { enabled: false } : {}),
+  ...(off ? { disabled: true } : {}),
 });
 
 function run(args, opts = {}) {
@@ -178,7 +180,7 @@ console.log("audit: inventory");
   check("exit 0", r.code === 0, `code ${r.code}`);
   check("counts every server", r.json?.total === 3, `got ${r.json?.total}`);
   // "mine" has no `enabled` key, so it is on - a remote server that is merely
-  // present in the config is live unless something sets enabled: false.
+  // present in the config is live unless something sets disabled: true.
   check("counts only enabled ones (graft + mine)", r.json?.enabled === 2, `got ${r.json?.enabled}`);
   check("graft is bundle-owned", r.json?.servers?.find((s) => s.name === "graft")?.owner === "bundle");
   check("a user server is user-owned", r.json?.servers?.find((s) => s.name === "mine")?.owner === "user");
@@ -256,6 +258,11 @@ console.log("sandbox: the suite leaves the repo alone");
 // server, and an unverifiable write is rolled back byte-for-byte.
 
 import { readFileSync as readText } from "node:fs";
+// The verify-back comparison is exported so it can be driven with pairs a real
+// writeFileSync can never produce: it always writes exactly what you asked, so an
+// inline guard cannot be reached by any end-to-end test. Two mutations that
+// disabled it both survived 225 green tests before this existed.
+import { defMatches } from "./mcp-defmatch.mjs";
 const readServers = (p) => JSON.parse(readText(p, "utf8")).mcp.servers;
 const readTextFile = (p) => readText(p, "utf8");
 // The toggle writes the PROJECT config, so every test needs a real git root.
@@ -267,13 +274,13 @@ const project = (name = "proj") => {
   mkdirSync(join(d, ".git"), { recursive: true });
   return d;
 };
-// The GLOBAL config defines the servers. `enabled` is the real key - the
+// The GLOBAL config defines the servers. `disabled` is the real key - the
 // schema at opencode.ai/config.json lists no `disabled` - so a server with
-// enabled:false is genuinely off.
+// disabled:true is genuinely off.
 const toggleConfig = () => config("toggle.json", {
   theme: "a-user-key-that-must-survive",
   mcp: { servers: {
-    chrome: { type: "local", command: ["node", "x"], enabled: false },
+    chrome: { type: "local", command: ["node", "x"], disabled: true },
     github: { type: "remote", url: "https://api.github.com/mcp", headers: { Authorization: "Bearer SECRET" } },
     live: { type: "local", command: ["node", "y"] },
   } },
@@ -300,12 +307,12 @@ check("enable reports it changed something", r.json?.changed === true, r.out);
 check("enable says the scope is project", r.json?.scope === "project", r.out);
 {
   const w = JSON.parse(readTextFile(join(dir, "opencode.json")));
-  check("and the PROJECT file really says so", w.mcp.servers.chrome.enabled === true, JSON.stringify(w));
-  check("the project override does not duplicate the server definition", !("command" in w.mcp.servers.chrome), "override should be enabled only");
+  check("and the PROJECT file really says so", w.mcp.servers.chrome.disabled === false, JSON.stringify(w));
+  check("the project override CARRIES the full definition, because V2 replaces the whole object", "command" in w.mcp.servers.chrome, "an override without command would delete it under V2: " + JSON.stringify(w.mcp.servers.chrome));
   const s = readServers(join(SANDBOX, "toggle.json"));
   // The global still reads enabled:false for chrome - that is the state it was
   // authored in, and the point is that toggling the PROJECT did not move it.
-  check("THE GLOBAL CONFIG IS UNTOUCHED", s.chrome.enabled === false && s.chrome.command[1] === "x", "the global config was edited: " + JSON.stringify(s.chrome));
+  check("THE GLOBAL CONFIG IS UNTOUCHED", s.chrome.disabled === true && s.chrome.command[1] === "x", "the global config was edited: " + JSON.stringify(s.chrome));
   check("the global user key is intact", JSON.parse(readTextFile(join(SANDBOX, "toggle.json"))).theme === "a-user-key-that-must-survive", "user key lost");
 }
 
@@ -321,8 +328,8 @@ check("enabling an already-enabled project is a no-op, not an error", r.code ===
   r = inProject(["disable", "chrome", "--config", g, "--json"], other);
   check("a different project can hold the opposite setting", r.code === 0 && r.json?.enabled === false, r.out);
   check("and the first project is unaffected by it",
-    JSON.parse(readTextFile(join(dir, "opencode.json"))).mcp.servers.chrome.enabled === true, "the other project overwrote this one");
-  check("the global config is still untouched after both", readServers(join(SANDBOX, "toggle.json")).chrome.enabled === false, "global was edited");
+    JSON.parse(readTextFile(join(dir, "opencode.json"))).mcp.servers.chrome.disabled === false, "the other project overwrote this one");
+  check("the global config is still untouched after both", readServers(join(SANDBOX, "toggle.json")).chrome.disabled === true, "global was edited");
 }
 
 {
@@ -405,11 +412,11 @@ check("enable with no server name fails with usage", r.code === 1 && r.json?.sta
 {
   const node = process.execPath;
   const okCfg = config("keys-ok.json", { mcp: { servers: {
-    graft:    { type: "local", command: [node, "x.js", "mcp"], enabled: true },
-    off:      { type: "local", command: [node, "x.js", "mcp"], enabled: false },
-    remote:   { type: "remote", url: "https://example.test/mcp", enabled: true },
-    remoteOff:{ type: "remote", url: "https://example.test/mcp", enabled: false, headers: { A: "b" }, timeout: 9000 },
-    shorthand:{ enabled: false },
+    graft:    { type: "local", command: [node, "x.js", "mcp"], disabled: false },
+    off:      { type: "local", command: [node, "x.js", "mcp"], disabled: true },
+    remote:   { type: "remote", url: "https://example.test/mcp", disabled: false },
+    remoteOff:{ type: "remote", url: "https://example.test/mcp", disabled: true, headers: { A: "b" }, timeout: 9000 },
+    shorthand:{ disabled: true },
     withCwd:  { type: "local", command: [node, "x.js"], cwd: "C:/tmp", environment: { K: "V" }, timeout: 5000 },
   } } });
   const r = run(["audit", "--config", okCfg, "--quiet", "--json"]);
@@ -418,29 +425,29 @@ check("enable with no server name fails with usage", r.code === 1 && r.json?.sta
     r.json?.ignoredKeys?.length === 0, r.out);
 
   const badCfg = config("keys-bad.json", { mcp: { servers: {
-    graft: { type: "local", command: [node, "x.js", "mcp"], enabled: true },
-    nuxt:  { type: "local", command: [node, "x.js"], disabled: true },
+    graft: { type: "local", command: [node, "x.js", "mcp"], disabled: false },
+    nuxt:  { type: "local", command: [node, "x.js"], enabled: true },
   } } });
   const b = run(["audit", "--config", badCfg, "--quiet", "--json"]);
   check("audit FAILs on a key the schema does not define", b.code !== 0, b.out);
   check("the failure names the stage", b.json?.stage === "unknown-mcp-keys", b.out);
-  check("the failure names the server and the key", /nuxt/.test(b.json?.error || "") && /disabled/.test(b.json?.error || ""), b.out);
+  check("the failure names the server and the key", /nuxt/.test(b.json?.error || "") && /enabled/.test(b.json?.error || ""), b.out);
   check("the failure says the key has no effect",
     /no effect|does not define/.test(b.json?.error || ""), b.out);
   check("the failure tells the operator what to write instead",
-    /"enabled"/.test(b.json?.error || ""), b.out);
+    /"disabled"/.test(b.json?.error || ""), b.out);
   check("the failure says the audit will not edit their config",
     /never edits/i.test(b.json?.error || ""), b.out);
   check("the payload lists the ignored keys per server",
-    b.json?.ignoredKeys?.some((x) => x.name === "nuxt" && x.keys.includes("disabled")), b.out);
+    b.json?.ignoredKeys?.some((x) => x.name === "nuxt" && x.keys.includes("enabled")), b.out);
 
   // The mutation that matters: swapping the real key for the wrong one must
   // flip the verdict. Without this, the check could pass for any reason.
   const swapped = config("keys-swap.json", { mcp: { servers: {
-    nuxt: { type: "local", command: [node, "x.js"], enabled: true },
+    nuxt: { type: "local", command: [node, "x.js"], disabled: false },
   } } });
   const s = run(["audit", "--config", swapped, "--quiet", "--json"]);
-  check("swapping disabled->enabled flips the verdict back to a pass", s.code === 0, s.out);
+  check("swapping enabled->disabled flips the verdict back to a pass", s.code === 0, s.out);
 }
 
 // ------------------------------------------------------------------- teardown
@@ -464,7 +471,7 @@ writeFileSync(join(jc, "opencode.json"), [
   "      /* a block comment",
   "         spanning lines */",
   "      \"note\": \"kept\",",
-  "      \"github\": { \"enabled\": true, },",
+  "      \"github\": { \"disabled\": false, },",
   "    }",
   "  }",
   "}",
@@ -476,8 +483,8 @@ check("a JSONC project config with comments and a trailing comma does not fail",
 const jcAfter = (() => { try { return JSON.parse(readFileSync(join(jc, "opencode.json"), "utf8")); } catch (e) { return { err: e.message }; } })();
 check("scope wrote valid JSON afterwards", !jcAfter.err, JSON.stringify(jcAfter));
 check("the commented project key survived scope", jcAfter?.mcp?.servers?.note === "kept", JSON.stringify(jcAfter));
-check("the declared server was left enabled through a JSONC file", jcAfter?.mcp?.servers?.graft?.enabled === true, JSON.stringify(jcAfter));
-check("an undeclared server was disabled through a JSONC file", jcAfter?.mcp?.servers?.github?.enabled === false, JSON.stringify(jcAfter));
+check("the declared server was left enabled through a JSONC file", jcAfter?.mcp?.servers?.graft?.disabled === false, JSON.stringify(jcAfter));
+check("an undeclared server was disabled through a JSONC file", jcAfter?.mcp?.servers?.github?.disabled === true, JSON.stringify(jcAfter));
 
 // The trap this guards: a // inside a string is DATA, not a comment. Stripped, the
 // url changes silently and every remote server breaks behind a plausible-looking url.
@@ -519,7 +526,7 @@ const scopeConfig = () => config("scope.json", {
   mcp: { servers: {
     // graft is the allowlisted one, so the fixture mirrors the real machine:
     // the default --allow graft must resolve against it without a flag.
-    graft: { type: "local", command: ["node", "graft-mcp"], enabled: false },
+    graft: { type: "local", command: ["node", "graft-mcp"], disabled: true },
     github: { type: "remote", url: "https://api.github.com/mcp" },
     live: { type: "local", command: ["node", "y"] },
   } },
@@ -532,13 +539,13 @@ const scopeConfig = () => config("scope.json", {
   check("scope turns off every server not on the allowlist", r.code === 0 && r.json?.changed === true, r.out);
   const s = scopedServers(d);
   const w = { mcp: { servers: s } };
-  check("the file says live is off", s.live?.enabled === false, JSON.stringify(w));
-  check("the file says github is off", s.github?.enabled === false, JSON.stringify(w));
+  check("the file says live is off", s.live?.disabled === true, JSON.stringify(w));
+  check("the file says github is off", s.github?.disabled === true, JSON.stringify(w));
   check("the file records the allowlisted server as on",
-    s.graft?.enabled === true, "the allowlisted server must be stated, not inherited: " + JSON.stringify(w));
-  check("an override does not duplicate the server definition", s.live && !("command" in s.live), "override should be enabled only");
+    s.graft?.disabled === false, "the allowlisted server must be stated, not inherited: " + JSON.stringify(w));
+  check("an override CARRIES the full definition, because V2 replaces the whole object", s.live && "command" in s.live, "an override without command would delete it under V2: " + JSON.stringify(s.live));
   check("the global file is untouched by scope",
-    readServers(join(SANDBOX, "scope.json")).live.enabled !== false, "global was edited");
+    readServers(join(SANDBOX, "scope.json")).live.disabled !== true, "global was edited");
   const g2 = JSON.parse(readTextFile(join(SANDBOX, "scope.json")));
   check("the global user key is intact", g2.theme === "a-user-key-that-must-survive", "user key lost");
 
@@ -552,17 +559,17 @@ const scopeConfig = () => config("scope.json", {
   const d = project("tscope2");
   const r = inProject(["scope", "--config", scopeConfig(), "--json"], d);
   const w = scopedServers(d);
-  const wrong = ["live", "github"].filter((n) => w[n].enabled !== false);
+  const wrong = ["live", "github"].filter((n) => w[n].disabled !== true);
   check("the written file itself disables the non-allowed servers", wrong.length === 0, "still on: " + wrong.join(", "));
-  check("the written file itself enables the allowed server", w.graft.enabled === true, JSON.stringify(w));
+  check("the written file itself enables the allowed server", w.graft.disabled === false, JSON.stringify(w));
   check("a real change claims a restart", r.json?.restartRequired === true, r.out);
 }
 {
   const d = project("tscope3");
   const r = inProject(["scope", "--allow", "graft,github", "--config", scopeConfig(), "--json"], d);
   const w = scopedServers(d);
-  check("--allow admits more than one server", w.graft.enabled === true && w.github.enabled === true, JSON.stringify(w));
-  check("--allow still disables the rest", w.live.enabled === false, JSON.stringify(w));
+  check("--allow admits more than one server", w.graft.disabled === false && w.github.disabled === false, JSON.stringify(w));
+  check("--allow still disables the rest", w.live.disabled === true, JSON.stringify(w));
   check("--allow reports what it allowed", (r.json?.allow || []).length === 2, r.out);
 }
 {
@@ -603,7 +610,7 @@ const scopeConfig = () => config("scope.json", {
   writeFileSync(join(d, "opencode.json"), JSON.stringify({
     theme: "a-project-key-that-must-survive",
     model: "someone/anthropic",
-    mcp: { servers: { localonly: { command: ["node", "z"], enabled: true } } },
+    mcp: { servers: { localonly: { command: ["node", "z"], disabled: false } } },
   }, null, 2));
   inProject(["scope", "--config", scopeConfig(), "--json"], d);
   const w = JSON.parse(readTextFile(join(d, "opencode.json")));
@@ -612,7 +619,7 @@ const scopeConfig = () => config("scope.json", {
   check("scope keeps a server defined only in the project",
     w.mcp.servers.localonly?.command[0] === "node", JSON.stringify(w));
   check("scope does not disable a server only this project defines",
-    w.mcp.servers.localonly?.enabled === true, JSON.stringify(w));
+    w.mcp.servers.localonly?.disabled === false, JSON.stringify(w));
 }
 
 {
@@ -629,7 +636,7 @@ const scopeConfig = () => config("scope.json", {
   inProject(["disable", "graft", "--config", g, "--json"], d);
   const r = inProject(["scope", "--config", g, "--json"], d);
   check("scope re-enables an allowlisted server a toggle had turned off",
-    scopedServers(d).graft?.enabled === true, r.out);
+    scopedServers(d).graft?.disabled === false, r.out);
 }
 
 // ---- the bundle must not assume THIS machine's server names ----
@@ -643,7 +650,7 @@ const scopeConfig = () => config("scope.json", {
   const d = project("tflex1");
   const r = inProject(["scope", "--config", g, "--json"], d);
   check("scope runs on a machine that does not have the declared server", r.code === 0, r.out);
-  check("and still turns every configured server off", scopedServers(d).github?.enabled === false, r.out);
+  check("and still turns every configured server off", scopedServers(d).github?.disabled === true, r.out);
   check("reporting the declared server as absent instead of failing",
     JSON.stringify(r.json.declaredButAbsent) === JSON.stringify(["graft"]), r.out);
   check("the declaration is echoed so a caller can see what was wanted",
@@ -657,7 +664,7 @@ const scopeConfig = () => config("scope.json", {
   const r = inProject(["scope", "--config", g, "--requirements", req, "--json"], d);
   check("an empty declaration turns everything off and succeeds", r.code === 0, r.out);
   check("nothing is kept",
-    scopedServers(d).github?.enabled === false && scopedServers(d).live?.enabled === false, r.out);
+    scopedServers(d).github?.disabled === true && scopedServers(d).live?.disabled === true, r.out);
 }
 {
   // The declaration is data. Point it at a server this machine actually has and
@@ -667,8 +674,8 @@ const scopeConfig = () => config("scope.json", {
   const d = project("tflex3");
   const r = inProject(["scope", "--config", g, "--requirements", req, "--json"], d);
   check("a declaration naming a server this machine has keeps it on",
-    scopedServers(d).github?.enabled === true, r.out);
-  check("and turns the rest off", scopedServers(d).live?.enabled === false, r.out);
+    scopedServers(d).github?.disabled === false, r.out);
+  check("and turns the rest off", scopedServers(d).live?.disabled === true, r.out);
 }
 {
   // handshake must not default to a literal either.
@@ -871,7 +878,7 @@ const scopeConfig = () => config("scope.json", {
       JSON.stringify(w.mcp?.servers?.ledger?.command) === JSON.stringify(["npx", "-y", "acme-ledger-mcp"]),
       JSON.stringify(w.mcp?.servers?.ledger));
     // The user's decision: add brings the server UP, but only for this project.
-    check("tadd5 add enables it", w.mcp?.servers?.ledger?.enabled === true, JSON.stringify(w));
+    check("tadd5 add enables it", w.mcp?.servers?.ledger?.disabled === false, JSON.stringify(w));
     check("tadd6 and says the scope is project", r.json?.scope === "project", r.out.slice(0, 200));
     check("tadd7 nothing was written outside the project dir",
       !existsSync(join(SANDBOX, "opencode.json")), "wrote into the sandbox root");
@@ -886,7 +893,7 @@ const scopeConfig = () => config("scope.json", {
       JSON.stringify(w.mcp?.servers?.reader));
     check("tadd10 carrying the registry url", w.mcp?.servers?.reader?.url === "https://reader.example/mcp",
       JSON.stringify(w.mcp?.servers?.reader));
-    check("tadd11 and enabled", w.mcp?.servers?.reader?.enabled === true, JSON.stringify(w));
+    check("tadd11 and enabled", w.mcp?.servers?.reader?.disabled === false, JSON.stringify(w));
     check("tadd12 no npx command was invented for a remote server",
       w.mcp?.servers?.reader?.command === undefined, JSON.stringify(w.mcp?.servers?.reader));
   }
@@ -973,6 +980,47 @@ const scopeConfig = () => config("scope.json", {
   if (realHome !== undefined) process.env.USERPROFILE = realHome;
   if (realHomeProfile !== undefined) process.env.HOME = realHomeProfile;
 }
+
+
+// ---- defMatches ----
+// The verify-back exists to catch opencode writing a config it will ignore. A real
+// write can never disagree with the intent, so the only way to test the comparison
+// is to hand it pairs no write could produce. Every case below is one.
+const LDEF = { type: "local", command: ["npx", "-y", "pkg-a"], disabled: false };
+const RDEF = { type: "remote", url: "https://s.example/mcp", headers: {}, disabled: false };
+
+check("tmatch1  an identical local definition matches", defMatches(LDEF, LDEF) === true);
+check("tmatch2  an identical remote definition matches", defMatches(RDEF, RDEF) === true);
+check("tmatch3  a local entry read back as remote does NOT match",
+  defMatches({ ...LDEF, type: "remote" }, LDEF) === false);
+check("tmatch4  disabled missing does NOT match",
+  defMatches({ type: "local", command: ["npx", "-y", "pkg-a"] }, LDEF) === false);
+check("tmatch5  disabled true does NOT match",
+  defMatches({ ...LDEF, disabled: true }, LDEF) === false);
+check("tmatch6  disabled as the string \"true\" does NOT match",
+  defMatches({ ...LDEF, disabled: "false" }, LDEF) === false);
+check("tmatch7  disabled as the number 0 does NOT match",
+  defMatches({ ...LDEF, disabled: 0 }, LDEF) === false);
+check("tmatch8  a remote url that differs does NOT match",
+  defMatches({ ...RDEF, url: "https://other.example/mcp" }, RDEF) === false);
+check("tmatch9  a remote url that is missing does NOT match",
+  defMatches({ type: "remote", headers: {}, disabled: false }, RDEF) === false);
+check("tmatch10 a remote entry with no url does not satisfy a local definition",
+  defMatches({ type: "remote", headers: {}, disabled: false }, LDEF) === false);
+check("tmatch11 a command element that differs does NOT match",
+  defMatches({ ...LDEF, command: ["npx", "-y", "pkg-b"] }, LDEF) === false);
+check("tmatch12 the same command in a different order does NOT match",
+  defMatches({ ...LDEF, command: ["-y", "npx", "pkg-a"] }, LDEF) === false);
+check("tmatch13 a command that is a bare string does NOT match",
+  defMatches({ ...LDEF, command: "npx -y pkg-a" }, LDEF) === false);
+check("tmatch14 a command that is missing does NOT match",
+  defMatches({ type: "local", disabled: false }, LDEF) === false);
+check("tmatch15 unrelated keys on the entry do not change the verdict",
+  defMatches({ ...LDEF, environment: { K: "v" }, cwd: "/tmp" }, LDEF) === true);
+check("tmatch16 a null read-back does NOT match", defMatches(null, LDEF) === false);
+check("tmatch17 undefined does NOT match", defMatches(undefined, LDEF) === false);
+check("tmatch18 an empty object does NOT match", defMatches({}, LDEF) === false);
+check("tmatch19 a missing definition does NOT match", defMatches(LDEF, undefined) === false);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (failures.length) { console.log("failures:"); for (const f of failures) console.log("  - " + f); }
