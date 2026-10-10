@@ -253,6 +253,7 @@ install_skills() {
         dry "cp \"$bundle/docs/conductor.md\" \"$bundle/docs/how-factory-works.md\" \"$bundle/docs/plan-format.md\" \"$bundle/docs/discovery.md\" \"$bundle/docs/mcp-judging.md\" \"$agents_skills/factory/docs/\""
         dry "cp \"$bundle/scripts/{factory-phase,factory-mcp,factory-plan,factory-skills,factory-selfcheck,platform}.mjs\" \"$agents_skills/factory/scripts/\""
         dry "cp \"$bundle/skills/catalog.yaml\" \"$agents_skills/factory/skills/\""
+        dry "cp \"$bundle/config/mcp-requirements.json\" \"$agents_skills/factory/config/\""
         return
     fi
     if [ -f "$src_sk" ]; then
@@ -282,6 +283,17 @@ install_skills() {
             say "skills catalog installed -> $agents_skills/factory/skills/catalog.yaml (factory-skills.mjs resolves ../skills/catalog.yaml)"
         else
             say "warning: $bundle/skills/catalog.yaml missing - factory-skills.mjs check will not find its catalog."
+        fi
+        # factory-mcp.mjs reads the servers the factory depends on from
+        # ../config/mcp-requirements.json relative to itself. Without it the
+        # installed script finds no declaration, so `scope` keeps no server and
+        # `audit` labels them all as the user's - silently.
+        if [ -f "$bundle/config/mcp-requirements.json" ]; then
+            mkdir -p "$agents_skills/factory/config"
+            cp "$bundle/config/mcp-requirements.json" "$agents_skills/factory/config/"
+            say "mcp requirements installed -> $agents_skills/factory/config/mcp-requirements.json (factory-mcp.mjs resolves ../config/mcp-requirements.json)"
+        else
+            say "warning: $bundle/config/mcp-requirements.json missing - factory-mcp.mjs scope will keep no server and audit will label them all as the user's."
         fi
         say "factory skill installed -> $agents_skills/factory/SKILL.md (self-contained: docs/ ships conductor + how-factory-works; scripts/ ships what those docs name)"
     else

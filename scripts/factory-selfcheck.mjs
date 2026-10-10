@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 // opencode-factory selfcheck. Exits 0 when the factory environment is intact.
 // --tokens additionally prints the token-cost estimate of injected context.
-import { readFileSync, existsSync, openSync, readSync, closeSync, fstatSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, openSync, readSync, closeSync, fstatSync, readdirSync, statSync, mkdtempSync } from "node:fs";
 import { join, basename, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 
 const checks = [];
 const ok = (name, pass, extra = "") => {
@@ -143,6 +143,51 @@ ok(
   existsSync(join(factorySkillDir, "skills", "catalog.yaml")),
   join(factorySkillDir, "skills", "catalog.yaml"),
 );
+// The servers this factory depends on are data too: factory-mcp.mjs resolves
+// ../config/mcp-requirements.json relative to itself. Absent, it silently keeps
+// nothing and calls every server on the machine the user's own - which looks
+// like correct output and is not. Checked for content as well as presence,
+// because a truncated file parses as nothing rather than as an error.
+const reqsPath = join(factorySkillDir, "config", "mcp-requirements.json");
+let reqsOk = false, reqsWhy = reqsPath;
+if (existsSync(reqsPath)) {
+  try {
+    const parsed = JSON.parse(readFileSync(reqsPath, "utf8"));
+    reqsOk = Array.isArray(parsed.required) && parsed.required.every((x) => typeof x === "string");
+    reqsWhy = reqsOk ? `${reqsPath} (${parsed.required.length} declared)` : `${reqsPath} has no string "required" array`;
+  } catch (e) {
+    reqsWhy = `${reqsPath} is not valid JSON (${e.message})`;
+  }
+}
+ok("mcp requirements deployed", reqsOk, reqsWhy);
+// And the effect: the INSTALLED script, with no --requirements flag, must
+// actually read that file. A copy that landed in the wrong place passes every
+// existsSync above and gets found here.
+const declaredForProbe = reqsOk ? JSON.parse(readFileSync(reqsPath, "utf8")).required : [];
+if (declaredForProbe.length > 0 && missingScripts.indexOf("factory-mcp.mjs") === -1) {
+  const probe = mkdtempSync(join(tmpdir(), "factory-reqs-"));
+  // One server named after the declaration, one that is not, so the check can
+  // tell "read the file" apart from "always says bundle".
+  const named = declaredForProbe[0];
+  const other = declaredForProbe.indexOf("probe") === -1 ? "probe" : "probe2";
+  const cfgPath = join(probe, "opencode.json");
+  writeFileSync(cfgPath, JSON.stringify({
+    mcp: { servers: { [named]: { type: "local", command: ["node", "-e", ""] }, [other]: { type: "local", command: ["node", "-e", ""] } } },
+  }, null, 2));
+  const installedMcp = join(factorySkillDir, "scripts", "factory-mcp.mjs");
+  const rr = process.platform === "win32"
+    ? spawnSync(`node "${installedMcp}" audit --config "${cfgPath}" --json`, { shell: true, timeout: 30000, encoding: "utf8" })
+    : spawnSync("node", [installedMcp, "audit", "--config", cfgPath, "--json"], { timeout: 30000, encoding: "utf8" });
+  let bundleLabeled = false, readBack = "";
+  try { readBack = `${rr.stdout || ""}${rr.stderr || ""}`; bundleLabeled = /"owner"\s*:\s*"bundle"/.test(readBack); } catch { }
+  ok(
+    "installed mcp script reads its own declaration",
+    bundleLabeled,
+    bundleLabeled
+      ? `${installedMcp} labelled the declared server bundle-owned without being told`
+      : `the installed script did not read ${reqsPath}: ${readBack.trim().split("\n")[0] || "(no output)"}`,
+  );
+}
 // Presence is not the effect. This runs the INSTALLED phase machine and checks
 // it fails for the right reason - a usage error naming the commands, not a
 // crash. A copy that landed truncated, or one whose sibling imports are missing,

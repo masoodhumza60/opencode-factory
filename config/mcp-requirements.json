@@ -1,0 +1,5 @@
+{
+  "$comment": "MCP servers this factory depends on. Read by scripts/factory-mcp.mjs; nothing here is hardcoded in the script. This is a DECLARATION OF NEED, not a list of what a machine happens to have. A machine that does not configure one of these is not broken - `scope` skips it and says so, and `audit` still reports every server it actually runs. Change or delete this file to make the factory depend on a different set of servers, or on none at all (an empty list makes `scope` turn every configured server off for the project, which is a legitimate configuration).",
+  "required": ["graft"],
+  "why": "graft serves the code-graph tools the plan, implement and debug phases use for navigation and blast radius. It is the only MCP the factory calls by default; everything else is enabled per project when a feature actually needs it."
+}

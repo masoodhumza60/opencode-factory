@@ -199,6 +199,45 @@ Two traps worth naming, because both cost real time:
 - **Assert the verdict, not the exit code.** A suite's exit code is global and
   contaminated by unrelated checks; the line you are testing is the verdict.
 
+## Which servers this project runs
+
+On **start** and on **resume**, before anything else:
+
+    node <bundle>/scripts/factory-mcp.mjs scope
+
+That turns off every configured MCP server for **this project only** and
+records the ones you keep. Default: everything except `graft` off; `--allow a,b`
+to keep more. Run it again when the project gains a server you want, or drops
+one.
+
+Why per-project rather than per-machine: a global MCP toggle changes every
+project on the laptop, including the ones you are not working on. This writes
+`opencode.json` in the project root - opencode merges project config over
+global, so the override wins here and nowhere else. The global file is never
+read for writing and never touched.
+
+**When the work genuinely needs a server, turn it on for this project:**
+
+    node <bundle>/scripts/factory-mcp.mjs enable <server>
+
+`enable` and `disable` are the ONLY sanctioned way to change MCP state. Never
+hand-edit a config file to do it. That is not a style rule: hand-editing the
+global file once turned on three servers across two unrelated sessions that
+were open at the time, and the undo was a manual restore of a file I had just
+made worse. `enable` refuses rather than guess, writes an override rather than a
+definition, reads the file back, and rolls back if it cannot confirm what it
+wrote.
+
+`scope` records the servers it keeps as well as the ones it turns off, so the
+project's server set is stated rather than inherited from whatever global
+happens to say today - a global change cannot silently change this project.
+A typo in `--allow` is a refusal, because the quiet failure is that it disables
+the very server the flag was meant to protect.
+
+Note the limit honestly: this is scoped per **directory**, not per session. Two
+sessions in the same project share the override. Different projects are fully
+isolated.
+
 ## Cost discipline — the three rules that keep a session affordable
 
 A real factory run produced **78.3M tokens in a single session**: 955 turns,

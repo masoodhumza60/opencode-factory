@@ -13,7 +13,8 @@
 // through an explicit allowlist, so a future config field carrying a secret
 // cannot leak into a decision record that gets committed to a repo.
 import { readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
-import { join, basename } from "node:path";
+import { join, basename, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { spawn } from "node:child_process";
 
@@ -21,12 +22,42 @@ const argv = process.argv.slice(2);
 const get = (k) => { const i = argv.indexOf(k); return i === -1 ? undefined : argv[i + 1]; };
 const has = (k) => argv.includes(k);
 
-const BUNDLE_OWNED = "graft";
+// Where this bundle lives on disk. The list of servers the factory depends on is
+// read from the bundle rather than written here, because a hardcoded name is a
+// bundle that only works on the machine it was written on: another laptop may
+// run a different code graph, or none, and a different agent reusing this
+// factory will have its own. The declaration sits beside the other config
+// declarations so there is exactly one place to change it.
+const BUNDLE_DIR = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+// DATA, not a literal. A machine is free not to have a declared server, so this
+// is a wish rather than an assertion - which is why a missing one is reported
+// and never fatal, while a typo in an explicit --allow still is.
+// --requirements points this at a different declaration. That exists because a
+// different bundle, or another agent reusing this factory, has its own list, and
+// because the only honest way to test "what if this machine declares nothing"
+// is to be able to say so without editing the bundle.
+function requiredServers() {
+  const f = get("--requirements") || join(BUNDLE_DIR, "config", "mcp-requirements.json");
+  if (!existsSync(f)) return [];
+  let r;
+  try { r = JSON.parse(readFileSync(f, "utf8")); }
+  catch (e) {
+    fail(`${f} is not valid JSON (${e.message}) - fix it by hand rather than guessing which servers the factory needs`, "requirements-invalid", { file: f });
+  }
+  if (!r || !Array.isArray(r.required)) return [];
+  return r.required.filter((x) => typeof x === "string" && x.trim()).map((x) => x.trim());
+}
+
 const DEFAULT_TIMEOUT = 8000;
 
 // --quiet suppresses chatter only. The payload is ALWAYS printed: a check whose
 // result can be silenced is a check that can be made to look like it passed.
-const say = (m) => { if (!has("--quiet")) console.log(m); };
+// --json suppresses it too, because the contract one line above is that --json emits
+// ONE line: chatter on stdout means a consumer cannot parse the payload without
+// first guessing which lines are prose. Refusals are unaffected - fail() prints
+// its own payload through out(), so nothing is silenced on the failure path.
+const say = (m) => { if (!has("--quiet") && !has("--json")) console.log(m); };
 // `--json` means machine-readable, so it emits ONE line. Pretty-printing a
 // --json payload forces every consumer to guess how to extract it: the
 // selfcheck's first version read the last line, which on a nested payload is a
@@ -108,7 +139,7 @@ const enabled = s?.enabled === false ? "disabled" : "enabled";
   const urlQuery = type === "remote" && s?.url ? /[?&](token|key|apikey|api_key|access_token|password)=/i.test(s.url) : false;
   return {
     name,
-    owner: name === BUNDLE_OWNED ? "bundle" : "user",
+    owner: requiredServers().includes(name) ? "bundle" : "user",
     type,
     state: enabled,
     // Allowlist. A local server's absolute path is machine-specific and would
@@ -124,7 +155,18 @@ const enabled = s?.enabled === false ? "disabled" : "enabled";
 // ---------------------------------------------------------------- handshake
 async function handshake() {
   const { config, path } = loadConfig();
-  const name = get("--name") || BUNDLE_OWNED;
+  // No hardcoded default. Handshaking a server this machine does not have is a
+  // failure that looks like a broken install, so with no --name we pick from the
+  // declared requirements intersected with what is actually configured, and say
+  // so plainly when neither is usable.
+  const configured = config?.mcp?.servers ?? {};
+  const declared = requiredServers();
+  const name = get("--name") || declared.find((n) => configured[n]) || declared[0];
+  if (!name)
+    fail(`no server to handshake: this bundle declares ${declared.length ? declared.join(", ") : "(none)"}, ` +
+      `and ${path} configures ${Object.keys(configured).length ? Object.keys(configured).sort().join(", ") : "(none)"}. ` +
+      `pass --name <server>, or add one to config/mcp-requirements.json if the factory should depend on it.`,
+      "no-target-server", { declared, configured: Object.keys(configured).sort(), config: path });
   const server = config?.mcp?.servers?.[name];
   if (!server) {
     fail(`no MCP server named "${name}" in ${path}`, "server-absent", { server: name, configured: Object.keys(config?.mcp?.servers ?? {}) });
@@ -423,14 +465,124 @@ function toggle() {
   out({ ok: true, changed: true, scope: "project", server: name, enabled: want, config: target, globalUntouched: globalPath, restartRequired: true });
 }
 
+// scope: the start/resume behaviour. Everything not on the allowlist is turned
+// off FOR THIS PROJECT, and everything on it is turned on, so the project's
+// server set is written down rather than inherited from whatever global happens
+// to say today. Writing the allowlisted servers too is deliberate: a project
+// that only records the negatives is one global drift can change under it.
+function scope() {
+  const { config, path: globalPath } = loadConfig();
+  const servers = config.mcp && config.mcp.servers;
+  if (!servers || typeof servers !== "object")
+    fail(`no mcp.servers in ${displayPath(globalPath)}`, "no-servers-object", { config: globalPath });
+  const names = Object.keys(servers).sort();
+
+  // Two different questions, and they must fail differently.
+  //
+  //   --allow <list>  the operator typed it just now. A typo would silently
+  //                   disable the very server it was meant to protect, so an
+  //                   unknown name here is a refusal.
+  //   declared        the bundle's own requirement, read from
+  //                   config/mcp-requirements.json. A machine is allowed not to
+  //                   have one of these, so an entry that is not configured is
+  //                   reported and skipped, never fatal.
+  //
+  // Nothing here names a server. That is what lets this run on a laptop with a
+  // different toolchain, or on a machine where the factory depends on no MCP at
+  // all - in which case every configured server is simply turned off here.
+  const declared = requiredServers();
+  const explicit = has("--allow");
+  const allow = new Set((explicit ? get("--allow") : declared.join(",")).split(",").map((x) => x.trim()).filter(Boolean));
+  const unknown = [...allow].filter((n) => !servers[n]).sort();
+  if (unknown.length && explicit)
+    fail(`--allow names ${unknown.join(", ")}, which ${unknown.length === 1 ? "is not" : "are not"} configured in ${displayPath(globalPath)}. configured: ${names.join(", ") || "(none)"}`, "allow-unknown", { unknown, configured: names, config: globalPath });
+  if (unknown.length)
+    say(`declared but not configured here, leaving them out: ${unknown.join(", ")}`);
+  for (const n of unknown) allow.delete(n);
+
+  const target = projectConfigPath();
+  if (!target)
+    fail("no project found (no .git above this directory) - refusing to write a global config, " +
+      "which would change every project on the machine", "no-project", { cwd: process.cwd() });
+  const projectRaw = existsSync(target) ? readFileSync(target, "utf8") : "{}";
+  let projectCfg;
+  try {
+    projectCfg = JSON.parse(projectRaw);
+  } catch (e) {
+    fail(`${displayPath(target)} is not valid JSON (${e.message}) - fix it by hand rather than losing it`, "config-invalid-json", { config: target });
+  }
+
+  const plan = names.map((name) => {
+    const override = projectCfg.mcp && projectCfg.mcp.servers && projectCfg.mcp.servers[name];
+    const current = override && typeof override === "object" && typeof override.enabled === "boolean"
+      ? override.enabled
+      : (servers[name].enabled !== false);
+    const want = allow.has(name);
+    // An allowlisted server is recorded even when it already agrees with global,
+    // so the project's server set is stated rather than inherited from whatever
+    // global says today. Recording it once is a change; re-recording it is not,
+    // so this stays idempotent rather than rewriting the same bytes forever.
+    const recorded = override && typeof override === "object" && typeof override.enabled === "boolean";
+    return { name, current, want, recorded, change: current !== want || (want && !recorded), override };
+  });
+
+  const todo = plan.filter((p) => p.change);
+  // current === want but allowed: recorded anyway, and reported as such.
+  if (has("--dry-run")) {
+    for (const p of plan) say(`  ${p.name}: enabled=${p.current} -> ${p.want}${p.change ? "" : " (already correct)"}${p.current === p.want ? " (recorded)" : ""}`);
+    say(`scope: would set ${todo.length} of ${names.length} server(s) for THIS PROJECT in ${displayPath(target)}`);
+    out({ ok: true, changed: false, dryRun: true, scope: "project", config: target, globalUntouched: globalPath, allow: [...allow], servers: plan });
+    return;
+  }
+  if (!todo.length) {
+    say(`scope: all ${names.length} configured server(s) already correct for THIS PROJECT (no change)`);
+    out({ ok: true, changed: false, scope: "project", config: target, globalUntouched: globalPath, allow: [...allow], servers: plan });
+    return;
+  }
+
+  const before = projectRaw;
+  const next = JSON.parse(before);
+  next.mcp = next.mcp || {};
+  next.mcp.servers = next.mcp.servers || {};
+  for (const p of todo) next.mcp.servers[p.name] = { ...(typeof p.override === "object" ? p.override : {}), enabled: p.want };
+  writeFileSync(target, JSON.stringify(next, null, 2) + "\n", "utf8");
+
+  // Same rule as toggle: a write that cannot be read back is not a write. A
+  // partial scope is worse than none - it looks deliberate and is not.
+  const rollback = () => { if (before === "{}") rmSync(target, { force: true }); else writeFileSync(target, before, "utf8"); };
+  let verify;
+  try {
+    verify = JSON.parse(readFileSync(target, "utf8"));
+  } catch (e) {
+    rollback();
+    fail(`wrote ${todo.length} override(s) but could not re-read the config (${e.message}); original restored`, "write-unreadable", { config: target });
+  }
+  for (const p of todo) {
+    const got = verify.mcp && verify.mcp.servers && verify.mcp.servers[p.name];
+    if (!got || got.enabled !== p.want) {
+      rollback();
+      fail(`wrote ${p.name}=${p.want} but the file does not read back that way; ALL ${todo.length} changes reverted`, "write-unverified", { config: target, server: p.name });
+    }
+  }
+
+  for (const p of todo) say(`  ${p.name}: enabled=${p.current} -> ${p.want}${p.current === p.want ? " (recorded; already true)" : ""}`);
+  say(`scope: set ${todo.length} of ${names.length} configured server(s) for THIS PROJECT in ${displayPath(target)}`);
+  say(`  allowed: ${[...allow].join(", ")}`);
+  say(`  global config untouched - other projects are unaffected`);
+  say(platform().reloadHint(displayPath(target)));
+  out({ ok: true, declared: requiredServers(), declaredButAbsent: unknown, changed: true, scope: "project", config: target, globalUntouched: globalPath, allow: [...allow], servers: plan, changed_servers: todo.map((p) => p.name), restartRequired: true });
+}
+
 const cmd = argv[0];
 if (cmd === "handshake") await handshake();
 else if (cmd === "audit") audit();
 else if (cmd === "enable" || cmd === "disable") toggle();
+else if (cmd === "scope") scope();
 else {
-  console.error("usage: factory-mcp.mjs handshake [--name <server>] [--config <path>] [--timeout <ms>] [--quiet] [--json]");
-  console.error("       factory-mcp.mjs audit    [--config <path>] [--quiet] [--json]");
+  console.error("usage: factory-mcp.mjs handshake [--name <server>] [--requirements <file>] [--config <path>] [--timeout <ms>] [--quiet] [--json]");
+  console.error("       factory-mcp.mjs audit    [--config <path>] [--requirements <file>] [--quiet] [--json]");
   console.error("       factory-mcp.mjs enable   <server> [--config <path>] [--dry-run] [--quiet] [--json]");
   console.error("       factory-mcp.mjs disable  <server> [--config <path>] [--dry-run] [--quiet] [--json]");
+  console.error("       factory-mcp.mjs scope    [--allow a,b] [--requirements <file>] [--config <path>] [--dry-run] [--quiet] [--json]");
   process.exit(1);
 }

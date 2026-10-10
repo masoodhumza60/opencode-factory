@@ -293,6 +293,13 @@ function Install-Skills {
     $dstScripts = Join-Path (Split-Path $dstSk) 'scripts'
     $srcCatalog = Join-Path $bundle 'skills\catalog.yaml'
     $dstCatalog = Join-Path (Split-Path $dstSk) 'skills\catalog.yaml'
+    # factory-mcp.mjs reads the list of servers the factory depends on from
+    # ../config/mcp-requirements.json relative to itself. Without this file the
+    # installed script finds no declaration, so `scope` keeps nothing and
+    # `audit` labels every server as the user's - silently, and only on a
+    # machine whose server names differ from the bundle author's.
+    $srcReqs = Join-Path $bundle 'config\mcp-requirements.json'
+    $dstReqs = Join-Path (Split-Path $dstSk) 'config\mcp-requirements.json'
     # The verify-app generator ships beside the factory skill. It is what turns
     # the phase-5 --booted claim into something a later agent can re-check.
     $srcVerify = Join-Path $bundle 'skills\verify-app\SKILL.md'
@@ -303,6 +310,7 @@ function Install-Skills {
         Say "[dry-run] Copy-Item '$bundle\docs\conductor.md', '$bundle\docs\how-factory-works.md', '$bundle\docs\plan-format.md', '$bundle\docs\discovery.md', '$bundle\docs\mcp-judging.md' -> '$dstDocs'"
         Say "[dry-run] Copy-Item $($runtimeScripts -join ', ') -> '$dstScripts'"
         Say "[dry-run] Copy-Item '$srcCatalog' -> '$dstCatalog'"
+        Say "[dry-run] Copy-Item '$srcReqs' -> '$dstReqs'"
     }
     elseif (Test-Path $srcSk) {
         if (Test-Path $srcVerify) {
@@ -331,6 +339,12 @@ function Install-Skills {
             Say "skills catalog installed -> $dstCatalog (factory-skills.mjs resolves ../skills/catalog.yaml)"
         }
         else { SayErr "warning: $srcCatalog missing - factory-skills.mjs check will not find its catalog." }
+        if (Test-Path $srcReqs) {
+            New-Item -ItemType Directory -Force -Path (Split-Path $dstReqs) | Out-Null
+            Copy-Item $srcReqs $dstReqs -Force
+            Say "mcp requirements installed -> $dstReqs (factory-mcp.mjs resolves ../config/mcp-requirements.json)"
+        }
+        else { SayErr "warning: $srcReqs missing - factory-mcp.mjs scope will keep no server and audit will label them all as the user's." }
         Say "factory skill installed -> $dstSk (self-contained: docs/ ships conductor + how-factory-works; scripts/ ships what those docs name)"
     }
     else { SayErr "warning: $srcSk not in bundle yet (conductor skill lands with the docs/discovery task); skip - re-run install once it is present." }
