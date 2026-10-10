@@ -101,13 +101,12 @@ gaps it closes were not hypothetical - a session once read the words
 "GATE A approved" out of a plan file and began implementing on the strength of
 prose, and bd reported no gates at all afterwards.
 
+**Run the script with no arguments to see its command surface; that output is
+the source of truth, and this document deliberately does not restate it.** The
+one form worth repeating here is the one with a flag that is easy to miss:
+
 ```
-node <bundle>/scripts/factory-phase.mjs status   <bead> [--json]
-node <bundle>/scripts/factory-phase.mjs next     <bead> [--json]
-node <bundle>/scripts/factory-phase.mjs enter    <bead> <phase> --reason "…"
-node <bundle>/scripts/factory-phase.mjs complete <bead> <phase> --evidence "…"
 node <bundle>/scripts/factory-phase.mjs complete <bead> 5 --evidence "…" --booted "…"
-node <bundle>/scripts/factory-phase.mjs handoff  <bead> --next "<action>"
 ```
 
 Exit codes: **0** ok · **1** illegal transition or error · **2** blocked, a
@@ -320,11 +319,9 @@ still reads perfectly to a human while phase 4 finds three of its tasks have
 disappeared.
 
 Once Gate B is resolved, compile the graph before entering phase 4:
-
-```bash
-node <bundle>/scripts/factory-plan.mjs validate docs/superpowers/plans/<name>.plan.json
-node <bundle>/scripts/factory-plan.mjs graph    docs/superpowers/plans/<name>.plan.json --issue <feature-bead>
-```
+`factory-plan.mjs validate <name>.plan.json`, then
+`factory-plan.mjs graph <name>.plan.json --issue <feature-bead>`. Run the
+script with no arguments for its full surface.
 
 This is what stops beads being decoration. A feature that leaves phase 3 with
 two issues against a 7,476-line plan has a progress nobody can query. With the
@@ -348,12 +345,14 @@ selfcheck FAILs when one is missing** — not warns. A hard skill reported as a
 WARN is just a suggestion wearing a warning's clothing, and this bundle has
 already shipped that defect once.
 
-```bash
-node <bundle>/scripts/factory-skills.mjs check     # exit 0 = all present, 1 = missing/unreadable
-node <bundle>/scripts/factory-skills.mjs install   # install the mandatory set
-node <bundle>/scripts/factory-skills.mjs check --json
-node <bundle>/scripts/factory-skills.mjs record < record.json   # write the decision record
-```
+`factory-skills.mjs` has four commands — `check` (exit 0 when every mandatory
+skill is on disk, 1 when one is missing or the catalog is unreadable),
+`install`, and `record`. Run it with no arguments for its surface.
+
+`record` is the one worth remembering: it takes the decision record on stdin
+(`factory-skills.mjs record < record.json`) and **refuses anything
+incomplete**, which is what makes "discovery ran and found nothing" a recorded
+answer rather than a silence.
 
 Two ship today, both from `softaworks/agent-toolkit`:
 
