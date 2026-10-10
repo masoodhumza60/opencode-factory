@@ -173,6 +173,32 @@ Use the same app each time. A different app each time measures the app, not
 the factory. Its feature is absent by construction - the seed refuses if the
 template ever contains it - so "did the factory build this" stays answerable.
 
+## A check is finished when you have watched it fail
+
+A validator that cannot fail is decoration, and one that cannot be shown
+failing is unproven. Before calling any check done here, run it four times in
+this order and watch what happens:
+
+1. **Pass.** Clean input. It must pass.
+2. **Fail.** Break one thing it claims to catch. It must fail, and name the
+   thing.
+3. **Correct.** Undo the break. It must pass again.
+4. **Say what you saw.** The invocation and its output, in the commit or the
+   bead. Not "verified" - the output.
+
+This has already caught real defects here: four in the phase machine that its
+own 31-test suite could not see, and a mutation that no test could reach because
+the suite deliberately never asserted a positive verdict. A check shipped
+without its step 2 is unfinished, however green it looks.
+
+Two traps worth naming, because both cost real time:
+
+- **A clean fixture proves nothing.** If your "broken" input was written with a
+  tool that emits a BOM, the check may be failing on the BOM rather than the
+  defect you meant. Write fixtures with the same tool that reads them.
+- **Assert the verdict, not the exit code.** A suite's exit code is global and
+  contaminated by unrelated checks; the line you are testing is the verdict.
+
 ## Cost discipline — the three rules that keep a session affordable
 
 A real factory run produced **78.3M tokens in a single session**: 955 turns,
