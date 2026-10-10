@@ -13,13 +13,18 @@
 // Run:  node scripts/test-selfcheck.mjs
 // Exits 0 when every expectation holds, 1 otherwise.
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, copyFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const SELFCHECK = join(here, "factory-selfcheck.mjs");
+// The bundle root, for fixtures that must be the REAL scripts rather than
+// stand-ins. A hand-written fake factory-phase.mjs would let the
+// "installed phase machine runs" check pass for the wrong reason, which is
+// the exact failure mode the check exists to catch.
+const BUNDLE = join(here, "..");
 let failures = 0;
 let ran = 0;
 
@@ -211,6 +216,87 @@ try {
       "the failure names the missing doc and the fix",
       /discovery\.md/.test(fail.out) && /install\.ps1/.test(fail.out),
       fail.line(/factory skill deployed/) || "(no verdict)",
+    );
+  }
+
+  console.log("deployed runtime scripts");
+  // 14a. The docs name commands the install must contain. A real run (2026-10-10)
+  //      had a phase-5 agent read the installed conductor.md, run
+  //      factory-phase.mjs as instructed, and find nothing there - while this
+  //      suite was green and "factory skill deployed" was passing beside it.
+  {
+    const home = join(tmp, "home-scripts");
+    const dir = join(home, ".agents", "skills", "factory");
+    mkdirSync(join(dir, "docs"), { recursive: true });
+    writeFileSync(join(dir, "SKILL.md"), "---\nname: factory\n---\n", "utf8");
+    for (const d of ["conductor.md", "how-factory-works.md", "plan-format.md", "discovery.md", "mcp-judging.md"]) {
+      writeFileSync(join(dir, "docs", d), "# fixture\n", "utf8");
+    }
+    // Docs and SKILL.md but no scripts/ - exactly the broken install from the run.
+    const noScripts = runSelfcheck([], { env: { USERPROFILE: home, HOME: home } });
+    report(
+      "factory skill deployed still PASSes without scripts (the blind spot the run found)",
+      noScripts.line(/^PASS\s+factory skill deployed/) !== "",
+      noScripts.line(/factory skill deployed/) || "(no verdict)",
+    );
+    report(
+      "factory runtime scripts deployed FAILs when the docs reference absent commands",
+      noScripts.line(/^FAIL\s+factory runtime scripts deployed/) !== "",
+      noScripts.line(/runtime scripts/) || "(no verdict)",
+    );
+    report(
+      "the failure names the missing scripts and the fix",
+      /factory-phase\.mjs/.test(noScripts.out) && /install\.ps1/.test(noScripts.out),
+      noScripts.line(/runtime scripts/) || "(no verdict)",
+    );
+    report(
+      "skills catalog deployed FAILs too (factory-skills.mjs resolves ../skills/catalog.yaml)",
+      noScripts.line(/^FAIL\s+skills catalog deployed/) !== "",
+      noScripts.line(/catalog deployed/) || "(no verdict)",
+    );
+
+    // Now a complete install: the real scripts, so the phase machine can run.
+    mkdirSync(join(dir, "scripts"), { recursive: true });
+    mkdirSync(join(dir, "skills"), { recursive: true });
+    const RUNTIME = ["factory-phase.mjs", "factory-mcp.mjs", "factory-plan.mjs", "factory-skills.mjs", "factory-selfcheck.mjs", "platform.mjs"];
+    for (const s of RUNTIME) copyFileSync(join(BUNDLE, "scripts", s), join(dir, "scripts", s));
+    copyFileSync(join(BUNDLE, "skills", "catalog.yaml"), join(dir, "skills", "catalog.yaml"));
+    const complete = runSelfcheck([], { env: { USERPROFILE: home, HOME: home } });
+    report(
+      "factory runtime scripts deployed PASSes on a complete install",
+      complete.line(/^PASS\s+factory runtime scripts deployed/) !== "",
+      complete.line(/runtime scripts/) || "(no verdict)",
+    );
+    report(
+      "skills catalog deployed PASSes when it sits beside the scripts",
+      complete.line(/^PASS\s+skills catalog deployed/) !== "",
+      complete.line(/catalog deployed/) || "(no verdict)",
+    );
+    report(
+      "installed phase machine runs - executed from the install, not the bundle",
+      complete.line(/^PASS\s+installed phase machine runs/) !== "",
+      complete.line(/installed phase machine/) || "(no verdict)",
+    );
+
+    // The mutation that separates the two checks. A script that landed but
+    // cannot execute passes every existsSync above; only running it catches
+    // that, and catching it is the reason this check exists.
+    writeFileSync(join(dir, "scripts", "factory-phase.mjs"), "this is not valid javascript {{{\n", "utf8");
+    const broken = runSelfcheck([], { env: { USERPROFILE: home, HOME: home } });
+    report(
+      "a present-but-broken script still PASSes the presence check (proving presence is blind)",
+      broken.line(/^PASS\s+factory runtime scripts deployed/) !== "",
+      broken.line(/runtime scripts/) || "(no verdict)",
+    );
+    report(
+      "installed phase machine runs FAILs on a script that landed corrupt",
+      broken.line(/^FAIL\s+installed phase machine runs/) !== "",
+      broken.line(/installed phase machine/) || "(no verdict)",
+    );
+    report(
+      "the corrupt-script failure says it is present but did not run",
+      /present but did not run/.test(broken.out),
+      broken.line(/installed phase machine/) || "(no verdict)",
     );
   }
 

@@ -234,10 +234,25 @@ EOF
 install_skills() {
     local src_sk="$bundle/skills/factory/SKILL.md"
     local docs=(conductor.md how-factory-works.md plan-format.md discovery.md mcp-judging.md)
+    # The scripts the docs tell an agent to run ship WITH the docs that reference
+    # them. A real run (2026-10-10, orderboard-a2o) found the install shipped
+    # SKILL.md + docs and no scripts/: a phase-5 agent read conductor.md, was told
+    # to run factory-phase.mjs, and found nothing - while the selfcheck called the
+    # install healthy. This was the Windows installer; install.sh had the same
+    # omission, and a portable bundle that fixes it on one platform only is still
+    # broken on the other.
+    #   - factory-mcp.mjs imports ./platform.mjs, so platform.mjs is not optional.
+    #   - factory-selfcheck.mjs finds factory-skills.mjs and factory-mcp.mjs via
+    #     dirname(import.meta.url), so this set only works together.
+    #   - factory-skills.mjs resolves its default catalog to ../skills/catalog.yaml
+    #     relative to itself, so the catalog ships to <skill>/skills/catalog.yaml.
+    local runtime=(factory-phase.mjs factory-mcp.mjs factory-plan.mjs factory-skills.mjs factory-selfcheck.mjs platform.mjs)
     if [ "$DRY_RUN" = 1 ]; then
         dry "cp \"$src_sk\" \"$agents_skills/factory/\""
         dry "cp \"$bundle/skills/verify-app/SKILL.md\" \"$agents_skills/verify-app/\""
         dry "cp \"$bundle/docs/conductor.md\" \"$bundle/docs/how-factory-works.md\" \"$bundle/docs/plan-format.md\" \"$bundle/docs/discovery.md\" \"$bundle/docs/mcp-judging.md\" \"$agents_skills/factory/docs/\""
+        dry "cp \"$bundle/scripts/{factory-phase,factory-mcp,factory-plan,factory-skills,factory-selfcheck,platform}.mjs\" \"$agents_skills/factory/scripts/\""
+        dry "cp \"$bundle/skills/catalog.yaml\" \"$agents_skills/factory/skills/\""
         return
     fi
     if [ -f "$src_sk" ]; then
@@ -249,7 +264,26 @@ install_skills() {
         cp "$src_sk" "$agents_skills/factory/"
         mkdir -p "$agents_skills/factory/docs"
         for d in "${docs[@]}"; do cp "$bundle/docs/$d" "$agents_skills/factory/docs/"; done
-        say "factory skill installed -> $agents_skills/factory/SKILL.md (self-contained: docs/ ships conductor + how-factory-works)"
+        # scripts/ is not optional decoration. A doc that names a command the
+        # install does not contain is a broken install, so ship them or say so.
+        local absent=()
+        for s in "${runtime[@]}"; do [ -f "$bundle/scripts/$s" ] || absent+=("$s"); done
+        if [ ${#absent[@]} -gt 0 ]; then
+            say "warning: missing runtime script(s) in bundle: ${absent[*]}"
+            say "         the installed docs will reference commands that do not exist there."
+        else
+            mkdir -p "$agents_skills/factory/scripts"
+            for s in "${runtime[@]}"; do cp "$bundle/scripts/$s" "$agents_skills/factory/scripts/"; done
+            say "factory runtime scripts installed -> $agents_skills/factory/scripts/ (${#runtime[@]} files: phase, mcp, plan, skills, selfcheck, platform)"
+        fi
+        if [ -f "$bundle/skills/catalog.yaml" ]; then
+            mkdir -p "$agents_skills/factory/skills"
+            cp "$bundle/skills/catalog.yaml" "$agents_skills/factory/skills/"
+            say "skills catalog installed -> $agents_skills/factory/skills/catalog.yaml (factory-skills.mjs resolves ../skills/catalog.yaml)"
+        else
+            say "warning: $bundle/skills/catalog.yaml missing - factory-skills.mjs check will not find its catalog."
+        fi
+        say "factory skill installed -> $agents_skills/factory/SKILL.md (self-contained: docs/ ships conductor + how-factory-works; scripts/ ships what those docs name)"
     else
         say "warning: $src_sk not in bundle yet (conductor skill lands with the docs/discovery task); skip - re-run install once it is present."
     fi

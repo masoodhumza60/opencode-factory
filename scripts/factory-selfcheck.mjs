@@ -116,6 +116,56 @@ ok(
     ? factorySkill
     : `${factorySkill} - missing docs: ${missingDocs.join(", ")} (re-run install.ps1/install.sh)`,
 );
+// 3a. The scripts those docs tell an agent to run. This check exists because a
+//     real run proved the absence is invisible otherwise: on 2026-10-10 a phase-5
+//     agent read the installed conductor.md, was told to run factory-phase.mjs,
+//     and found nothing there - the docs shipped without the machinery every one
+//     of them names. The check above was green the whole time. Presence is the
+//     floor, not the goal: this also runs the installed phase machine so a file
+//     that landed but cannot execute does not read as a healthy install either.
+const requiredScripts = [
+  "factory-phase.mjs", "factory-mcp.mjs", "factory-plan.mjs",
+  "factory-skills.mjs", "factory-selfcheck.mjs", "platform.mjs",
+];
+const missingScripts = requiredScripts.filter((s) => !existsSync(join(factorySkillDir, "scripts", s)));
+ok(
+  "factory runtime scripts deployed",
+  missingScripts.length === 0,
+  missingScripts.length === 0
+    ? join(factorySkillDir, "scripts")
+    : `missing from the install: ${missingScripts.join(", ")} - the installed docs reference them (re-run install.ps1/install.sh)`,
+);
+// The catalog is data factory-skills.mjs needs; it resolves it as
+// ../skills/catalog.yaml relative to itself, so it has to sit beside the
+// scripts rather than inside them.
+ok(
+  "skills catalog deployed",
+  existsSync(join(factorySkillDir, "skills", "catalog.yaml")),
+  join(factorySkillDir, "skills", "catalog.yaml"),
+);
+// Presence is not the effect. This runs the INSTALLED phase machine and checks
+// it fails for the right reason - a usage error naming the commands, not a
+// crash. A copy that landed truncated, or one whose sibling imports are missing,
+// would pass every existsSync above and fail here, which is the whole point.
+if (missingScripts.length === 0) {
+  const installedPhase = join(factorySkillDir, "scripts", "factory-phase.mjs");
+  const runArgs = [installedPhase];
+  const r = process.platform === "win32"
+    ? spawnSync("node " + runArgs.join(" "), { shell: true, timeout: 30000, encoding: "utf8" })
+    : spawnSync("node", runArgs, { timeout: 30000, encoding: "utf8" });
+  const out = `${r.stdout || ""}${r.stderr || ""}`;
+  // Exit 1 with a usage line is the healthy answer here: the script parsed, ran,
+  // and refused to guess. A syntax error or a missing import does not look
+  // like that, so the check reads the output rather than only the exit code.
+  const usable = r.status !== 0 && /usage/i.test(out) && !/SyntaxError|Cannot find module|ERR_MODULE_NOT_FOUND/.test(out);
+  ok(
+    "installed phase machine runs",
+    usable,
+    usable
+      ? `${installedPhase} (executed from the install, not the bundle)`
+      : `${installedPhase} is present but did not run: exit ${r.status} ${usable ? "" : out.trim().split("\n")[0] || "(no output)"}`,
+  );
+}
 // 3b. The verify-app generator. Phase 5 refuses to complete without a --booted
 //     claim, and this skill is what turns that one sentence into a committed,
 //     re-runnable artifact. Shipping the guard without the thing that makes the

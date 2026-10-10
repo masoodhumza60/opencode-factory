@@ -98,10 +98,30 @@ Both installers run the same steps in the same order:
 7. **Install the factory skill** — copy `skills/factory/SKILL.md` to
    `~/.agents/skills/factory/`, plus `docs/conductor.md`,
    `docs/how-factory-works.md`, `docs/plan-format.md` and `docs/discovery.md`
-   to `~/.agents/skills/factory/docs/`. The installed skill is self-contained:
-   its `docs/` subdir ships every document the conductor and the commands point
-   at, so nothing is a dangling path on the machine. All four matter — a
-   machine with only the conductor has references that resolve to nothing.
+   to `~/.agents/skills/factory/docs/`, plus the six runtime scripts
+   (`factory-phase.mjs`, `factory-mcp.mjs`, `factory-plan.mjs`,
+   `factory-skills.mjs`, `factory-selfcheck.mjs`, `platform.mjs`) to
+   `~/.agents/skills/factory/scripts/` and `skills/catalog.yaml` to
+   `~/.agents/skills/factory/skills/catalog.yaml`. The installed skill is
+   self-contained: its `docs/` subdir ships every document the conductor and the
+   commands point at, and its `scripts/` subdir ships every command those
+   documents tell the agent to run, so nothing is a dangling path on the
+   machine. All four matter — a machine with only the conductor has references
+   that resolve to nothing.
+
+   The scripts were missing until a real run caught it. On 2026-10-10 a phase-5
+   agent read the installed `conductor.md`, was told to run `factory-phase.mjs`,
+   and found nothing — while the selfcheck reported the install healthy, because
+   it only ever checked `SKILL.md` and the docs. Shipping the docs without the
+   machinery is the guard-present-effect-absent shape, and it is why two new
+   selfcheck checks exist (see below). The set ships together because it only
+   works together: `factory-mcp.mjs` imports `./platform.mjs`, `factory-selfcheck.mjs`
+   finds its siblings via `dirname(import.meta.url)`, and `factory-skills.mjs`
+   resolves its default catalog to `../skills/catalog.yaml` relative to itself.
+
+   `install.ps1` / `install.sh` print a warning naming any script missing from
+   the bundle instead of shipping a partial set silently.
+
    The `verify-app` skill ships alongside it at `~/.agents/skills/verify-app/`
    and the selfcheck FAILS without it, because it is what makes the phase-5
    `--booted` claim checkable rather than merely asserted.
@@ -292,6 +312,9 @@ Failure output says `N check(s) failed. Re-run install.ps1/install.sh.`
 | Want a preview before touching anything | Re-run with `-DryRun` — prints every step, changes nothing, exits 0. |
 | `mandatory skills: present` FAILs | A hard skill is missing or half-installed. Run `node scripts/factory-skills.mjs install`, then re-check with `node scripts/factory-skills.mjs check`. If the install itself failed, the printed command is the one that failed - usually no network for `npx skills add`. |
 | `verify-app skill deployed` FAILs | `~/.agents/skills/verify-app/SKILL.md` is absent. Re-run the installer (`install.ps1` / `install.sh`). It ships with the bundle; nothing downloads it. Without it, phase 5 can accept a `--booted` claim that nothing ever re-checks. |
+| `factory runtime scripts deployed` FAILs | The installed docs name commands the install does not contain. Re-run the installer. This check exists because the absence was invisible: the old install shipped `SKILL.md` + `docs/` only, and every one of those documents tells the agent to run `factory-phase.mjs`. |
+| `skills catalog deployed` FAILs | `~/.agents/skills/factory/skills/catalog.yaml` is absent. `factory-skills.mjs` resolves its default catalog to `../skills/catalog.yaml` relative to itself, so it must sit beside `scripts/`, not inside it. Re-run the installer. |
+| `installed phase machine runs` FAILs | The scripts are present but did not execute — a truncated copy, a syntax error, or a missing sibling import. The check runs the **installed** copy rather than trusting its presence, so a file that landed broken is caught here instead of at phase 1. |
 
 ## Reference — paths
 

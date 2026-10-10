@@ -274,6 +274,25 @@ function Install-Skills {
         (Join-Path $bundle 'docs\mcp-judging.md')
     )
     $dstDocs = Join-Path (Split-Path $dstSk) 'docs'
+    # The scripts the docs tell an agent to run must ship WITH the docs that
+    # reference them. An install of SKILL.md + docs alone was measured in a real
+    # run (2026-10-10, orderboard-a2o): phase 5's agent read conductor.md, was
+    # told to run factory-phase.mjs, and found nothing - the docs shipped
+    # without the machinery every one of them points at. selfcheck called that
+    # install healthy, which is the guard-present-effect-absent shape again.
+    #   - factory-mcp.mjs imports ./platform.mjs, so platform.mjs is not optional.
+    #   - factory-selfcheck.mjs finds factory-skills.mjs and factory-mcp.mjs via
+    #     dirname(import.meta.url), so this set only works together.
+    #   - factory-skills.mjs resolves its default catalog to ../skills/catalog.yaml
+    #     relative to itself, so the catalog ships to <skill>/skills/catalog.yaml.
+    $runtimeScripts = @(
+        'factory-phase.mjs', 'factory-mcp.mjs', 'factory-plan.mjs',
+        'factory-skills.mjs', 'factory-selfcheck.mjs', 'platform.mjs'
+    )
+    $srcScripts = $runtimeScripts | ForEach-Object { Join-Path $bundle "scripts\$_" }
+    $dstScripts = Join-Path (Split-Path $dstSk) 'scripts'
+    $srcCatalog = Join-Path $bundle 'skills\catalog.yaml'
+    $dstCatalog = Join-Path (Split-Path $dstSk) 'skills\catalog.yaml'
     # The verify-app generator ships beside the factory skill. It is what turns
     # the phase-5 --booted claim into something a later agent can re-check.
     $srcVerify = Join-Path $bundle 'skills\verify-app\SKILL.md'
@@ -282,6 +301,8 @@ function Install-Skills {
         Say "[dry-run] Copy-Item '$srcVerify' -> '$dstVerify'"
         Say "[dry-run] Copy-Item '$srcSk' -> '$dstSk'"
         Say "[dry-run] Copy-Item '$bundle\docs\conductor.md', '$bundle\docs\how-factory-works.md', '$bundle\docs\plan-format.md', '$bundle\docs\discovery.md', '$bundle\docs\mcp-judging.md' -> '$dstDocs'"
+        Say "[dry-run] Copy-Item $($runtimeScripts -join ', ') -> '$dstScripts'"
+        Say "[dry-run] Copy-Item '$srcCatalog' -> '$dstCatalog'"
     }
     elseif (Test-Path $srcSk) {
         if (Test-Path $srcVerify) {
@@ -292,7 +313,25 @@ function Install-Skills {
         Copy-Item $srcSk $dstSk -Force
         New-Item -ItemType Directory -Force -Path $dstDocs | Out-Null
         Copy-Item $srcDocs $dstDocs -Force
-        Say "factory skill installed -> $dstSk (self-contained: docs/ ships conductor + how-factory-works)"
+        # scripts/ is not optional decoration. A doc that names a command the
+        # install does not contain is a broken install, so ship them or say so.
+        $absent = $srcScripts | Where-Object { -not (Test-Path $_) }
+        if ($absent.Count -gt 0) {
+            SayErr "warning: missing runtime script(s) in bundle: $($absent -join ', ')"
+            SayErr "         the installed docs will reference commands that do not exist there."
+        }
+        else {
+            New-Item -ItemType Directory -Force -Path $dstScripts | Out-Null
+            Copy-Item $srcScripts $dstScripts -Force
+            Say "factory runtime scripts installed -> $dstScripts ($($runtimeScripts.Count) files: phase, mcp, plan, skills, selfcheck, platform)"
+        }
+        if (Test-Path $srcCatalog) {
+            New-Item -ItemType Directory -Force -Path (Split-Path $dstCatalog) | Out-Null
+            Copy-Item $srcCatalog $dstCatalog -Force
+            Say "skills catalog installed -> $dstCatalog (factory-skills.mjs resolves ../skills/catalog.yaml)"
+        }
+        else { SayErr "warning: $srcCatalog missing - factory-skills.mjs check will not find its catalog." }
+        Say "factory skill installed -> $dstSk (self-contained: docs/ ships conductor + how-factory-works; scripts/ ships what those docs name)"
     }
     else { SayErr "warning: $srcSk not in bundle yet (conductor skill lands with the docs/discovery task); skip - re-run install once it is present." }
     # NOTE: .agents/skills/skills.lock.json is created by `factory discover`, not by install.
