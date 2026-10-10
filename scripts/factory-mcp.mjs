@@ -219,6 +219,33 @@ async function handshake() {
 }
 
 // ------------------------------------------------------------------- audit
+// Keys the live schema accepts, per server type. Taken from
+// https://opencode.ai/config.json (McpLocalConfig / McpRemoteConfig), both of
+// which set additionalProperties:false - so an unlisted key is not "ignored,
+// harmless", it is a claim the file makes that nothing honours.
+//
+// `disabled` is the one that has actually bitten. It looks like the inverse of
+// `enabled`, opencode has no such key, and a server carrying `disabled: true`
+// therefore RUNS. On this machine (found 2026-10-10) five servers the operator
+// believed were off were enabled on every session: the config asserted an off
+// switch that does not exist. Both installers had been writing `disabled`
+// while this script correctly read and wrote `enabled`, so our own handshake
+// reported "enabled" and agreed with opencode - the fault was upstream of both.
+const MCP_KEYS = {
+  local: new Set(["type", "command", "cwd", "environment", "enabled", "timeout"]),
+  remote: new Set(["type", "url", "enabled", "headers", "oauth", "timeout"]),
+  // The `{enabled: bool}` shorthand is a legal entry on its own.
+  toggle: new Set(["enabled"]),
+};
+
+function unknownMcpKeys(s) {
+  if (s == null || typeof s !== "object" || Array.isArray(s)) return [];
+  // Pick the widest allowance that fits, so a local server that also carries a
+  // stray key is judged as local rather than as the toggle shorthand.
+  const allowed = MCP_KEYS[s.type === "remote" ? "remote" : "local"];
+  return Object.keys(s).filter((k) => !allowed.has(k) && !MCP_KEYS.toggle.has(k));
+}
+
 function audit() {
   const { config, path } = loadConfig();
   const servers = config?.mcp?.servers;
@@ -228,15 +255,34 @@ function audit() {
   const inventory = Object.entries(servers).map(([n, s]) => describe(n, s ?? {}));
   const enabled = inventory.filter((s) => s.state === "enabled");
   const unverified = enabled.filter((s) => s.owner === "user");
+  // An unknown key is worse than a typo: it is silently dropped, so the config
+  // can claim a server is off while opencode runs it. Loud is the only safe
+  // response - the factory never edits the user's servers, so the operator must.
+  const ignored = Object.entries(servers)
+    .map(([n, s]) => ({ name: n, keys: unknownMcpKeys(s) }))
+    .filter((x) => x.keys.length > 0);
+  // The detail lives IN the payload, not in a later fail() call. An earlier
+  // version printed the payload and returned under --json, so the one mode a
+  // script actually parses lost the stage and the fix while still exiting
+  // non-zero - a verdict with nothing to act on. A negative result that does
+  // not say what to do is the guard-without-effect shape again.
+  const detail = ignored.length === 0 ? null :
+    `config ${path} sets keys opencode's schema does not define, so they have no effect: ${ignored.map((x) => `${x.name} -> ${x.keys.join(", ")}`).join("; ")}. ` +
+    `The MCP schema accepts "enabled" (boolean); there is no "disabled" key, so a server marked disabled:true is still started. ` +
+    `Remove the unknown keys and set "enabled": false to actually stop a server. This audit never edits your config.`;
   const payload = {
-    ok: true, config: displayPath(path), total: inventory.length, enabled: enabled.length,
+    ok: ignored.length === 0, config: displayPath(path), total: inventory.length, enabled: enabled.length,
     servers: inventory,
     unverifiedEnabled: unverified.map((s) => s.name),
-    note: unverified.length > 0
-      ? "these enabled servers are the user's own; the factory audits them and never installs, edits, or disables them"
-      : "no user-owned MCP server is enabled",
+    ignoredKeys: ignored,
+    ...(detail ? { stage: "unknown-mcp-keys", error: detail } : {}),
+    note: detail
+      ? `keys the live schema does not define are ignored by opencode, so the config may claim a state that never happens: ${ignored.map((x) => `${x.name}(${x.keys.join(",")})`).join("; ")}. The schema accepts "enabled", never "disabled".`
+      : unverified.length > 0
+        ? "these enabled servers are the user's own; the factory audits them and never installs, edits, or disables them"
+        : "no user-owned MCP server is enabled",
   };
-  if (has("--json")) { out(payload); return; }
+  if (has("--json")) { out(payload); if (!payload.ok) process.exitCode = 1; return; }
   say(`mcp: ${payload.enabled}/${payload.total} server(s) enabled, config ${path}`);
   for (const s of inventory) {
     const mark = s.owner === "bundle" ? "*" : " ";
@@ -245,6 +291,13 @@ function audit() {
   say("  * bundle-owned");
   if (unverified.length) say(`unverified by any check: ${unverified.map((s) => s.name).join(", ")}`);
   out(payload);
+  if (detail) {
+    // Exits non-zero, and says why on stderr so it is visible even when the
+    // payload above is long. Every health check we have reported this machine
+    // healthy while five "disabled" servers were running, so silence is the bug.
+    console.error(detail);
+    process.exit(1);
+  }
 }
 
 // ---------------------------------------------------------------- enable/disable

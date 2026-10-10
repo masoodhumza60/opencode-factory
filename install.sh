@@ -223,7 +223,7 @@ const base = JSON.parse(fs.readFileSync(bundle + "/config/opencode.snippet.json"
 base.plugins = [pin];
 base.mcp = base.mcp || {};
 base.mcp.servers = base.mcp.servers || {};
-base.mcp.servers.graft = { type: "local", command: [nodePath, graftCliJs, "mcp"], disabled: false };
+base.mcp.servers.graft = { type: "local", command: [nodePath, graftCliJs, "mcp"], enabled: true };
 fs.writeFileSync(out, JSON.stringify(base, null, 2) + "\n");
 EOF
     node "$bundle/scripts/merge-config.mjs" --snippet "$snippet_resolved" --user "$user_cfg" --out "$user_cfg"

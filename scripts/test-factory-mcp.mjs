@@ -393,6 +393,55 @@ check("enable with no server name fails with usage", r.code === 1 && r.json?.sta
   check("the JSON reports the global file it did NOT touch", r.json?.globalUntouched !== undefined, r.out);
 }
 
+// ------------------------------------------------------- schema conformance
+// The `disabled` key has no effect: the live McpLocalConfig/McpRemoteConfig
+// schema (https://opencode.ai/config.json) set additionalProperties:false and
+// list only enabled. A server carrying `disabled: true` is therefore RUNNING.
+// Found 2026-10-10: both installers wrote `disabled: false`, and five servers the
+// operator believed were off were enabled on every session. The audit fixtures
+// above were corrected for this long ago; the installers were not, and nothing
+// checked the key an installer actually wrote.
+{
+  const node = process.execPath;
+  const okCfg = config("keys-ok.json", { mcp: { servers: {
+    graft:    { type: "local", command: [node, "x.js", "mcp"], enabled: true },
+    off:      { type: "local", command: [node, "x.js", "mcp"], enabled: false },
+    remote:   { type: "remote", url: "https://example.test/mcp", enabled: true },
+    remoteOff:{ type: "remote", url: "https://example.test/mcp", enabled: false, headers: { A: "b" }, timeout: 9000 },
+    shorthand:{ enabled: false },
+    withCwd:  { type: "local", command: [node, "x.js"], cwd: "C:/tmp", environment: { K: "V" }, timeout: 5000 },
+  } } });
+  const r = run(["audit", "--config", okCfg, "--quiet", "--json"]);
+  check("audit PASSes on a schema-conformant config of every server shape", r.code === 0, r.out);
+  check("audit reports no ignored keys when every key is real",
+    r.json?.ignoredKeys?.length === 0, r.out);
+
+  const badCfg = config("keys-bad.json", { mcp: { servers: {
+    graft: { type: "local", command: [node, "x.js", "mcp"], enabled: true },
+    nuxt:  { type: "local", command: [node, "x.js"], disabled: true },
+  } } });
+  const b = run(["audit", "--config", badCfg, "--quiet", "--json"]);
+  check("audit FAILs on a key the schema does not define", b.code !== 0, b.out);
+  check("the failure names the stage", b.json?.stage === "unknown-mcp-keys", b.out);
+  check("the failure names the server and the key", /nuxt/.test(b.json?.error || "") && /disabled/.test(b.json?.error || ""), b.out);
+  check("the failure says the key has no effect",
+    /no effect|does not define/.test(b.json?.error || ""), b.out);
+  check("the failure tells the operator what to write instead",
+    /"enabled"/.test(b.json?.error || ""), b.out);
+  check("the failure says the audit will not edit their config",
+    /never edits/i.test(b.json?.error || ""), b.out);
+  check("the payload lists the ignored keys per server",
+    b.json?.ignoredKeys?.some((x) => x.name === "nuxt" && x.keys.includes("disabled")), b.out);
+
+  // The mutation that matters: swapping the real key for the wrong one must
+  // flip the verdict. Without this, the check could pass for any reason.
+  const swapped = config("keys-swap.json", { mcp: { servers: {
+    nuxt: { type: "local", command: [node, "x.js"], enabled: true },
+  } } });
+  const s = run(["audit", "--config", swapped, "--quiet", "--json"]);
+  check("swapping disabled->enabled flips the verdict back to a pass", s.code === 0, s.out);
+}
+
 // ------------------------------------------------------------------- teardown
 try { rmSync(SANDBOX, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); }
 catch { console.log("  warn: could not remove the sandbox (a child may still hold a handle); the suite is unaffected"); }

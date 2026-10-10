@@ -226,7 +226,7 @@ function Merge-Config {
 
     if ($DryRun) {
         Say "[dry-run] node --print process.execPath => $script:NodePath"
-        Say "[dry-run] write temp snippet: bundle snippet + mcp.servers.graft = {type:local, command:[$script:NodePath, $graftCliJs, mcp], disabled:false} + plugins += [$pin]"
+        Say "[dry-run] write temp snippet: bundle snippet + mcp.servers.graft = {type:local, command:[$script:NodePath, $graftCliJs, mcp], enabled:true} + plugins += [$pin]"
         if (Test-Path $userCfg) { Say "[dry-run] user config: $userCfg (read-only; purely additive merge)" }
         else                    { Say "[dry-run] echo '{}' > '$userCfg'   (no existing config)" }
         Say "[dry-run] & node '$script:NodePath' '$bundle\scripts\merge-config.mjs' --snippet <resolved-snippet> --user '$userCfg' --out '$userCfg'"
@@ -241,9 +241,17 @@ function Merge-Config {
         $snip = Get-Content (Join-Path $bundle 'config\opencode.snippet.json') -Raw | ConvertFrom-Json
         $snip | Add-Member -NotePropertyName plugins -NotePropertyValue @($pin) -Force
         $snip.mcp.servers | Add-Member -NotePropertyName graft -NotePropertyValue @{
-            type     = 'local'
-            command  = @($script:NodePath, $graftCliJs, 'mcp')
-            disabled = $false
+            type    = 'local'
+            command = @($script:NodePath, $graftCliJs, 'mcp')
+            # `enabled`, NOT `disabled`. The live McpLocalConfig schema
+            # (https://opencode.ai/config.json) lists type/command/cwd/environment/
+            # enabled/timeout with additionalProperties:false - there is no
+            # `disabled` key. Writing it is not a no-op with a bad spelling: opencode
+            # ignores the unknown property, so a server marked `disabled: true` stays
+            # ENABLED. A 2026-10-10 run found this - five servers the operator
+            # believed were off were spawning on every session, and graft was
+            # flickering in and out of the tool catalog as a result.
+            enabled  = $true
         } -Force
         $json = $snip | ConvertTo-Json -Depth 10
         [System.IO.File]::WriteAllText($snippetResolved, $json, (New-Object System.Text.UTF8Encoding $false))
