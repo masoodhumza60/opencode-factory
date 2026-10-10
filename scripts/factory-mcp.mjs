@@ -12,11 +12,12 @@
 // Redaction is structural, not a filter: every field in the output is copied
 // through an explicit allowlist, so a future config field carrying a secret
 // cannot leak into a decision record that gets committed to a repo.
-import { readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, rmSync, mkdirSync } from "node:fs";
 import { join, basename, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 
 const argv = process.argv.slice(2);
 const get = (k) => { const i = argv.indexOf(k); return i === -1 ? undefined : argv[i + 1]; };
@@ -41,10 +42,7 @@ function requiredServers() {
   const f = get("--requirements") || join(BUNDLE_DIR, "config", "mcp-requirements.json");
   if (!existsSync(f)) return [];
   let r;
-  try { r = JSON.parse(readFileSync(f, "utf8")); }
-  catch (e) {
-    fail(`${f} is not valid JSON (${e.message}) - fix it by hand rather than guessing which servers the factory needs`, "requirements-invalid", { file: f });
-  }
+  r = parseOrFail(readFileSync(f, "utf8"), f, "mcp requirements");
   if (!r || !Array.isArray(r.required)) return [];
   return r.required.filter((x) => typeof x === "string" && x.trim()).map((x) => x.trim());
 }
@@ -91,6 +89,53 @@ function rawConfig(p) {
 // harness it is driving. That is what lets a second one use it unchanged.
 const { configPath, platform, projectConfigPath } = await import("./platform.mjs");
 
+// opencode's config is officially JSONC: comments and trailing commas are legal
+// in a file a human is expected to edit. Strict JSON.parse on that file reports a
+// perfectly good config as broken, and the failure is confusing in the worst way
+// - the error points at a comment, not at anything actually wrong. The same
+// problem hits every command that reads a project config, which is the file
+// people are most likely to have annotated.
+function stripJsonc(src) {
+  let out = "";
+  let inStr = false;
+  let q = "";        // which quote character opened the string we are inside
+  let esc = false;   // the previous character was a backslash
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    const n = src[i + 1];
+    if (inStr) {
+      out += c;
+      if (esc) esc = false;
+      else if (c === "\\") esc = true;
+      else if (c === q) { inStr = false; q = ""; }
+      continue;
+    }
+    // A quote only opens a string if it is not inside a comment, which is why
+    // comments are tested first.
+    if (c === '"' || c === "'") { inStr = true; q = c; out += c; continue; }
+    if (c === "/" && n === "/") { while (i < src.length && src[i] !== "\n") i++; out += "\n"; continue; }
+    if (c === "/" && n === "*") {
+      i += 2;
+      while (i < src.length && !(src[i] === "*" && src[i + 1] === "/")) i++;
+      i++; // land on the '/' so the loop's i++ steps past the pair
+      continue;
+    }
+    out += c;
+  }
+  // Trailing commas: a comma may legally be followed by a comment or whitespace
+  // and then the closing brace, which is not legal JSON.
+  return out.replace(/,(\s*[}\]])/g, "$1");
+}
+
+// parseOrFail reads text that may be JSONC. It is deliberately separate from
+// stripJsonc so callers can keep the original bytes for a rollback.
+function parseOrFail(src, p, what) {
+  try { return JSON.parse(stripJsonc(src)); }
+  catch (e) {
+    fail(`${what} at ${p} is not valid JSON or JSONC (${e.message}) - fix it by hand rather than losing it`, "config-invalid-json", { config: p });
+  }
+}
+
 // Strict JSON, like merge-config.mjs. A config we cannot parse is a failure we
 // must report, never a reason to assume there is nothing to check.
 function loadConfig() {
@@ -101,11 +146,7 @@ function loadConfig() {
   } catch {
     fail(`cannot read opencode config at ${p}`, "config-unreadable", { config: p });
   }
-  try {
-    return { config: JSON.parse(raw), path: p };
-  } catch (e) {
-    fail(`opencode config at ${p} is not valid JSON: ${e.message}`, "config-invalid-json", { config: p });
-  }
+  return { config: parseOrFail(raw, p, "opencode config"), path: p };
 }
 
 // A remote URL can carry the credential in the query string
@@ -405,7 +446,7 @@ function toggle() {
   const projectRaw = existsSync(target) ? readFileSync(target, "utf8") : "{}";
   let projectCfg;
   try {
-    projectCfg = JSON.parse(projectRaw);
+    projectCfg = parseOrFail(projectRaw, target, "opencode config");
   } catch (e) {
     fail(`${displayPath(target)} is not valid JSON (${e.message}) - fix it by hand rather than losing it`, "config-invalid-json", { config: target });
   }
@@ -431,7 +472,7 @@ function toggle() {
   // Rebuild rather than patch a string: a half-applied edit to a user's config
   // is the worst outcome available, and JSON round-tripping cannot produce one.
   const before = projectRaw;
-  const next = JSON.parse(before);
+  const next = parseOrFail(before, target, "opencode config");
   next.mcp = next.mcp || {};
   next.mcp.servers = next.mcp.servers || {};
   // Spread any project-local entry so this adds an override, not a replacement:
@@ -444,7 +485,7 @@ function toggle() {
   // "I think it saved" is exactly the class of claim this repo keeps refusing.
   let verify;
   try {
-    verify = JSON.parse(readFileSync(target, "utf8"));
+    verify = parseOrFail(readFileSync(target, "utf8"), target, "opencode config");
   } catch (e) {
     if (before === "{}") rmSync(target, { force: true });
     else writeFileSync(target, before, "utf8"); // roll back a config we cannot parse
@@ -507,7 +548,7 @@ function scope() {
   const projectRaw = existsSync(target) ? readFileSync(target, "utf8") : "{}";
   let projectCfg;
   try {
-    projectCfg = JSON.parse(projectRaw);
+    projectCfg = parseOrFail(projectRaw, target, "opencode config");
   } catch (e) {
     fail(`${displayPath(target)} is not valid JSON (${e.message}) - fix it by hand rather than losing it`, "config-invalid-json", { config: target });
   }
@@ -541,7 +582,7 @@ function scope() {
   }
 
   const before = projectRaw;
-  const next = JSON.parse(before);
+  const next = parseOrFail(before, target, "opencode config");
   next.mcp = next.mcp || {};
   next.mcp.servers = next.mcp.servers || {};
   for (const p of todo) next.mcp.servers[p.name] = { ...(typeof p.override === "object" ? p.override : {}), enabled: p.want };
@@ -552,7 +593,7 @@ function scope() {
   const rollback = () => { if (before === "{}") rmSync(target, { force: true }); else writeFileSync(target, before, "utf8"); };
   let verify;
   try {
-    verify = JSON.parse(readFileSync(target, "utf8"));
+    verify = parseOrFail(readFileSync(target, "utf8"), target, "opencode config");
   } catch (e) {
     rollback();
     fail(`wrote ${todo.length} override(s) but could not re-read the config (${e.message}); original restored`, "write-unreadable", { config: target });
@@ -573,16 +614,214 @@ function scope() {
   out({ ok: true, declared: requiredServers(), declaredButAbsent: unknown, changed: true, scope: "project", config: target, globalUntouched: globalPath, allow: [...allow], servers: plan, changed_servers: todo.map((p) => p.name), restartRequired: true });
 }
 
+// ---------------------------------------------------------------- search ---
+// The one rule in this file that must not be "tidied up": a failed lookup must
+// never look like an empty answer. mcpm.sh catches the request error and
+// returns its (empty) cache; search then prints "No matching MCP servers found."
+// and exits 0. An agent that believes that tells its user the server does not
+// exist, which is worse than not looking at all. So every path below that
+// cannot reach the registry calls fail() with a stage and exits non-zero.
+
+const DEFAULT_REGISTRY = "https://registry.modelcontextprotocol.io/v0/servers";
+const CACHE_TTL_MS = 60 * 60 * 1000; // the one genuinely good idea from mcpm.sh
+
+function registryUrl() {
+  const flag = get("--registry");
+  if (flag) return flag;
+  const f = join(BUNDLE_DIR, "config", "registry.json");
+  if (existsSync(f)) {
+    const c = parseOrFail(readFileSync(f, "utf8"), f, "registry config");
+    if (c && typeof c.url === "string" && c.url) return c.url;
+  }
+  return DEFAULT_REGISTRY;
+}
+
+// Cache is keyed per query, not per registry: a cache holding one query's
+// results and being handed to a different query would answer the wrong question
+// with a confident-looking file. One file per question, 1-hour TTL.
+function cacheFile(url, q) {
+  const h = createHash("sha1").update(url + "\n" + q).digest("hex").slice(0, 16);
+  return join(homedir(), ".cache", "factory", "mcp-registry", `${h}.json`);
+}
+
+function readCache(url, q) {
+  const p = cacheFile(url, q);
+  try {
+    if (!existsSync(p)) return null;
+    const c = JSON.parse(readFileSync(p, "utf8"));
+    if (typeof c.fetchedAt !== "number" || Date.now() - c.fetchedAt > CACHE_TTL_MS) return null;
+    return c.payload;
+  } catch { return null; }
+}
+
+function writeCache(url, q, payload) {
+  const p = cacheFile(url, q);
+  try {
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, JSON.stringify({ fetchedAt: Date.now(), url, query: q, payload }), "utf8");
+  } catch { /* a cache we cannot write is an inconvenience, not a failure */ }
+}
+
+async function fetchRegistry(url, timeoutMs) {
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), timeoutMs);
+  let body, err = null;
+  try {
+    const r = await fetch(url, { signal: ac.signal, headers: { accept: "application/json" } });
+    if (r.ok) body = await r.json();
+    else err = `HTTP ${r.status}`;
+  } catch (e) { err = e.message || String(e); }
+  finally { clearTimeout(t); }
+  if (err) fail(`registry unreachable or unusable (${err}) - ${url}. Nothing was searched; ` +
+    "this is not the same as no server matching", "registry-unreachable", { url, error: String(err) });
+  if (body === undefined) fail(`registry returned no JSON - ${url}`, "registry-unreachable", { url });
+  return body;
+}
+
+// The official API nests the manifest under `.server` and keeps `_meta` beside
+// it, so anything reading entry.name directly gets undefined and treats every
+// server as nameless. `packages` is optional and absent on remote-only entries,
+// which is why this guards instead of indexing.
+function flattenServer(entry) {
+  const s = entry && typeof entry === "object" && entry.server ? entry.server : (entry || {});
+  const name = typeof s.name === "string" ? s.name : (typeof s.displayName === "string" ? s.displayName : "");
+  const remotes = Array.isArray(s.remotes) ? s.remotes : [];
+  const packages = Array.isArray(s.packages) ? s.packages : [];
+  // Names are namespaced upstream (ai.getvda/kafka-and-postgres-monitoring-stack);
+  // the opencode config key has to be the last segment or the name is unwieldy
+  // and, worse, differs from what `add` would later be asked to remove.
+  const slash = name.lastIndexOf("/");
+  return {
+    name,
+    key: slash === -1 ? name : name.slice(slash + 1),
+    description: typeof s.description === "string" ? s.description : "",
+    version: typeof s.version === "string" ? s.version : null,
+    local: packages.length > 0,
+    remote: remotes.length > 0,
+  };
+}
+
+// The registry does not rank (two identical queries returned different first
+// results minutes apart), so this ranking is ours and is labelled as such.
+function rank(s, needle) {
+  const k = s.key.toLowerCase(), d = s.description.toLowerCase();
+  if (k === needle) return 0;
+  if (k.startsWith(needle)) return 1;
+  if (k.includes(needle)) return 2;
+  if (d.includes(needle)) return 3;
+  return 4;
+}
+
+async function search() {
+  const positional = [];
+  for (let i = 1; i < argv.length; i++) {
+    if (argv[i].startsWith("--")) { if (get(argv[i]) === argv[i + 1]) i++; continue; }
+    positional.push(argv[i]);
+  }
+  const q = get("--query") || positional[0];
+  if (!q) fail("usage: factory-mcp.mjs search <query> [--limit N] [--refresh] [--offline]", "usage", {});
+  const rawLimit = get("--limit");
+  const limit = rawLimit === undefined ? 10 : Number(rawLimit);
+  if (!Number.isFinite(limit) || limit <= 0)
+    fail(`--limit must be a positive number (got "${rawLimit}")`, "usage", {});
+
+  const url = registryUrl();
+  const sep = url.includes("?") ? "&" : "?";
+  let payload = null, fromCache = false;
+
+  if (has("--offline")) {
+    payload = readCache(url, q);
+    if (!payload) fail(`--offline and no cached answer for "${q}" (${cacheFile(url, q)}) - ` +
+      "run once without --offline, or allow network", "registry-unreachable", { url, query: q });
+    fromCache = true;
+  } else {
+    const cached = has("--refresh") ? null : readCache(url, q);
+    if (cached) { payload = cached; fromCache = true; }
+    else payload = await fetchRegistry(`${url}${sep}search=${encodeURIComponent(q)}&limit=100`,
+      Number(get("--timeout") || DEFAULT_TIMEOUT));
+  }
+  if (!fromCache) writeCache(url, q, payload);
+
+  const rows = payload && Array.isArray(payload.servers) ? payload.servers
+    : (Array.isArray(payload) ? payload : null);
+  if (!rows) fail(`registry response has no servers array (top-level keys: ` +
+    `${payload && typeof payload === "object" ? Object.keys(payload).join(",") : typeof payload}) - ` +
+    "the registry may have changed shape; refusing to report zero matches", "registry-shape", { url });
+
+  const needle = q.toLowerCase();
+  const all = collapse(rows.map(flattenServer).filter((s) => s.name));
+  const hits = all
+    .filter((s) => s.key.toLowerCase().includes(needle) || s.name.toLowerCase().includes(needle)
+      || s.description.toLowerCase().includes(needle))
+    .sort((a, b) => rank(a, needle) - rank(b, needle) || a.key.localeCompare(b.key));
+  const shown = hits.slice(0, limit);
+  const atCap = rows.length >= 100;
+
+  if (!shown.length) {
+    // Reached the registry and it really had nothing. Still non-zero: "I found
+    // nothing" and "I could not look" should not share an exit code.
+    say(`no server in the registry matches "${q}" (looked at ${all.length} returned entries; ranking is ours, not the registry's)`);
+    out({ ok: true, query: q, count: 0, examined: all.length, results: [], registry: url, cached: fromCache, truncated: atCap });
+    return;
+  }
+  for (const s of shown) {
+    const how = [s.local ? "local" : null, s.remote ? "remote" : null].filter(Boolean).join("+") || "NO TARGET";
+    say(`${s.key}  [${how}]${s.version ? "  v" + s.version : ""}`);
+    if (s.description) say(`    ${s.description.split("\n")[0].slice(0, 160)}`);
+    say(`    registry name: ${s.name}`);
+  }
+  if (hits.length > shown.length) say(`  ... ${hits.length - shown.length} more (raise --limit)`);
+  // Say so rather than let "10 of 10" read as "there are 10".
+  if (atCap) say(`  note: the registry page cap was hit (${rows.length} rows examined) - there may be more matches off this page`);
+  out({ ok: true, query: q, count: shown.length, total_matches: hits.length, examined: all.length,
+        registry: url, cached: fromCache, ranking: "local", truncated: atCap, results: shown });
+}
+
+// The registry lists EVERY version as its own entry, so "github" comes back as
+// v1.0.3, v1.0.4 and v1.0.6 with the same name. Printed raw that is three
+// identical-looking lines, and `add <name>` is ambiguous about which one it
+// means. Collapse to one entry per config key, keeping the highest version.
+function vnum(v) {
+  const m = /^(\d+)\.(\d+)\.(\d+)/.exec(String(v || ""));
+  return m ? [+m[1], +m[2], +m[3]] : null;
+}
+// Compares whole entries, not version strings: the caller spreads the winner,
+// and spreading a string yields an object of characters that happens to survive
+// until something downstream reads a property that is not there.
+function newer(a, b) {
+  const x = vnum(a.version), y = vnum(b.version);
+  if (!x) return b;
+  if (!y) return a;
+  for (let i = 0; i < 3; i++) {
+    // Equal components must be SKIPPED, not decided on. Returning on the first
+    // pair makes 1.0.9 lose to 1.0.5 because 1 > 1 is false - the comparison
+    // has to walk to the component that actually differs.
+    if (x[i] === y[i]) continue;
+    return x[i] > y[i] ? a : b;
+  }
+  return a;
+}
+function collapse(list) {
+  const best = new Map();
+  for (const s of list) {
+    const prev = best.get(s.key);
+    best.set(s.key, prev ? { ...newer(prev, s), local: prev.local || s.local, remote: prev.remote || s.remote } : s);
+  }
+  return [...best.values()];
+}
+
 const cmd = argv[0];
 if (cmd === "handshake") await handshake();
 else if (cmd === "audit") audit();
 else if (cmd === "enable" || cmd === "disable") toggle();
 else if (cmd === "scope") scope();
+else if (cmd === "search") await search();
 else {
   console.error("usage: factory-mcp.mjs handshake [--name <server>] [--requirements <file>] [--config <path>] [--timeout <ms>] [--quiet] [--json]");
   console.error("       factory-mcp.mjs audit    [--config <path>] [--requirements <file>] [--quiet] [--json]");
   console.error("       factory-mcp.mjs enable   <server> [--config <path>] [--dry-run] [--quiet] [--json]");
   console.error("       factory-mcp.mjs disable  <server> [--config <path>] [--dry-run] [--quiet] [--json]");
   console.error("       factory-mcp.mjs scope    [--allow a,b] [--requirements <file>] [--config <path>] [--dry-run] [--quiet] [--json]");
+  console.error("       factory-mcp.mjs search   <query> [--limit N] [--registry <url>] [--refresh] [--offline] [--timeout <ms>] [--quiet] [--json]");
   process.exit(1);
 }

@@ -5,11 +5,12 @@
 //     being installed, on a graph existing, or on the network
 //   - every run has cwd inside the sandbox, because bd-style tools write
 //     scaffolding relative to cwd and a test must not litter the repo it runs in
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync, existsSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { execFileSync, spawn } from "node:child_process";
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync, existsSync, readFileSync } from "node:fs";
+import { tmpdir, homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createServer } from "node:http";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(HERE, "factory-mcp.mjs");
@@ -447,6 +448,59 @@ try { rmSync(SANDBOX, { recursive: true, force: true, maxRetries: 10, retryDelay
 catch { console.log("  warn: could not remove the sandbox (a child may still hold a handle); the suite is unaffected"); }
 
 
+// -------------------------------------------------------------------- jsonc ----
+// opencode config is officially JSONC: comments and trailing commas are legal in a
+// file humans are expected to edit. Strict JSON.parse reports that file as broken
+// and the error points at a comment rather than at anything wrong. These assert
+// the EFFECT - a real command over a commented config behaves as over clean JSON.
+// Asserting that a stripper function exists would prove nothing.
+const jc = project("jsonc");
+config("jsonc-global.json", { mcp: { servers: { graft: fakeServer("off", true), github: fakeServer() } } });
+writeFileSync(join(jc, "opencode.json"), [
+  "{",
+  "  // the server the factory needs, kept on",
+  "  \"mcp\": {",
+  "    \"servers\": {",
+  "      /* a block comment",
+  "         spanning lines */",
+  "      \"note\": \"kept\",",
+  "      \"github\": { \"enabled\": true, },",
+  "    }",
+  "  }",
+  "}",
+].join("\n"));
+const rJc = inProject(["scope", "--json"], jc);
+check("a JSONC project config with comments and a trailing comma does not fail", rJc.code === 0, rJc.out);
+// scope always writes plain JSON, so this read is strict on purpose: it proves the
+// command consumed the annotated file rather than us re-reading it ourselves.
+const jcAfter = (() => { try { return JSON.parse(readFileSync(join(jc, "opencode.json"), "utf8")); } catch (e) { return { err: e.message }; } })();
+check("scope wrote valid JSON afterwards", !jcAfter.err, JSON.stringify(jcAfter));
+check("the commented project key survived scope", jcAfter?.mcp?.servers?.note === "kept", JSON.stringify(jcAfter));
+check("the declared server was left enabled through a JSONC file", jcAfter?.mcp?.servers?.graft?.enabled === true, JSON.stringify(jcAfter));
+check("an undeclared server was disabled through a JSONC file", jcAfter?.mcp?.servers?.github?.enabled === false, JSON.stringify(jcAfter));
+
+// The trap this guards: a // inside a string is DATA, not a comment. Stripped, the
+// url changes silently and every remote server breaks behind a plausible-looking url.
+const jcUrl = project("jsonc-url");
+config("jsonc-global.json", { mcp: { servers: { graft: fakeServer("off", true) } } });
+writeFileSync(join(jcUrl, "opencode.json"), [
+  "{",
+  "  \"mcp\": { \"servers\": { \"remote1\": { \"type\": \"remote\", \"url\": \"https://x.example/a//b\" } } }",
+  "}",
+].join("\n"));
+const rUrl = inProject(["scope", "--json"], jcUrl);
+check("a // inside a url string is not treated as a comment", rUrl.code === 0, rUrl.out);
+const urlAfter = (() => { try { return JSON.parse(readFileSync(join(jcUrl, "opencode.json"), "utf8")); } catch { return {}; } })();
+check("and that url survives byte for byte",
+  urlAfter?.mcp?.servers?.remote1?.url === "https://x.example/a//b", JSON.stringify(urlAfter));
+
+// Genuinely broken input must still be refused, not silently recovered.
+const jcBad = project("jsonc-bad");
+config("jsonc-global.json", { mcp: { servers: { graft: fakeServer("off", true) } } });
+writeFileSync(join(jcBad, "opencode.json"), "{ \"mcp\": { \"servers\": { \"graft\": { }");
+const rBad = inProject(["scope", "--json"], jcBad);
+check("truncated JSONC is still refused, not guessed", rBad.code !== 0 && /config-invalid-json/.test(rBad.out), rBad.out);
+
 // ---------------------------------------------------------------- scope ----
 // scope is the start/resume behaviour: everything not on the allowlist goes off
 // FOR THIS PROJECT. Each case asserts the file that was actually written, not
@@ -639,6 +693,166 @@ const scopeConfig = () => config("scope.json", {
   check("one that is not named is reported as the user's",
     by.live?.owner === "user", JSON.stringify(r.json.servers));
 }
+// ---- search ----
+// These run against a real loopback HTTP server rather than the live registry.
+// A suite that needs the internet is a suite that gets skipped the first time
+// the network is down - and then the search path ships unverified for a month
+// without anybody noticing. The thing under test IS the network path, so the
+// network has to be real; it just must not be the internet.
+{
+  const FIXTURE = { servers: [
+    { server: { name: "com.acme/ledger", description: "Ledger reconciliation", version: "1.0.3",
+      packages: [{ registryType: "npm", identifier: "acme-ledger-mcp", version: "1.0.3" }] } },
+    { server: { name: "com.acme/ledger", description: "Ledger reconciliation", version: "1.0.9",
+      packages: [{ registryType: "npm", identifier: "acme-ledger-mcp", version: "1.0.9" }] } },
+    { server: { name: "com.acme/ledger", description: "Ledger reconciliation", version: "1.0.5",
+      remotes: [{ type: "streamable-http", url: "https://ledger.example/mcp" }] } },
+    { server: { name: "io.beta/reader", description: "Remote only, no packages key at all", version: "2.1.0",
+      remotes: [{ type: "streamable-http", url: "https://reader.example/mcp" }] } },
+    { server: { name: "io.gamma/broken", description: "Neither local nor remote", version: "0.1.0" } },
+  ], metadata: { count: 5 } };
+
+  let hits = 0, body = null, code = 200;
+  const server = createServer((req, res) => {
+    hits++;
+    if (code !== 200) { res.writeHead(code); res.end("nope"); return; }
+    const payload = JSON.stringify(body);
+    res.writeHead(200, { "content-type": "application/json", "content-length": Buffer.byteLength(payload) });
+    res.end(payload);
+  });
+
+  // Cache is per (url, query) and lives in the user's home. Point the home
+  // directory env vars at a temp dir so the suite never reads or writes the
+  // real cache. homedir() resolves USERPROFILE on Windows, HOME elsewhere.
+  const fakeHome = mkdtempSync(join(tmpdir(), "mcphome-"));
+  const realHome = process.env.USERPROFILE;
+  const realHomeProfile = process.env.HOME;
+  process.env.USERPROFILE = fakeHome;
+  process.env.HOME = fakeHome;
+
+  const listen = () => new Promise((res) => server.listen(0, "127.0.0.1", () => res(server.address().port)));
+  const close = () => new Promise((res) => server.close(res));
+
+  // These runs MUST be async. spawnSync blocks the event loop, and this fixture
+  // server lives in the same process as the test - so a synchronous spawn means
+  // the server can never accept a connection, and every request aborts. The
+  // first version of this block did exactly that and 13 tests failed for a
+  // reason that had nothing to do with the code under test.
+  const runIn = async (cwd, args) => {
+    const r = await new Promise((resolve) => {
+      const p = spawn(process.execPath, [SCRIPT, ...args], { cwd, encoding: "utf8" });
+      let so = "", se = "";
+      p.stdout.on("data", (d) => { so += d; });
+      p.stderr.on("data", (d) => { se += d; });
+      const kill = setTimeout(() => p.kill(), 30000);
+      p.on("close", (status) => { clearTimeout(kill); resolve({ status, stdout: so, stderr: se }); });
+    });
+    let json = null;
+    try { json = JSON.parse(r.stdout); } catch { /* refusals print prose */ }
+    return { code: r.status, out: (r.stdout || "") + (r.stderr || ""), json };
+  };
+  // search reads nothing of the user's, so it needs no project root. Running in
+  // the fake home is also the proof of that: it is not a git repo.
+  const inSandbox = (args) => runIn(fakeHome, args);
+
+  const port = await listen();
+  const url = `http://127.0.0.1:${port}/v0/servers`;
+
+  // tsearch1: the happy path, and the four shape traps in one go.
+  body = FIXTURE;
+  let r = await inSandbox(["search", "ledger", "--registry", url, "--json", "--limit", "10"]);
+  check("tsearch1 search finds a server through a real HTTP registry",
+    r.code === 0 && r.json?.ok && r.json.count >= 1, r.out.slice(0, 300));
+  check("tsearch2 the manifest nested under .server is read, not skipped",
+    r.json?.results?.some((x) => x.key === "ledger"), JSON.stringify(r.json?.results));
+  check("tsearch3 a namespaced name becomes the last segment as the config key",
+    r.json?.results?.every((x) => x.key === "ledger" && x.name === "com.acme/ledger"),
+    JSON.stringify(r.json?.results));
+  check("tsearch4 three versions of one server collapse to a single entry",
+    r.json?.results?.filter((x) => x.key === "ledger").length === 1, JSON.stringify(r.json?.results));
+  check("tsearch5 the collapsed entry keeps the highest version",
+    r.json?.results?.find((x) => x.key === "ledger")?.version === "1.0.9",
+    JSON.stringify(r.json?.results));
+  check("tsearch6 collapsing versions keeps a target from ANY of them",
+    r.json?.results?.find((x) => x.key === "ledger")?.remote === true &&
+    r.json?.results?.find((x) => x.key === "ledger")?.local === true, JSON.stringify(r.json?.results));
+
+  // tsearch7: packages absent entirely - a valid remote-only entry.
+  r = await inSandbox(["search", "reader", "--registry", url, "--json"]);
+  check("tsearch7 an entry with no packages key is read as remote, not crashed on",
+    r.code === 0 && r.json?.results?.[0]?.remote === true && r.json?.results?.[0]?.local === false,
+    r.out.slice(0, 300));
+
+  // tsearch8: neither local nor remote - must be visible, not silently dropped.
+  r = await inSandbox(["search", "broken", "--registry", url, "--json"]);
+  check("tsearch8 a server with no runnable target is reported, not omitted",
+    r.code === 0 && r.json?.results?.[0]?.local === false && r.json?.results?.[0]?.remote === false,
+    r.out.slice(0, 300));
+
+  // tsearch9: the failure that must never look like an answer.
+  code = 500;
+  r = await inSandbox(["search", "ledger", "--registry", url, "--json", "--refresh"]);
+  check("tsearch9 an HTTP error from the registry exits non-zero",
+    r.code !== 0, `exit ${r.code}`);
+  check("tsearch10 an HTTP error is not reported as zero matches",
+    r.json?.ok === false && r.json?.stage === "registry-unreachable" && r.json?.count !== 0,
+    r.out.slice(0, 300));
+  code = 200;
+
+  // tsearch11: an unreachable host is a refusal, never an empty list.
+  r = await inSandbox(["search", "ledger", "--registry", "http://127.0.0.1:1/nope", "--json", "--timeout", "2500"]);
+  check("tsearch11 an unreachable registry exits non-zero", r.code !== 0, `exit ${r.code}`);
+  check("tsearch12 an unreachable registry names the stage",
+    r.json?.stage === "registry-unreachable", r.out.slice(0, 300));
+
+  // tsearch13: --offline with nothing cached must refuse rather than lie.
+  r = await inSandbox(["search", "neverasked", "--registry", url, "--json", "--offline"]);
+  check("tsearch13 --offline with no cache refuses instead of reporting no matches",
+    r.code !== 0 && r.json?.stage === "registry-unreachable", r.out.slice(0, 300));
+
+  // tsearch14: a cache hit avoids the network entirely.
+  hits = 0;
+  r = await inSandbox(["search", "ledger", "--registry", url, "--json", "--offline"]);
+  check("tsearch14 --offline serves a cached answer and hits the network zero times",
+    r.code === 0 && r.json?.cached === true && hits === 0, `hits=${hits} out=${r.out.slice(0, 200)}`);
+
+  // tsearch15: the cache is per query, not per registry.
+  hits = 0;
+  r = await inSandbox(["search", "zzzunique-never-asked", "--registry", url, "--json"]);
+  check("tsearch15 the cache is keyed per query, so a new question is a cache miss",
+    hits > 0 && r.json?.cached !== true, `hits=${hits} cached=${r.json?.cached}`);
+
+  // tsearch16: a real "nothing matched" is distinguishable from a failure.
+  r = await inSandbox(["search", "zzznotaserver", "--registry", url, "--json"]);
+  check("tsearch16 a genuine no-match is ok with count 0, distinct from a failure",
+    r.code === 0 && r.json?.ok === true && r.json.count === 0, r.out.slice(0, 300));
+
+  // tsearch17: a registry that changes shape is a refusal, not "no matches".
+  body = { unexpected: true };
+  r = await inSandbox(["search", "ledger", "--registry", url, "--json", "--refresh"]);
+  check("tsearch17 a registry that dropped its servers array refuses with registry-shape",
+    r.code !== 0 && r.json?.stage === "registry-shape", r.out.slice(0, 300));
+  body = FIXTURE;
+
+  // tsearch18: search needs no project at all - the fake home is not a repo.
+  r = await inSandbox(["search", "ledger", "--registry", url, "--json", "--refresh"]);
+  check("tsearch18 search works with no project root - it reads nothing of yours",
+    r.code === 0 && r.json?.ok === true, r.out.slice(0, 300));
+
+  // tsearch19: --json must be exactly one parseable line, no prose before it.
+  r = await inSandbox(["search", "ledger", "--registry", url, "--json", "--refresh"]);
+  check("tsearch19 --json emits one line and nothing else",
+    r.json !== null && r.out.trim().split("\n").length === 1, r.out.slice(0, 300));
+
+  // tsearch20: a nonsense --limit is a refusal, not a silent default.
+  r = await inSandbox(["search", "ledger", "--registry", url, "--json", "--limit", "zero"]);
+  check("tsearch20 a non-numeric --limit is refused", r.code !== 0, r.out.slice(0, 200));
+
+  close();
+  if (realHome !== undefined) process.env.USERPROFILE = realHome;
+  if (realHomeProfile !== undefined) process.env.HOME = realHomeProfile;
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (failures.length) { console.log("failures:"); for (const f of failures) console.log("  - " + f); }
 process.exit(fail === 0 ? 0 : 1);
