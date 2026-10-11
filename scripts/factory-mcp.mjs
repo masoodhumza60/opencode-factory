@@ -599,7 +599,21 @@ function scope() {
     // so the project's server set is stated rather than inherited from whatever
     // global says today. Recording it once is a change; re-recording it is not,
     // so this stays idempotent rather than rewriting the same bytes forever.
-    return { name, current, want, recorded, change: current !== want || (want && recorded === null), override };
+    //
+    // The third reason to rewrite is that the ENTRY ITSELF may be unusable, which
+    // is what a live run found: four servers were already off in global, so
+    // current === want and nothing fired - leaving a stale V1-shaped entry of
+    // {"enabled": false} in the project file. Under V2 a project entry replaces the
+    // whole server object, so that entry carries no type and no command/url and
+    // the server can never start here. Comparing the VALUE is the wrong question:
+    // what matters is whether the entry states a state opencode can act on.
+    const unusable = override != null && (
+      typeof override !== "object"
+      || typeof override.disabled !== "boolean"   // not V2 vocabulary
+      || typeof override.type !== "string"        // and carries no definition
+    );
+    const change = current !== want || (want && recorded === null) || unusable;
+    return { name, current, want, recorded, unusable, change, override };
   });
 
   const todo = plan.filter((p) => p.change);
