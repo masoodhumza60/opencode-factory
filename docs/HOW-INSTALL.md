@@ -335,7 +335,8 @@ there — see **Porting to another harness** below.
 
 ### Re-creating the test app (why the template is committed)
 
-`scripts/seed-testapp.mjs <target-dir>` copies `testapps/orderboard` into a
+In the **factory repository** (not in an install), `scripts/seed-testapp.mjs
+<target-dir>` copies `testapps/orderboard` into a
 fresh directory, runs `git init` with one seed commit, and runs `npm ci`, so
 `tsc` and `vitest` genuinely work.
 

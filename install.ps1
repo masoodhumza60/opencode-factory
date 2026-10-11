@@ -295,7 +295,8 @@ function Install-Skills {
     $runtimeScripts = @(
         'factory-phase.mjs', 'factory-mcp.mjs', 'factory-plan.mjs',
         'factory-skills.mjs', 'factory-selfcheck.mjs', 'platform.mjs',
-        'mcp-defmatch.mjs'
+        'mcp-defmatch.mjs',
+'measure.mjs'
     )
     $srcScripts = $runtimeScripts | ForEach-Object { Join-Path $bundle "scripts\$_" }
     $dstScripts = Join-Path (Split-Path $dstSk) 'scripts'
@@ -339,7 +340,7 @@ function Install-Skills {
         else {
             New-Item -ItemType Directory -Force -Path $dstScripts | Out-Null
             Copy-Item $srcScripts $dstScripts -Force
-            Say "factory runtime scripts installed -> $dstScripts ($($runtimeScripts.Count) files: phase, mcp, plan, skills, selfcheck, platform)"
+            Say "factory runtime scripts installed -> $dstScripts ($($runtimeScripts.Count) files: phase, mcp, plan, skills, selfcheck, platform, defmatch, measure)"
         }
         if (Test-Path $srcCatalog) {
             New-Item -ItemType Directory -Force -Path (Split-Path $dstCatalog) | Out-Null

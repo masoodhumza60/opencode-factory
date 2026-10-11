@@ -167,7 +167,13 @@ around. Fix the state or ask the human — do not start writing files anyway.
 
 Every number this factory produces is a comparison, and a comparison needs
 both sides. The historical baseline was one run of this factory; the current
-one is `testapps/orderboard`, seeded by `scripts/seed-testapp.mjs`.
+one is `testapps/orderboard`, seeded from the factory repository by its
+seed script. That script and the template it copies are repository tooling and
+are **not** in an install. Naming them here as installed paths was a defect the
+selfcheck could not see; the installed-doc check added on 2026-10-11 now
+fails on any script an installed doc names that the install does not carry, so
+the fix is to stop writing them as paths rather than to teach the check to
+ignore the sentence that says they are absent.
 
 Use the same app each time. A different app each time measures the app, not
 the factory. Its feature is absent by construction - the seed refuses if the

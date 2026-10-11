@@ -272,6 +272,43 @@ try {
       complete.line(/^PASS\s+skills catalog deployed/) !== "",
       complete.line(/catalog deployed/) || "(no verdict)",
     );
+
+    // 14b. The other half of the same blind spot: not the scripts we know about,
+    //      but the ones the installed docs name. Every list here is a hand-kept
+    //      list, and a list cannot notice a script that was added to a doc.
+    //      Measured 2026-10-11 against a live install that was carrying
+    //      docs/conductor.md naming measure.mjs with no measure.mjs on disk.
+    {
+      const cond = join(dir, "docs", "conductor.md");
+      const baseline = runSelfcheck([], { env: { USERPROFILE: home, HOME: home } });
+      report(
+        "every script the installed docs name is shipped PASSes when they agree",
+        baseline.line(/^PASS\s+every script the installed docs name is shipped/) !== "",
+        baseline.line(/installed docs name/) || "(no verdict)",
+      );
+
+      // The doc now tells an agent to run something the install does not carry.
+      writeFileSync(cond, "# fixture\n\nrun it: node scripts/ghost-tool.mjs\n", "utf8");
+      const dangling = runSelfcheck([], { env: { USERPROFILE: home, HOME: home } });
+      report(
+        "every script the installed docs name is shipped FAILs on a dangling reference",
+        dangling.line(/^FAIL\s+every script the installed docs name is shipped/) !== "",
+        dangling.line(/installed docs name/) || "(no verdict)",
+      );
+      report(
+        "the dangling-reference failure names the script, its doc, and the fix",
+        /ghost-tool\.mjs/.test(dangling.out) && /conductor\.md/.test(dangling.out) && /install\.ps1/.test(dangling.out),
+        dangling.line(/installed docs name/) || "(no verdict)",
+      );
+
+      writeFileSync(cond, "# fixture\n", "utf8");
+      const repaired = runSelfcheck([], { env: { USERPROFILE: home, HOME: home } });
+      report(
+        "and it PASSes again once the doc stops naming it (pass -> fail -> pass)",
+        repaired.line(/^PASS\s+every script the installed docs name is shipped/) !== "",
+        repaired.line(/installed docs name/) || "(no verdict)",
+      );
+    }
     report(
       "installed phase machine runs - executed from the install, not the bundle",
       complete.line(/^PASS\s+installed phase machine runs/) !== "",

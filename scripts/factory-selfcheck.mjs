@@ -163,6 +163,41 @@ ok(
     : `these imports do not resolve inside the install: ${unresolvedImports.join(", ")} - the script will throw on load (re-run install.ps1/install.sh)`,
 );
 
+// Every hand-kept list can go stale, so the list is not the source of truth -
+// the installed docs are. A doc that names scripts/<name>.mjs is telling an
+// agent to run something; if the install does not carry it, that agent finds
+// nothing, which is how orderboard-a2o phase 5 reported "factory-phase.mjs
+// does not exist on this machine". Strict on purpose: repository-only tooling
+// is named in prose as living in the repository, because the alternative is
+// an exception list nobody reads and a check that has learned to be quiet.
+const docsDir = join(factorySkillDir, "docs");
+const namedScripts = new Map();
+// Paths, not names: SKILL.md sits beside docs/, not inside it. A list of
+// names here re-read every entry from docs/ and threw ENOENT on the first run.
+const mdFiles = [];
+try {
+  for (const f of readdirSync(docsDir)) if (f.endsWith(".md")) mdFiles.push(join(docsDir, f));
+} catch (e) { /* the catalog check below already speaks to a missing docs dir */ }
+if (existsSync(join(factorySkillDir, "SKILL.md"))) mdFiles.push(join(factorySkillDir, "SKILL.md"));
+for (const p of mdFiles) {
+  const f = basename(p);
+  const body = readFileSync(p, "utf8");
+  for (const m of body.matchAll(/scripts\/([\w.-]+\.mjs)/g)) {
+    if (!namedScripts.has(m[1])) namedScripts.set(m[1], new Set());
+    namedScripts.get(m[1]).add(f);
+  }
+}
+const unshipped = [...namedScripts]
+  .filter(([name]) => !existsSync(join(installedScriptsDir, name)))
+  .map(([name, where]) => name + " (named in " + [...where].join(", ") + ")");
+ok(
+  "every script the installed docs name is shipped",
+  unshipped.length === 0,
+  unshipped.length === 0
+    ? mdFiles.length + " installed doc(s) name " + namedScripts.size + " script(s), all present"
+    : "the installed docs tell an agent to run these and the install does not carry them: " + unshipped.join("; ") + " - ship the script, or say in the doc that it lives in the factory repository (re-run install.ps1/install.sh)",
+);
+
 // The catalog is data factory-skills.mjs needs; it resolves it as
 // ../skills/catalog.yaml relative to itself, so it has to sit beside the
 // scripts rather than inside them.
