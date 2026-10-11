@@ -135,6 +135,34 @@ ok(
     ? join(factorySkillDir, "scripts")
     : `missing from the install: ${missingScripts.join(", ")} - the installed docs reference them (re-run install.ps1/install.sh)`,
 );
+// Every hand-kept list of runtime scripts is a list that can go stale. On
+// 2026-10-11 mcp-defmatch.mjs was extracted out of factory-mcp.mjs so its
+// comparison could be unit-tested; both installers kept their old lists, shipped
+// a factory-mcp.mjs that threw ERR_MODULE_NOT_FOUND on its first run, and the
+// "factory runtime scripts deployed" check passed the whole time - every file it
+// named was present, and the thing that was missing was one none of them named.
+// So the check is derived from the files themselves rather than from a list.
+const installedScriptsDir = join(factorySkillDir, "scripts");
+const unresolvedImports = [];
+if (existsSync(installedScriptsDir)) {
+  for (const f of readdirSync(installedScriptsDir)) {
+    if (!f.endsWith(".mjs")) continue;
+    const body = readFileSync(join(installedScriptsDir, f), "utf8");
+    for (const m of body.matchAll(/(?:from|import)\s+["'](\.[^"']+)["']/g)) {
+      if (!existsSync(join(installedScriptsDir, m[1]))) {
+        unresolvedImports.push(`${f} -> ${m[1]}`);
+      }
+    }
+  }
+}
+ok(
+  "every installed script's own imports resolve",
+  unresolvedImports.length === 0,
+  unresolvedImports.length === 0
+    ? installedScriptsDir
+    : `these imports do not resolve inside the install: ${unresolvedImports.join(", ")} - the script will throw on load (re-run install.ps1/install.sh)`,
+);
+
 // The catalog is data factory-skills.mjs needs; it resolves it as
 // ../skills/catalog.yaml relative to itself, so it has to sit beside the
 // scripts rather than inside them.

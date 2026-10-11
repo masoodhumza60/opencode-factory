@@ -242,16 +242,18 @@ install_skills() {
     # omission, and a portable bundle that fixes it on one platform only is still
     # broken on the other.
     #   - factory-mcp.mjs imports ./platform.mjs, so platform.mjs is not optional.
+  #   - factory-mcp.mjs also imports ./mcp-defmatch.mjs, which was added after this
+  #     list and missed by it - shipping a script that throws on first run.
     #   - factory-selfcheck.mjs finds factory-skills.mjs and factory-mcp.mjs via
     #     dirname(import.meta.url), so this set only works together.
     #   - factory-skills.mjs resolves its default catalog to ../skills/catalog.yaml
     #     relative to itself, so the catalog ships to <skill>/skills/catalog.yaml.
-    local runtime=(factory-phase.mjs factory-mcp.mjs factory-plan.mjs factory-skills.mjs factory-selfcheck.mjs platform.mjs)
+    local runtime=(factory-phase.mjs factory-mcp.mjs factory-plan.mjs factory-skills.mjs factory-selfcheck.mjs platform.mjs mcp-defmatch.mjs)
     if [ "$DRY_RUN" = 1 ]; then
         dry "cp \"$src_sk\" \"$agents_skills/factory/\""
         dry "cp \"$bundle/skills/verify-app/SKILL.md\" \"$agents_skills/verify-app/\""
         dry "cp \"$bundle/docs/conductor.md\" \"$bundle/docs/how-factory-works.md\" \"$bundle/docs/plan-format.md\" \"$bundle/docs/discovery.md\" \"$bundle/docs/mcp-judging.md\" \"$agents_skills/factory/docs/\""
-        dry "cp \"$bundle/scripts/{factory-phase,factory-mcp,factory-plan,factory-skills,factory-selfcheck,platform}.mjs\" \"$agents_skills/factory/scripts/\""
+        dry "cp \"$bundle/scripts/{factory-phase,factory-mcp,factory-plan,factory-skills,factory-selfcheck,platform,mcp-defmatch}.mjs\" \"$agents_skills/factory/scripts/\""
         dry "cp \"$bundle/skills/catalog.yaml\" \"$agents_skills/factory/skills/\""
         dry "cp \"$bundle/config/mcp-requirements.json\" \"$agents_skills/factory/config/\""
         return

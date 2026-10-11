@@ -283,13 +283,19 @@ function Install-Skills {
     # without the machinery every one of them points at. selfcheck called that
     # install healthy, which is the guard-present-effect-absent shape again.
     #   - factory-mcp.mjs imports ./platform.mjs, so platform.mjs is not optional.
+    #   - factory-mcp.mjs also imports ./mcp-defmatch.mjs. It was added AFTER the
+    #     list above was written and never added to it, so the installer shipped a
+    #     script that threw ERR_MODULE_NOT_FOUND on first run. The list is the
+    #     thing that went stale, which is why the check below now walks imports
+    #     instead of trusting any hand-kept list.
     #   - factory-selfcheck.mjs finds factory-skills.mjs and factory-mcp.mjs via
     #     dirname(import.meta.url), so this set only works together.
     #   - factory-skills.mjs resolves its default catalog to ../skills/catalog.yaml
     #     relative to itself, so the catalog ships to <skill>/skills/catalog.yaml.
     $runtimeScripts = @(
         'factory-phase.mjs', 'factory-mcp.mjs', 'factory-plan.mjs',
-        'factory-skills.mjs', 'factory-selfcheck.mjs', 'platform.mjs'
+        'factory-skills.mjs', 'factory-selfcheck.mjs', 'platform.mjs',
+        'mcp-defmatch.mjs'
     )
     $srcScripts = $runtimeScripts | ForEach-Object { Join-Path $bundle "scripts\$_" }
     $dstScripts = Join-Path (Split-Path $dstSk) 'scripts'
