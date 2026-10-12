@@ -375,9 +375,53 @@ function audit() {
   if (servers == null || typeof servers !== "object" || Array.isArray(servers)) {
     fail(`no mcp.servers object in ${path}; there is nothing to audit`, "no-servers-object", { config: path });
   }
-  const inventory = Object.entries(servers).map(([n, s]) => describe(n, s ?? {}));
+
+  // What this DIRECTORY actually gets. audit used to answer a question about
+  // the current project by reading the global config, so it reported github as
+  // enabled while the project file had disabled it - a run-2 phase-1 agent was
+  // told the opposite of the truth about its own directory.
+  //
+  // Two rules make this more than a second read. opencode merges project over
+  // global, and under V2 a project entry REPLACES the whole server object, so
+  // the effective server is not globals entry with a flag flipped - it is
+  // whichever layer named it last. And projectConfigPath returns null outside
+  // a repo rather than failing, which is why audit can stay usable there.
+  const projPath = projectConfigPath();
+  let projServers = {}, projBroken = null;
+  if (projPath && existsSync(projPath)) {
+    try { projServers = JSON.parse(stripJsonc(readFileSync(projPath, "utf8")))?.mcp?.servers || {}; }
+    catch (e) { projBroken = `${displayPath(projPath)} is not readable JSON (${e.message}), so opencode cannot read this project either`; }
+  }
+  if (projServers != null && (typeof projServers !== "object" || Array.isArray(projServers))) {
+    projBroken = projBroken || `${displayPath(projPath)} has an mcp.servers that is not an object`;
+    projServers = {};
+  }  // Every global entry, plus any the project added on its own - a server the
+  // factory never knew about still runs, so it belongs in the audit.
+  const names = [...new Set([...Object.keys(servers), ...Object.keys(projServers)])];
+  const inventory = names.map((n) => {
+    // inGlobal, not `servers[n] ?? {}`: a server the project adds on its own has
+    // NO global state, and calling that "enabled globally" over-reports by one
+    // per project-local server. Caught by the probe below, not by reading.
+    const inGlobal = n in servers;
+    const g = servers[n] ?? {};
+    const override = projServers[n];    const fromProject = override != null;
+    // fullDef: a V2 project entry replaces the object outright, so an override
+    // that carries no type would otherwise lose the command/url and leave a
+    // server that can never start - the stale-entry defect, reproduced.
+    const eff = fromProject ? fullDef(override, g) : g;
+    const d = describe(n, eff);
+    const globalState = isOn(g) ? "enabled" : "disabled";
+    return {
+      ...d,
+      layer: fromProject ? "project" : "global",
+      globalState: inGlobal ? globalState : null,
+      overridden: fromProject && d.state !== globalState,
+      projectState: fromProject ? stated(override) : null,
+    };
+  });
   const enabled = inventory.filter((s) => s.state === "enabled");
-  const unverified = enabled.filter((s) => s.owner === "user");
+  const globalEnabled = inventory.filter((s) => s.globalState === "enabled");
+  const overridden = inventory.filter((s) => s.overridden);  const unverified = enabled.filter((s) => s.owner === "user");
   // An unknown key is worse than a typo: it is silently dropped, so the config
   // can claim a server is off while opencode runs it. Loud is the only safe
   // response - the factory never edits the user's servers, so the operator must.
@@ -394,24 +438,40 @@ function audit() {
     `opencode's config uses "disabled", not "enabled": a server carrying disabled:true is configured and never connects. ` +
     `Remove the unknown keys and set "disabled": true to actually stop a server. This audit never edits your config.`;
   const payload = {
-    ok: ignored.length === 0, config: displayPath(path), total: inventory.length, enabled: enabled.length,
-    servers: inventory,
-    unverifiedEnabled: unverified.map((s) => s.name),
+    // `enabled` is the EFFECTIVE count - what actually runs here. `globalEnabled`
+    // stays visible so a project that turns something off cannot quietly shrink
+    // the headline number and look like good news.
+    ok: ignored.length === 0 && !projBroken,
+    config: displayPath(path),
+    projectConfig: projPath ? displayPath(projPath) : null,
+    audited: projPath ? "project overrides global; `enabled` is what runs in this directory" : "global only - this directory is not inside a git repository, so no project config applies",
+    total: inventory.length, enabled: enabled.length, globalEnabled: globalEnabled.length,
+    overriddenByProject: overridden.map((s) => `${s.name} (global ${s.globalState} -> here ${s.state})`),
+    servers: inventory,    unverifiedEnabled: unverified.map((s) => s.name),
     ignoredKeys: ignored,
     ...(detail ? { stage: "unknown-mcp-keys", error: detail } : {}),
     note: detail
       ? `keys the live schema does not define are ignored by opencode, so the config may claim a state that never happens: ${ignored.map((x) => `${x.name}(${x.keys.join(",")})`).join("; ")}. The schema accepts "disabled"; an "enabled" key has no effect.`
-      : unverified.length > 0
-        ? "these enabled servers are the user's own; the factory audits them and never installs, edits, or disables them"
-        : "no user-owned MCP server is enabled",
-  };
+      : projBroken
+        ? projBroken
+        : overridden.length > 0
+          ? `this project changes ${overridden.length} server(s) against global; the counts above are what runs HERE, not what the global file says`
+          : unverified.length > 0
+            ? "these enabled servers are the user's own; the factory audits them and never installs, edits, or disables them"
+            : "no user-owned MCP server is enabled",  };
   if (has("--json")) { out(payload); if (!payload.ok) process.exitCode = 1; return; }
   say(`mcp: ${payload.enabled}/${payload.total} server(s) enabled, config ${path}`);
   for (const s of inventory) {
-    const mark = s.owner === "bundle" ? "*" : " ";
+    // "+" marks a state this project sets rather than inherits. Without it the reader
+    // cannot tell whether a server is off machine-wide or off only here, which is the
+    // exact question audit was answering wrongly before.
+    const mark = (s.owner === "bundle" ? "*" : " ") + (s.layer === "project" ? "+" : " ");
     say(`  ${mark} ${s.name.padEnd(18)} ${s.type.padEnd(6)} ${s.state.padEnd(8)} ${s.target}${s.needsCredential ? "  [needs credential]" : ""}`);
   }
   say("  * bundle-owned");
+  if (projPath) say(`  + set by this project (${displayPath(projPath)})`);
+  if (overridden.length) say(`changed by this project vs global: ${overridden.map((s) => `${s.name} ${s.globalState}->${s.state}`).join(", ")}`);
+  if (projBroken) say(`project config unreadable: ${projBroken}`);
   if (unverified.length) say(`unverified by any check: ${unverified.map((s) => s.name).join(", ")}`);
   out(payload);
   if (detail) {
