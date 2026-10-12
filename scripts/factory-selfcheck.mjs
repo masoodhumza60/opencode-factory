@@ -174,31 +174,66 @@ if (!existsSync(manifestPath)) {
   } else {
     const drifted = [];
     const missing = [];
-    for (const [name, hash] of Object.entries(mf.files)) {
+    // The bundle has moved ahead of what is installed. This is the direction that
+    // matters: nothing on disk changed, so every other check passes and the run
+    // measures code the bundle no longer ships. An install four commits behind is
+    // silent unless somebody compares against the bundle.
+    const behind = [];
+    // The manifest predates the bundle_path field, or the recorded source did not
+    // resolve. Either way this file cannot be compared, and cannot be called current.
+    const uncomp = [];
+    const bundleRoot = mf.bundle_path;
+    const bundleGone = bundleRoot ? !existsSync(bundleRoot) : true;
+    for (const [name, entry] of Object.entries(mf.files)) {
       // Keys are paths relative to the skills root, because basename collides:
       // SKILL.md exists under both factory/ and verify-app/.
       const here = join(factorySkillDir, "..", name);
       if (!existsSync(here)) { missing.push(name); continue; }
-      if (createHash("sha256").update(readFileSync(here)).digest("hex").toUpperCase() !== String(hash).toUpperCase()) {
+      // A pre-bundle_path manifest stores a bare hash; a current one stores an
+      // object. Reading both is what lets an old install be diagnosed rather than
+      // silently reported as fine.
+      const want = String(typeof entry === "object" && entry ? entry.hash : entry).toUpperCase();
+      const src = typeof entry === "object" && entry ? entry.src : null;
+      if (createHash("sha256").update(readFileSync(here)).digest("hex").toUpperCase() !== want) {
         drifted.push(name);
+      }
+      if (bundleGone || !src) { uncomp.push(name); continue; }
+      const there = join(bundleRoot, src);
+      if (!existsSync(there)) { uncomp.push(name); continue; }
+      if (createHash("sha256").update(readFileSync(there)).digest("hex").toUpperCase() !== want) {
+        behind.push(name);
       }
     }
     const age = mf.installed_at
       ? Math.round((Date.now() - Date.parse(mf.installed_at)) / 86400000)
       : null;
     const when = age === null ? mf.installed_at : `${age} day(s) ago`;
-    if (drifted.length || missing.length) {
+    if (drifted.length || missing.length || behind.length) {
       warn(
-        "installed scripts have changed since install",
-        `installed ${when} (bundle ${mf.bundle_commit || "unknown"}); ${drifted.length} file(s) edited since: ${drifted.join(", ") || "none"}` +
+        behind.length ? "the bundle has moved ahead of the install" : "installed scripts have changed since install",
+        `installed ${when} (bundle ${mf.bundle_commit || "unknown"})` +
+          (behind.length ? `; ${behind.length} file(s) newer in the bundle: ${behind.join(", ")}` : "") +
+          `; ${drifted.length} file(s) edited since: ${drifted.join(", ") || "none"}` +
           (missing.length ? `; ${missing.length} file(s) no longer present: ${missing.join(", ")}` : "") +
-          `${drifted.length || missing.length ? " - this run is measuring code that is not the current bundle. Re-run the installer before starting a feature." : ""}`
+          `${behind.length || drifted.length || missing.length ? " - this run is measuring code that is not the current bundle. Re-run the installer before starting a feature." : ""}`
         // The missing files are named, not just counted. A message that says "17
         // files are missing" and then lists nothing is the same failure as a check
         // that passes: it tells you something happened without telling you what.
       );
+    } else if (uncomp.length) {
+      // Not a pass. A check that cannot compare must not say "current" - that is
+      // the exact shape of the bug this replaces: a green line over files nothing
+      // had actually looked at.
+      warn(
+        "install currency not established",
+        `installed ${when} (bundle ${mf.bundle_commit || "unknown"}); ${uncomp.length} file(s) could not be compared against the bundle` +
+          (bundleGone
+            ? ` - the bundle it was installed from is not at ${bundleRoot || "(not recorded, so this manifest predates it)"}, so nothing here can say whether it is current. Re-run the installer from the bundle you intend to use.`
+            : ` - the manifest records no bundle source path for: ${uncomp.join(", ")}. Re-run the installer.`) +
+          " Reporting this as current would be the one thing this check exists to prevent."
+      );
     } else {
-      console.log(`     install current as of ${when} (bundle ${mf.bundle_commit || "unknown"})`);
+      console.log(`     install current as of ${when} (bundle ${mf.bundle_commit || "unknown"}), compared against the bundle at ${bundleRoot}`);
     }
   }
 }

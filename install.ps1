@@ -365,6 +365,11 @@ function Install-Skills {
         $manifest = @{
             installed_at = (Get-Date).ToUniversalTime().ToString('o')
             bundle_commit = (git -C $bundle rev-parse --short HEAD 2>$null)
+            # Where the bundle was when this ran. Without it the check below can see a
+            # hand-edited install but is blind to the bundle moving ahead, which is the
+            # direction that actually runs the wrong code. Recorded, not derived, because
+            # a derived path is a rule that can be wrong without saying so.
+            bundle_path = $bundle
             files = @{}
         }
         # The shared skills root - ONE level above the factory skill directory.
@@ -386,7 +391,20 @@ function Install-Skills {
                     $rel = $f.Replace('\', '/')
                 }
                 else { $rel = $f.Substring($skillsRoot.Length).TrimStart('\', '/').Replace('\', '/') }
-                $manifest.files[$rel] = (Get-FileHash $f -Algorithm SHA256).Hash
+                # The same file inside the bundle, so the check can compare three ways
+                # instead of two: what was written, what is on disk, and what the bundle
+                # holds now. Keys are <skill>/<rest>, and the bundle keeps the same <rest>
+                # under skills/<skill>/ or at the bundle root - except SKILL.md, which the
+                # bundle holds under skills/<skill>/. Resolved here and STORED, so a wrong
+                # mapping is visible: the check reports the file as uncomp rather than
+                # quietly calling it current.
+                $rest = $rel.Substring($rel.IndexOf('/') + 1)
+                $srcRel = if ($rest -eq 'SKILL.md') { 'skills/' + $rel } else { $rest }
+                $srcAbs = Join-Path $bundle $srcRel
+                $manifest.files[$rel] = @{
+                    hash = (Get-FileHash $f -Algorithm SHA256).Hash
+                    src = if (Test-Path $srcAbs) { $srcRel } else { $null }
+                }
             }
         }
         $manifestPath = Join-Path (Split-Path $dstSk) 'install-manifest.json'
@@ -397,7 +415,7 @@ function Install-Skills {
         # staleness check into a permanent false alarm.
         $manifestJson = $manifest | ConvertTo-Json -Depth 4
         [System.IO.File]::WriteAllText($manifestPath, $manifestJson, (New-Object System.Text.UTF8Encoding $false))
-        Say "install manifest written -> $manifestPath ($($manifest.files.Count) files, bundle $($manifest.bundle_commit))"
+        Say "install manifest written -> $manifestPath ($($manifest.files.Count) files, bundle $($manifest.bundle_commit) at $bundle)"
     }
     else { SayErr "warning: $srcSk not in bundle yet (conductor skill lands with the docs/discovery task); skip - re-run install once it is present." }
     # NOTE: .agents/skills/skills.lock.json is created by `factory discover`, not by install.

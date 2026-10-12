@@ -471,12 +471,35 @@ try {
         .update(readFileSync(join(home, ".agents", "skills", rel)))
         .digest("hex")
         .toUpperCase();
+    // A bundle on disk for the reader to compare against. Without it the check
+    // cannot tell "the install is current" from "nothing was compared" - and
+    // reporting those two the same way is the entire defect this fixes.
+    const bundleDir = join(tmp, "bundle-src");
+    mkdirSync(join(bundleDir, "scripts"), { recursive: true });
+    mkdirSync(join(bundleDir, "skills", "factory"), { recursive: true });
+    const bundleHas = (rel, from = rel) =>
+      writeFileSync(join(bundleDir, rel), readFileSync(join(dir, from.replace("/", "\\"))));
+    // The installed copy and the bundle copy of SKILL.md live at different paths:
+    // <skill>/SKILL.md here, skills/<skill>/SKILL.md in the bundle. The manifest
+    // records the bundle one, so the fixture has to write it where the manifest
+    // says - otherwise the reader compares against a file nobody created and the
+    // check refuses to certify, which is right, and the fixture looks broken.
+    bundleHas("skills/factory/SKILL.md", "SKILL.md");
+    bundleHas("scripts/factory-phase.mjs");
+    // The installer strips the leading <skill>/ segment to find the same file in
+    // the bundle, and special-cases SKILL.md, which the bundle keeps under
+    // skills/<skill>/. The fixture states the mapping rather than re-deriving it, so
+    // a change to the installer's rule shows up here as a failure to compare.
     const manifestFor = () => ({
       installed_at: new Date().toISOString(),
       bundle_commit: "fixture",
+      bundle_path: bundleDir,
       files: {
-        "factory/SKILL.md": hashOf("factory/SKILL.md"),
-        "factory/scripts/factory-phase.mjs": hashOf("factory/scripts/factory-phase.mjs"),
+        "factory/SKILL.md": { hash: hashOf("factory/SKILL.md"), src: "skills/factory/SKILL.md" },
+        "factory/scripts/factory-phase.mjs": {
+          hash: hashOf("factory/scripts/factory-phase.mjs"),
+          src: "scripts/factory-phase.mjs",
+        },
       },
     });
     const manifestPath = join(dir, "install-manifest.json");
@@ -507,6 +530,12 @@ try {
     );
 
     // 3. Drift. This is the whole reason the check exists.
+    // Keep the original so the next case starts from a clean install. Leaking the
+    // drift into case 4 made a correct reader look broken: it reported drift,
+    // which is true, so the BOM case failed for a reason that had nothing to do
+    // with a BOM. A test that does not restore what it changed is testing its own
+    // leftovers.
+    const installedPhase = readFileSync(join(dir, "scripts", "factory-phase.mjs"));
     appendFileSync(join(dir, "scripts", "factory-phase.mjs"), "// edited after install\n");
     const drifted = runSelfcheck([], inHome);
     report(
@@ -521,6 +550,8 @@ try {
       drifted.line(/changed since install/) || "(no verdict)",
     );
 
+    writeFileSync(join(dir, "scripts", "factory-phase.mjs"), installedPhase);
+
     // 4. A BOM is not corruption. PowerShell 5.1 writes one, and a human editing the
     // file in an editor can add one. Reading either as "unreadable" would send an
     // operator to re-run an installer that already did its job.
@@ -531,6 +562,73 @@ try {
       bom.line(/install current as of/) !== "",
       bom.line(/install manifest|install current/) || "(no verdict)",
     );
+
+    // 4b. THE DIRECTION THAT WAS INVISIBLE. Nothing on disk changed here: the
+    // install still matches the manifest exactly. Only the bundle moved. Before
+    // this fix that printed "install current" - the sentence that let a real run
+    // measure four-commit-old code, print a green line, and start.
+    writeFileSync(manifestPath, JSON.stringify(manifestFor(), null, 2), "utf8");
+    appendFileSync(join(bundleDir, "scripts", "factory-phase.mjs"), "// the bundle moved on\n");
+    const behind = runSelfcheck([], inHome);
+    report(
+      "a bundle that has moved ahead is reported, not called current",
+      behind.line(/^WARN\s+the bundle has moved ahead of the install/) !== "" &&
+        behind.line(/install current as of/) === "",
+      behind.line(/bundle has moved ahead|install current/) || "(no verdict)",
+    );
+    report(
+      "and that warning names the file and says the run is measuring stale code",
+      /factory\/scripts\/factory-phase\.mjs/.test(behind.out) && /not the current bundle/.test(behind.out),
+      behind.line(/bundle has moved ahead/) || "(no verdict)",
+    );
+    bundleHas("scripts/factory-phase.mjs"); // back in step, for the cases below
+
+    // 4c. A manifest that does not say where the bundle was cannot answer the
+    // question at all. The old fixtures were exactly this shape, and they said
+    // "current" - which is why the bundle moving ahead went unseen.
+    writeFileSync(
+      manifestPath,
+      JSON.stringify({
+        installed_at: new Date().toISOString(),
+        bundle_commit: "fixture",
+        files: { "factory/SKILL.md": hashOf("factory/SKILL.md") },
+      }),
+      "utf8",
+    );
+    const noPath = runSelfcheck([], inHome);
+    report(
+      "a manifest with no bundle_path does NOT report the install current",
+      noPath.line(/^WARN\s+install currency not established/) !== "" &&
+        noPath.line(/install current as of/) === "",
+      noPath.line(/currency not established|install current/) || "(no verdict)",
+    );
+    report(
+      "and it says the installer is what would establish it",
+      /Re-run the installer/.test(noPath.out),
+      noPath.line(/currency not established/) || "(no verdict)",
+    );
+
+    // 4d. The bundle moved away - a different clone, a rename, a different laptop.
+    // The honest answer is "cannot tell". Anything else is a guess wearing a
+    // green line.
+    writeFileSync(
+      manifestPath,
+      JSON.stringify({ ...manifestFor(), bundle_path: join(tmp, "gone-bundle") }),
+      "utf8",
+    );
+    const gone = runSelfcheck([], inHome);
+    report(
+      "a bundle that is no longer there refuses to certify the install current",
+      gone.line(/^WARN\s+install currency not established/) !== "" &&
+        gone.line(/install current as of/) === "",
+      gone.line(/currency not established|install current/) || "(no verdict)",
+    );
+    report(
+      "and it names the path it could not find",
+      /gone-bundle/.test(gone.out),
+      gone.line(/currency not established/) || "(no verdict)",
+    );
+    writeFileSync(manifestPath, JSON.stringify(manifestFor(), null, 2), "utf8");
 
     // 5. Genuinely corrupt is reported, not crashed on.
     writeFileSync(manifestPath, "{ this is not json", "utf8");
@@ -550,6 +648,11 @@ try {
     const selfcheckSrc = readFileSync(join(BUNDLE, "scripts", "factory-selfcheck.mjs"), "utf8");
     const instLine = (installerSrc.match(/\$manifestPath\s*=.*/) || [""])[0];
     const selfLine = (selfcheckSrc.match(/const manifestPath\s*=.*/) || [""])[0];
+    report(
+      "the installer records where the bundle was, without which currentness is unknowable",
+      /bundle_path\s*=\s*\$bundle/.test(installerSrc),
+      (installerSrc.match(/.*bundle_path.*/) || [""])[0].trim() || "(no bundle_path in install.ps1)",
+    );
     report(
       "the installer writes the manifest beside the files it describes (not above the skill dir)",
       /Join-Path\s*\(Split-Path\s+\$dstSk\)/.test(instLine),
