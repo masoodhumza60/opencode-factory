@@ -355,6 +355,49 @@ function Install-Skills {
         }
         else { SayErr "warning: $srcReqs missing - factory-mcp.mjs scope will keep no server and audit will label them all as the user's." }
         Say "factory skill installed -> $dstSk (self-contained: docs/ ships conductor + how-factory-works; scripts/ ships what those docs name)"
+        # A manifest of what was actually installed, with a timestamp. Run 2 of
+        # the factory was run against a STALE install - the scripts on disk were
+        # a version behind the bundle - and every check passed, because every
+        # check asked whether a file existed and none asked whether it was
+        # current. Nothing in the system could tell a run that it was about to
+        # measure the wrong thing. This is the receipt for that: the install
+        # records what it wrote, and the run records when it was written.
+        $manifest = @{
+            installed_at = (Get-Date).ToUniversalTime().ToString('o')
+            bundle_commit = (git -C $bundle rev-parse --short HEAD 2>$null)
+            files = @{}
+        }
+        # The shared skills root - ONE level above the factory skill directory.
+        # Split-Path $dstSk is the factory skill dir itself, so keys written against
+        # it were off by a level and the reader resolved every one to a file that
+        # does not exist. Worse, the list below mixes $dstVerify, which lives in a
+        # SIBLING directory: substring-ing that against the factory dir did not
+        # fail, it silently produced the key app/SKILL.md. A manifest that mangles a
+        # key is worse than one that is short, so the guard refuses rather than truncates.
+        $skillsRoot = Split-Path (Split-Path $dstSk)
+        foreach ($f in @($dstSk, $dstVerify) + @(Get-ChildItem $dstDocs -File -ErrorAction SilentlyContinue).FullName + @(Get-ChildItem $dstScripts -File -ErrorAction SilentlyContinue).FullName + $dstCatalog + $dstReqs) {
+            if ($f -and (Test-Path $f)) {
+                # Keyed by path relative to the skills root, NOT by basename:
+                # SKILL.md exists under both factory/ and verify-app/, and a
+                # basename key collides - the second write silently overwrites the
+                # first and a later reader compares the wrong file.
+                if (-not $f.StartsWith($skillsRoot)) {
+                    SayErr "warning: $f is not under $skillsRoot - recorded by full path so the key cannot be silently mangled."
+                    $rel = $f.Replace('\', '/')
+                }
+                else { $rel = $f.Substring($skillsRoot.Length).TrimStart('\', '/').Replace('\', '/') }
+                $manifest.files[$rel] = (Get-FileHash $f -Algorithm SHA256).Hash
+            }
+        }
+        $manifestPath = Join-Path (Split-Path $dstSk) 'install-manifest.json'
+        # No BOM. `Set-Content -Encoding utf8` is PowerShell 5.1 and it emits a UTF-8
+        # BOM, which is not valid JSON - every strict reader fails on it, so a manifest
+        # written this way can only ever be read as unreadable. The same trap has bitten
+        # every other file this shell has written; here it would have silently turned the
+        # staleness check into a permanent false alarm.
+        $manifestJson = $manifest | ConvertTo-Json -Depth 4
+        [System.IO.File]::WriteAllText($manifestPath, $manifestJson, (New-Object System.Text.UTF8Encoding $false))
+        Say "install manifest written -> $manifestPath ($($manifest.files.Count) files, bundle $($manifest.bundle_commit))"
     }
     else { SayErr "warning: $srcSk not in bundle yet (conductor skill lands with the docs/discovery task); skip - re-run install once it is present." }
     # NOTE: .agents/skills/skills.lock.json is created by `factory discover`, not by install.

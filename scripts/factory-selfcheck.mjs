@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // opencode-factory selfcheck. Exits 0 when the factory environment is intact.
 // --tokens additionally prints the token-cost estimate of injected context.
+import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync, existsSync, openSync, readSync, closeSync, fstatSync, readdirSync, statSync, mkdtempSync } from "node:fs";
 import { join, basename, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -135,6 +136,73 @@ ok(
     ? join(factorySkillDir, "scripts")
     : `missing from the install: ${missingScripts.join(", ")} - the installed docs reference them (re-run install.ps1/install.sh)`,
 );
+// Drift between what was installed and what is on disk NOW.
+//
+// This is a warn, not a fail, and the distinction is deliberate. A stale install
+// is a normal state: every bundle commit moves the source ahead of the install,
+// so a check that went red on it would be red almost always and would be learned
+// to ignore. But run 2 of the factory was executed against a stale install - the
+// factory-mcp.mjs on disk was a version behind, still speaking V1 while the bundle
+// spoke V2 - and every other check passed, because every one of them asked whether
+// a file existed rather than whether it was current. A whole six-phase run was
+// about to measure the wrong thing and the system could not say so. The install
+// now writes a manifest of what it put there; this reports when that is, and
+// names any file whose hash has moved since.
+// The manifest lives BESIDE the files it describes, in the skill directory. An
+// earlier version looked one level up, in the shared skills root, while the
+// installer wrote into the skill directory - so the two paths never met and this
+// check spent a run reporting on a test fixture. The whole check is worth nothing
+// unless this path and the installer's are the same path, which is why the test
+// suite asserts that rather than trusting both halves to agree.
+const manifestPath = join(factorySkillDir, "install-manifest.json");
+if (!existsSync(manifestPath)) {
+  warn(
+    "install manifest",
+    `no manifest at ${manifestPath} - the install predates it, so nothing can say whether these scripts are current. Re-run the installer.`
+  );
+} else {
+  let mf = null;
+  // Strip a BOM before parsing rather than treating one as corruption. PowerShell 5.1
+  // `Set-Content -Encoding utf8` writes one, and a manifest saved by a human in an
+  // editor can carry one too. Neither is a corrupted manifest - calling them one would
+  // send the operator to re-run an installer that already worked.
+  try {
+    mf = JSON.parse(readFileSync(manifestPath, "utf8").replace(/^\uFEFF/, ""));
+  } catch { /* reported below */ }
+  if (!mf || !mf.files) {
+    warn("install manifest", `${manifestPath} is unreadable or has no file list - re-run the installer.`);
+  } else {
+    const drifted = [];
+    const missing = [];
+    for (const [name, hash] of Object.entries(mf.files)) {
+      // Keys are paths relative to the skills root, because basename collides:
+      // SKILL.md exists under both factory/ and verify-app/.
+      const here = join(factorySkillDir, "..", name);
+      if (!existsSync(here)) { missing.push(name); continue; }
+      if (createHash("sha256").update(readFileSync(here)).digest("hex").toUpperCase() !== String(hash).toUpperCase()) {
+        drifted.push(name);
+      }
+    }
+    const age = mf.installed_at
+      ? Math.round((Date.now() - Date.parse(mf.installed_at)) / 86400000)
+      : null;
+    const when = age === null ? mf.installed_at : `${age} day(s) ago`;
+    if (drifted.length || missing.length) {
+      warn(
+        "installed scripts have changed since install",
+        `installed ${when} (bundle ${mf.bundle_commit || "unknown"}); ${drifted.length} file(s) edited since: ${drifted.join(", ") || "none"}` +
+          (missing.length ? `; ${missing.length} file(s) no longer present: ${missing.join(", ")}` : "") +
+          `${drifted.length || missing.length ? " - this run is measuring code that is not the current bundle. Re-run the installer before starting a feature." : ""}`
+        // The missing files are named, not just counted. A message that says "17
+        // files are missing" and then lists nothing is the same failure as a check
+        // that passes: it tells you something happened without telling you what.
+      );
+    } else {
+      console.log(`     install current as of ${when} (bundle ${mf.bundle_commit || "unknown"})`);
+    }
+  }
+}
+
 // Every hand-kept list of runtime scripts is a list that can go stale. On
 // 2026-10-11 mcp-defmatch.mjs was extracted out of factory-mcp.mjs so its
 // comparison could be unit-tested; both installers kept their old lists, shipped

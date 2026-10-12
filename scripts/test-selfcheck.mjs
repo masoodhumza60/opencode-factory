@@ -13,7 +13,8 @@
 // Run:  node scripts/test-selfcheck.mjs
 // Exits 0 when every expectation holds, 1 otherwise.
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, copyFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, copyFileSync, appendFileSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
@@ -440,6 +441,134 @@ try {
     const crashed = /Error:|throw|Cannot read/.test(r.out);
     report("live run emits a dcp verdict", hasVerdict && !crashed, r.line(/dcp: pruning active/) || "(no dcp dir yet)");
   }
+// The install manifest is the check that answers "is this run measuring current
+  // code?". It had NO test at all, and its pass->fail->pass was proved against a
+  // hand-written fixture rather than against the code - which is exactly how the
+  // installer and the reader ended up disagreeing about the path without anything
+  // failing. The drift assertions below exercise the reader; the seam assertions at
+  // the end read the installer's own source, because the two halves cannot be
+  // exercised together without running a real install.
+  {
+    const home = join(tmp, "home-manifest");
+    const dir = join(home, ".agents", "skills", "factory");
+    mkdirSync(join(dir, "docs"), { recursive: true });
+    mkdirSync(join(dir, "scripts"), { recursive: true });
+    mkdirSync(join(dir, "skills"), { recursive: true });
+    writeFileSync(join(dir, "SKILL.md"), "---\nname: factory\n---\n", "utf8");
+    for (const d of ["conductor.md", "how-factory-works.md", "plan-format.md", "discovery.md", "mcp-judging.md"]) {
+      writeFileSync(join(dir, "docs", d), "# fixture\n", "utf8");
+    }
+    for (const f of ["factory-phase.mjs", "factory-mcp.mjs", "factory-plan.mjs", "factory-skills.mjs", "factory-selfcheck.mjs", "platform.mjs"]) {
+      copyFileSync(join(BUNDLE, "scripts", f), join(dir, "scripts", f));
+    }
+    copyFileSync(join(BUNDLE, "skills", "catalog.yaml"), join(dir, "skills", "catalog.yaml"));
+
+    // Keys are paths relative to the skills root, which is the shape the installer
+    // writes. The reader resolves each key against factorySkillDir/.. , so a fixture
+    // using a different shape would compare files that do not exist.
+    const hashOf = (rel) =>
+      createHash("sha256")
+        .update(readFileSync(join(home, ".agents", "skills", rel)))
+        .digest("hex")
+        .toUpperCase();
+    const manifestFor = () => ({
+      installed_at: new Date().toISOString(),
+      bundle_commit: "fixture",
+      files: {
+        "factory/SKILL.md": hashOf("factory/SKILL.md"),
+        "factory/scripts/factory-phase.mjs": hashOf("factory/scripts/factory-phase.mjs"),
+      },
+    });
+    const manifestPath = join(dir, "install-manifest.json");
+    const inHome = { env: { USERPROFILE: home, HOME: home } };
+
+    // 1. Absent. The message must point at the SKILL directory: the bug was a reader
+    // that looked one level up, in the shared root, where it found nothing - or worse,
+    // something a probe had left behind.
+    const none = runSelfcheck([], inHome);
+    report(
+      "a missing manifest WARNs instead of passing silently",
+      none.line(/^WARN\s+install manifest/) !== "",
+      none.line(/install manifest/) || "(no verdict)",
+    );
+    report(
+      "and it names the manifest inside the skill directory",
+      none.out.includes("factory") && none.out.includes("install-manifest.json"),
+      none.line(/install manifest/) || "(no verdict)",
+    );
+
+    // 2. Matching hashes -> current. This is the state a real install is in.
+    writeFileSync(manifestPath, JSON.stringify(manifestFor(), null, 2), "utf8");
+    const ok = runSelfcheck([], inHome);
+    report(
+      "a manifest matching the files on disk reports the install current",
+      ok.line(/install current as of/) !== "",
+      ok.line(/install current/) || "(no verdict)",
+    );
+
+    // 3. Drift. This is the whole reason the check exists.
+    appendFileSync(join(dir, "scripts", "factory-phase.mjs"), "// edited after install\n");
+    const drifted = runSelfcheck([], inHome);
+    report(
+      "an edited installed script is reported as drifted",
+      drifted.line(/^WARN\s+installed scripts have changed since install/) !== "",
+      drifted.line(/changed since install/) || "(no verdict)",
+    );
+    report(
+      "the drift warning names the file and says the run is measuring stale code",
+      /factory\/scripts\/factory-phase\.mjs/.test(drifted.out) &&
+        /not the current bundle/.test(drifted.out),
+      drifted.line(/changed since install/) || "(no verdict)",
+    );
+
+    // 4. A BOM is not corruption. PowerShell 5.1 writes one, and a human editing the
+    // file in an editor can add one. Reading either as "unreadable" would send an
+    // operator to re-run an installer that already did its job.
+    writeFileSync(manifestPath, "﻿" + JSON.stringify(manifestFor()), "utf8");
+    const bom = runSelfcheck([], inHome);
+    report(
+      "a manifest written with a BOM still reads (stripped, not called corrupt)",
+      bom.line(/install current as of/) !== "",
+      bom.line(/install manifest|install current/) || "(no verdict)",
+    );
+
+    // 5. Genuinely corrupt is reported, not crashed on.
+    writeFileSync(manifestPath, "{ this is not json", "utf8");
+    const bad = runSelfcheck([], inHome);
+    report(
+      "a corrupt manifest warns and the selfcheck still finishes",
+      bad.line(/unreadable or has no file list/) !== "" && !/SyntaxError/.test(bad.out),
+      bad.line(/install manifest/) || "(no verdict)",
+    );
+
+    // ---- the seam ----
+    // Structural, not behavioural: these read the installer's own source, because
+    // proving the two halves agree by running a real install is not something this
+    // suite can do. Asserting them is still worth far more than nothing - the
+    // mismatch that shipped was four characters wide and nothing noticed it.
+    const installerSrc = readFileSync(join(BUNDLE, "install.ps1"), "utf8");
+    const selfcheckSrc = readFileSync(join(BUNDLE, "scripts", "factory-selfcheck.mjs"), "utf8");
+    const instLine = (installerSrc.match(/\$manifestPath\s*=.*/) || [""])[0];
+    const selfLine = (selfcheckSrc.match(/const manifestPath\s*=.*/) || [""])[0];
+    report(
+      "the installer writes the manifest beside the files it describes (not above the skill dir)",
+      /Join-Path\s*\(Split-Path\s+\$dstSk\)/.test(instLine),
+      instLine || "(no manifest write found in install.ps1)",
+    );
+    report(
+      "and the selfcheck reads it from that same skill directory, not one level up",
+      /join\(factorySkillDir,\s*"install-manifest\.json"\)/.test(selfLine) &&
+        !/factorySkillDir,\s*"\.\."/.test(selfLine),
+      selfLine || "(no manifest read found in factory-selfcheck.mjs)",
+    );
+    report(
+      "and the installer writes it without a BOM (PowerShell 5.1 Set-Content adds one)",
+      !/Set-Content[^\r\n]*\$manifestPath/.test(installerSrc) &&
+        /UTF8Encoding\s+\$false/.test(installerSrc),
+      "install.ps1 manifest write",
+    );
+  }
+
 } finally {
   // A locked temp dir is a cleanup inconvenience, not a test result; retry and
   // never let it turn a green suite red.
