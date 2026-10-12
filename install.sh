@@ -248,12 +248,12 @@ install_skills() {
     #     dirname(import.meta.url), so this set only works together.
     #   - factory-skills.mjs resolves its default catalog to ../skills/catalog.yaml
     #     relative to itself, so the catalog ships to <skill>/skills/catalog.yaml.
-    local runtime=(factory-phase.mjs factory-mcp.mjs factory-plan.mjs factory-skills.mjs factory-selfcheck.mjs platform.mjs mcp-defmatch.mjs)
+    local runtime=(factory-phase.mjs factory-mcp.mjs factory-plan.mjs factory-skills.mjs factory-selfcheck.mjs platform.mjs mcp-defmatch.mjs measure.mjs)
     if [ "$DRY_RUN" = 1 ]; then
         dry "cp \"$src_sk\" \"$agents_skills/factory/\""
         dry "cp \"$bundle/skills/verify-app/SKILL.md\" \"$agents_skills/verify-app/\""
         dry "cp \"$bundle/docs/conductor.md\" \"$bundle/docs/how-factory-works.md\" \"$bundle/docs/plan-format.md\" \"$bundle/docs/discovery.md\" \"$bundle/docs/mcp-judging.md\" \"$agents_skills/factory/docs/\""
-        dry "cp \"$bundle/scripts/{factory-phase,factory-mcp,factory-plan,factory-skills,factory-selfcheck,platform,mcp-defmatch}.mjs\" \"$agents_skills/factory/scripts/\""
+        dry "cp \"$bundle/scripts/{factory-phase,factory-mcp,factory-plan,factory-skills,factory-selfcheck,platform,mcp-defmatch,measure}.mjs\" \"$agents_skills/factory/scripts/\""
         dry "cp \"$bundle/skills/catalog.yaml\" \"$agents_skills/factory/skills/\""
         dry "cp \"$bundle/config/mcp-requirements.json\" \"$agents_skills/factory/config/\""
         return
@@ -277,7 +277,7 @@ install_skills() {
         else
             mkdir -p "$agents_skills/factory/scripts"
             for s in "${runtime[@]}"; do cp "$bundle/scripts/$s" "$agents_skills/factory/scripts/"; done
-            say "factory runtime scripts installed -> $agents_skills/factory/scripts/ (${#runtime[@]} files: phase, mcp, plan, skills, selfcheck, platform)"
+            say "factory runtime scripts installed -> $agents_skills/factory/scripts/ (${#runtime[@]} files: phase, mcp, plan, skills, selfcheck, platform, defmatch, measure)"
         fi
         if [ -f "$bundle/skills/catalog.yaml" ]; then
             mkdir -p "$agents_skills/factory/skills"
@@ -298,6 +298,50 @@ install_skills() {
             say "warning: $bundle/config/mcp-requirements.json missing - factory-mcp.mjs scope will keep no server and audit will label them all as the user's."
         fi
         say "factory skill installed -> $agents_skills/factory/SKILL.md (self-contained: docs/ ships conductor + how-factory-works; scripts/ ships what those docs name)"
+# The manifest: what was written, so factory-selfcheck.mjs can compare three ways
+    # instead of two. bundle_path is recorded rather than derived, because a derived path
+    # is a rule that can be wrong without saying so - and without it the check can see a
+    # hand-edited install but is blind to the bundle moving ahead, which is the direction
+    # that actually runs the wrong code.
+    _sha256_of() {
+        if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1
+        elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | cut -d' ' -f1
+        else echo ""; fi
+    }
+    if [ -z "$(command -v sha256sum || command -v shasum)" ]; then
+        say "warning: no sha256sum or shasum - install manifest not written, so the staleness check cannot run."
+    else
+        _bundle_commit="$(git -C "$bundle" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+        _manifest_files=""
+        _manifest_n=0
+        # Keyed by path relative to the skills root, not by basename: SKILL.md exists
+        # under both factory/ and verify-app/, and a basename key collides - the second
+        # write silently overwrites the first. SKILL.md is also the one file the bundle
+        # holds at a DIFFERENT path (skills/<skill>/SKILL.md), so its source is special
+        # cased. Resolved here and stored, so a wrong mapping shows up as an
+        # uncomparable file rather than a quiet "current".
+        for _f in "$agents_skills/factory/SKILL.md" "$agents_skills/verify-app/SKILL.md" \
+                  "$agents_skills"/factory/docs/*.md "$agents_skills"/factory/scripts/*.mjs \
+                  "$agents_skills/factory/skills/catalog.yaml" \
+                  "$agents_skills/factory/config/mcp-requirements.json"; do
+            [ -f "$_f" ] || continue
+            _rel="${_f#"$agents_skills"/}"
+            _rest="${_rel#*/}"
+            if [ "$_rest" = "SKILL.md" ]; then _src_rel="skills/$_rel"; else _src_rel="$_rest"; fi
+            _h="$(_sha256_of "$_f")"
+            [ -n "$_h" ] || continue
+            if [ -f "$bundle/$_src_rel" ]; then _src="$_src_rel"; else _src=""; fi
+            [ "$_manifest_n" -gt 0 ] && _manifest_files="${_manifest_files},"
+            _esc="$(printf '%s' "$_rel" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
+            _manifest_files="${_manifest_files}\"${_esc}\":{\"hash\":\"${_h}\",\"src\":\"${_src}\"}"
+            _manifest_n=$((_manifest_n + 1))
+        done
+        _installed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u +%Y-%m-%d)"
+        _mp="$agents_skills/factory/install-manifest.json"
+        printf '{\n  "installed_at": "%s",\n  "bundle_commit": "%s",\n  "bundle_path": "%s",\n  "files": {%s}\n}\n' \
+            "$_installed_at" "$_bundle_commit" "$bundle" "$_manifest_files" > "$_mp"
+        say "install manifest written -> $_mp ($_manifest_n files, bundle $_bundle_commit at $bundle)"
+    fi
     else
         say "warning: $src_sk not in bundle yet (conductor skill lands with the docs/discovery task); skip - re-run install once it is present."
     fi
