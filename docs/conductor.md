@@ -48,6 +48,35 @@ Role boundaries:
 the debug phase with `systematic-debugging` before fixes are allowed (no
 ad-hoc fixes).
 
+### Bounded work still writes a spec - a short one
+
+The `brainstorming` skill says bounded work gets "the in-chat design/probe"
+and "no spec file". This pipeline says phase 2 always produces one, and the
+phase machine **refuses** to enter phase 2 without it. Both are right about
+different things, and an agent left to work that out mid-phase will guess.
+
+- **The conductor and the phase machine own the pipeline.** A spec artifact is
+  required to enter phase 2. That is machine-enforced, not a matter of taste:
+  `ARTIFACTS` refuses the entry and names the file and directory it looked in.
+- **The skill owns the conversation.** It decides how much design happens
+  before anything gets written down.
+
+So classify out loud, and let the classification change the spec's **length**,
+never its existence.
+
+- **Architectural** - the full written spec, reviewed at Gate A, as the skill
+  describes.
+- **Bounded** - discuss the short design in chat, get the human's approval
+  there, then write a brief spec recording what was agreed: the behaviour, the
+  decisions, and the shape of the tests. If that is under a page, that is
+  correct output, not a spec that failed to get written.
+
+A phase-2 agent in a real run resolved this by inventing the phrase "bounded
+in substance, spec in form" and reporting it in its reply instead of writing
+it down, so the next agent has to re-derive it. That is the cost of leaving
+the contradiction in place: it is not wrong enough to fail a check, which is
+exactly why nothing caught it.
+
 ## Journey (spec §5.3)
 
 ```
