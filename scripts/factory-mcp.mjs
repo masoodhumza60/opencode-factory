@@ -551,7 +551,13 @@ function toggle() {
 
   const want = which === "enable";
 
-  if (current === want) {
+  // `recorded !== null` matters as much as `current === want`. If global already
+  // agrees and this project has said nothing, the answer is not "no change" -
+  // it is "the project's server set is inherited rather than stated". scope()
+  // reached that conclusion independently (see its `want && recorded === null`
+  // term); two paths asking slightly different questions is how a preview comes
+  // to disagree with the write it was previewing.
+  if (current === want && recorded !== null) {
     say(`mcp ${name} is already ${which}d (no change)`);
     out({ ok: true, changed: false, scope: "project", server: name, enabled: want, disabled: !want, config: target, globalUntouched: globalPath });
     return;
@@ -559,7 +565,7 @@ function toggle() {
 
   if (has("--dry-run")) {
     say(`mcp ${name}: would set disabled=${!want} (${want ? "enabled" : "disabled"}) for THIS PROJECT in ${displayPath(target)}`);
-    out({ ok: true, changed: false, dryRun: true, scope: "project", server: name, enabled: want, disabled: !want, config: target, globalUntouched: globalPath });
+    out({ ok: true, changed: true, dryRun: true, scope: "project", server: name, enabled: want, disabled: !want, config: target, globalUntouched: globalPath });
     return;
   }
 
@@ -681,7 +687,7 @@ function scope() {
   if (has("--dry-run")) {
     for (const p of plan) say(`  ${p.name}: disabled=${!p.current} -> ${!p.want} (${p.current ? "enabled" : "disabled"})${p.change ? "" : " (already correct)"}${p.current === p.want ? " (recorded)" : ""}`);
     say(`scope: would set ${todo.length} of ${names.length} server(s) for THIS PROJECT in ${displayPath(target)}`);
-    out({ ok: true, changed: false, dryRun: true, scope: "project", config: target, globalUntouched: globalPath, allow: [...allow], servers: plan });
+    out({ ok: true, changed: todo.length > 0, dryRun: true, scope: "project", config: target, globalUntouched: globalPath, allow: [...allow], servers: plan });
     return;
   }
   if (!todo.length) {

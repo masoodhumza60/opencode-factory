@@ -337,9 +337,38 @@ check("enabling an already-enabled project is a no-op, not an error", r.code ===
   const before = existsSync(join(d3, "opencode.json")) ? readTextFile(join(d3, "opencode.json")) : null;
   r = inProject(["enable", "live", "--config", g, "--dry-run", "--json"], d3);
   check("--dry-run reports success", r.code === 0, r.out);
-  check("--dry-run says it did not write", r.json?.changed === false, r.out);
+  // The changed field does not mean "did it write" - it means "would it
+  // change", and those are different questions. Conflating them is how the
+  // preview came to disagree with the write it was previewing: this assertion
+  // used to demand changed:false here, which held the bug in place. Whether a
+  // file was written is asserted by the two checks below; this one says the
+  // preview is honest about what it would do.
+  check("--dry-run predicts the change it would make", r.json?.changed === true, r.out);
   check("--dry-run writes no file at all", !existsSync(join(d3, "opencode.json")), "dry-run created the project config");
   if (before !== null) check("--dry-run left an existing file alone", readTextFile(join(d3, "opencode.json")) === before, "dry-run changed the file");
+
+// A preview and the write it previews must tell the same story. Nothing asserted
+// that before, which is why a hardcoded changed:false survived a 244-test suite:
+// every test asked what the file looked like, never what the two reports said.
+// This asks the question directly, and fails on either mismatch.
+{
+  const g = config("parity.json", { mcp: { servers: { live: { type: "local", command: ["node", "x"], disabled: true } } } });
+  const pd = project("parity-dry");
+  const pr = project("parity-real");
+  const a = inProject(["enable", "live", "--config", g, "--dry-run", "--json"], pd);
+  const b = inProject(["enable", "live", "--config", g, "--json"], pr);
+  check("parity: a globally-off server unrecorded projects as a change in the preview",
+    a.json?.changed === true, a.out);
+  check("parity: the write agrees with the preview about that change",
+    a.json?.changed === b.json?.changed, "preview=" + JSON.stringify(a.json?.changed) + " write=" + JSON.stringify(b.json?.changed));
+  const pdFile = existsSync(join(pd, "opencode.json"));
+  const prFile = existsSync(join(pr, "opencode.json"));
+  check("parity: the preview still wrote nothing", pdFile === false, "the dry-run created a file");
+  check("parity: the real run did write", prFile === true, "the real run created no file");
+  check("parity: only the real run reports restartRequired",
+    b.json?.restartRequired === true && a.json?.restartRequired === undefined,
+    "preview=" + JSON.stringify(a.json?.restartRequired) + " write=" + JSON.stringify(b.json?.restartRequired));
+}
 }
 
 r = inProject(["enable", "not-a-server", "--config", g, "--json"], project("t4"));
@@ -600,7 +629,8 @@ const scopeConfig = () => config("scope.json", {
   const d = project("tscope6");
   const r = inProject(["scope", "--config", scopeConfig(), "--dry-run", "--json"], d);
   check("--dry-run writes no file", !existsSync(join(d, "opencode.json")), "dry-run created a file");
-  check("--dry-run reports changed:false", r.json?.changed === false, r.out);
+  // Every server in this fixture changes, so a truthful preview reports true.
+  check("--dry-run reports changed:true when the plan changes servers", r.json?.changed === true, r.out);
   check("--dry-run still plans every server", (r.json?.servers || []).length === 3, r.out);
 }
 {
