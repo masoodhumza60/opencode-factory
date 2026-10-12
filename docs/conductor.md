@@ -236,14 +236,30 @@ Two traps worth naming, because both cost real time:
 
 ## Which servers this project runs
 
-On **start** and on **resume**, before anything else:
+On **start** and on **resume**, before anything else, run `scope` with
+every server this kind of app needs kept on:
 
-    node <bundle>/scripts/factory-mcp.mjs scope
+    node <bundle>/scripts/factory-mcp.mjs scope --allow graft[,<more>]
 
-That turns off every configured MCP server for **this project only** and
-records the ones you keep. Default: everything except `graft` off; `--allow a,b`
-to keep more. Run it again when the project gains a server you want, or drops
-one.
+**Decide that allowlist now, not when a later phase needs it.** MCP servers
+spawn at session start, so `enable` reports `restartRequired: true` - a server
+turned on mid-run stays off until you restart. Ask what kind of app this is
+first, then:
+
+| This project has | Keep |
+|---|---|
+| a web page a person uses | `--allow graft,chrome-devtools` |
+| an HTTP API or a CLI only | `--allow graft` |
+
+The default keeps only `graft`. That default has already cost a run
+its verification path: a project with a web page ran the bare command, the
+start step turned off `chrome-devtools`, and phase 5 found it disabled three phases
+later. The agent built a fallback driver instead, and the fallback worked, so
+the run read clean. Nothing failed - the run was quietly half verified.
+
+It turns off every other configured MCP server for **this project only** and
+records the ones you keep, so the set is stated rather than inherited. Run it
+again when the project gains a server you want, or drops one.
 
 Why per-project rather than per-machine: a global MCP toggle changes every
 project on the laptop, including the ones you are not working on. This writes
