@@ -30,18 +30,35 @@ import { execFileSync } from "node:child_process";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BUNDLE = resolve(HERE, "..");
-const TEMPLATE = join(BUNDLE, "testapps", "orderboard");
+const APPS = {
+  orderboard: {
+    label: "orderboard (browser app: React + Vite, the UI IS the product)",
+    commit: "seed: orderboard (canonical test app, feature unimplemented)",
+    feature: ["src/orders/csv.ts", "src/orders/csv.test.ts", "src/orders/range.ts", "src/orders/range.test.ts"],
+  },
+  "orderboard-api": {
+    label: "orderboard-api (HTTP API + SQLite behind a thin admin page)",
+    commit: "seed: orderboard-api (canonical test app, feature unimplemented)",
+    feature: ["src/export.js", "src/export.test.js", "src/routes/export.js"],
+  },
+};
 
 const args = process.argv.slice(2);
+
+// Resolve the app AFTER args exists: the first bare word is the app name, the
+// second is the target directory. Naming one app here would be hardcoding.
+const app = args.find((a) => !a.startsWith("--") && APPS[a]) || "orderboard";
+const APP = APPS[app];
+const TEMPLATE = join(BUNDLE, "testapps", app);
 const dryRun = args.includes("--dry-run");
 const noInstall = args.includes("--no-install");
 const json = args.includes("--json");
-const target = resolve(args.find((a) => !a.startsWith("--")) || "");
+const target = resolve(args.filter((a) => !a.startsWith("--") && !APPS[a])[0] || "");
 
 // Files the feature under test would create. If the template grows one of these
 // the seed is no longer a blank slate and every measurement against it is
 // measuring nothing, so this is a hard failure rather than a warning.
-const FEATURE_FILES = ["src/orders/csv.ts", "src/orders/csv.test.ts", "src/orders/range.ts", "src/orders/range.test.ts"];
+const FEATURE_FILES = APP.feature;
 
 const say = (...a) => { if (!json) console.log(...a); };
 const emit = (o) => { if (json) console.log(JSON.stringify(o)); };
@@ -98,13 +115,14 @@ const git = (a) => execFileSync("git", a, { cwd: target, stdio: ["ignore", "pipe
 try {
   git(["init", "-q"]);
   git(["add", "-A"]);
-  git(["-c", "user.name=factory", "-c", "user.email=factory@localhost", "commit", "-q", "-m", "seed: orderboard (canonical test app, feature unimplemented)"]);
+  git(["-c", "user.name=factory", "-c", "user.email=factory@localhost", "commit", "-q", "-m", APP.commit]);
   say("seed-testapp: git repository initialised with one seed commit");
 } catch (e) {
   die(`could not initialise a git repository in ${target}: ${(e.stderr || e.message).toString().trim()}`, "git-failed");
 }
 
-if (!noInstall) {
+const hasLock = readdirSync(TEMPLATE).includes("package-lock.json");
+if (!noInstall && hasLock) {
   say("seed-testapp: npm ci (this is what makes tsc and vitest genuinely runnable)");
   try {
     // On Windows the npm entry point is npm.cmd, and a spawned process cannot
@@ -127,4 +145,4 @@ if (!noInstall) {
 say("");
 say("next: open a session in that directory and run the factory against a feature.");
 say(`seed-testapp: ${files.length} file(s), feature absent, git ready.`);
-emit({ ok: true, target, files: files.length, installed: !noInstall });
+emit({ ok: true, app, target, files: files.length, installed: !noInstall });

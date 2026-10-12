@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Orderboard</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main>
+    <h1>Orderboard</h1>
+
+    <section id="signin" class="card">
+      <label for="name">Sign in as</label>
+      <select id="name">
+        <option value="admin">admin</option>
+        <option value="viewer">viewer</option>
+      </select>
+      <button id="signin-btn" type="button">Sign in</button>
+      <p id="signin-error" class="error" role="alert" hidden></p>
+    </section>
+
+    <section id="orders" hidden>
+      <p id="who"></p>
+      <table>
+        <thead>
+          <tr><th>Order</th><th>Customer</th><th>Placed</th><th>Status</th><th>Amount</th></tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <p id="empty" class="muted" hidden>No orders yet.</p>
+    </section>
+  </main>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
