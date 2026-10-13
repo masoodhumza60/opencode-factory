@@ -241,10 +241,12 @@ every server this kind of app needs kept on:
 
     node <bundle>/scripts/factory-mcp.mjs scope --allow graft[,<more>]
 
-**Decide that allowlist now, not when a later phase needs it.** MCP servers
-spawn at session start, so `enable` reports `restartRequired: true` - a server
-turned on mid-run stays off until you restart. Ask what kind of app this is
-first, then:
+**Decide that allowlist now, not when a later phase needs it.** `/mcps` connects a
+server live but does not persist it; the config write is what survives a
+restart. Whether the *running* session picks up a config edit without one is
+not documented either way, so `enable` reports `liveReload: "unverified"`
+rather than telling you either "fine" or "restart". If a turn-on appears to do
+nothing, restart and try again. Ask what kind of app this is first, then:
 
 | This project has | Keep |
 |---|---|
@@ -606,7 +608,7 @@ is visible in the repo before a phase relies on it.
 | `factory discover` | Run the skill-discovery flow (below); idempotent. |
 | `measure` (`scripts/measure.mjs`) | Token spend for a project, split into **orchestrator** vs **subagent** sessions, reported as input and cache-read separately (a cache read is roughly a tenth of a fresh input token, so collapsing the two makes a session that re-read the same context look like one that consumed it). The split exists because the cost problem lives on the orchestrator side, not the subagent side. This is a **report, not a gate** — it blocks nothing. The turn budget is a judgement you make with this number in front of you. |
 | `factory mcp audit` | Inventory the configured MCP servers: owner (bundle or the user), live or disabled, whether each needs a credential, and the context it injects into every model call. Read-only; it never edits the config. |
-| `factory mcp enable` / `disable <server>` | Connect or disconnect one server **for this project only**, writing `mcp.<server>.enabled` into the project's `opencode.json`. Never the global config: a global toggle changes every project on the machine, including ones somebody is working in right now. Refuses when there is no project (no `.git` above the working directory). The write is verified by re-reading the file and rolled back if it cannot be, and the output says a restart is needed — because a toggle that appears to work and silently does not is worse than none. |
+| `factory mcp enable` / `disable <server>` | Connect or disconnect one server **for this project only**, writing `mcp.servers.<server>.disabled` into the project's `opencode.json`. Never the global config: a global toggle changes every project on the machine, including ones somebody is working in right now. Refuses when there is no project (no `.git` above the working directory). The write is verified by re-reading the file and rolled back if it cannot be, and the output reports `liveReload: "unverified"` rather than claiming the change is live or demanding a restart, because a toggle that appears to work and silently does not is worse than none. |
 | `factory mcp handshake` | Spawn a local stdio server and speak the real protocol, proving it answers rather than assuming it. See `docs/mcp-judging.md`. |
 | `factory onboard` | Per-repo one-time check: `bd init` if no beads DB, `graft build` if no graph **or the graph is empty (0 nodes — an empty `wiring.json` counts as "no graph"**, same rule as phases 4/4' freshness), then `factory discover`. Auto-offered when the conductor starts in a repo without state. The graph is rebuilt again whenever phases 4/4' find it empty or stale (see "Graft context freshness"). |
 | `factory selfcheck` | Environment health (from the spec's verification section): plugins load, the graft MCP completes a real handshake (serverInfo, the tool list, and the instructions it injects into every call; 0 tools is a legitimate state, not a failure), `bd version` and `graft --version` resolve, and every mandatory phase skill is discoverable. `--tokens` adds a per-skill description-size + total loaded-footprint report — the **required** flag for keeping the loaded footprint visible, plus the current orchestrator session's own input and cache-read spend (the number the turn-budget decision in "Cost discipline" is actually made against) (spec §8). |

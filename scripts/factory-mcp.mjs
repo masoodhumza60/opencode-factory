@@ -606,7 +606,7 @@ function toggle() {
   // OpenCode reads its config at startup, so a toggle that appears to work and
   // silently does not is worse than one that says when it will take effect.
   say(platform().reloadHint(displayPath(target)));
-  out({ ok: true, changed: true, scope: "project", server: name, enabled: want, disabled: !want, config: target, globalUntouched: globalPath, restartRequired: true });
+  out({ ok: true, changed: true, scope: "project", server: name, enabled: want, disabled: !want, config: target, globalUntouched: globalPath, liveReload: "unverified" });
 }
 
 // scope: the start/resume behaviour. Everything not on the allowlist is turned
@@ -728,7 +728,7 @@ function scope() {
   say(`  allowed: ${[...allow].join(", ")}`);
   say(`  global config untouched - other projects are unaffected`);
   say(platform().reloadHint(displayPath(target)));
-  out({ ok: true, declared: requiredServers(), declaredButAbsent: unknown, changed: true, scope: "project", config: target, globalUntouched: globalPath, allow: [...allow], servers: plan, changed_servers: todo.map((p) => p.name), disabled: todo.map((p) => !p.want), restartRequired: true });
+  out({ ok: true, declared: requiredServers(), declaredButAbsent: unknown, changed: true, scope: "project", config: target, globalUntouched: globalPath, allow: [...allow], servers: plan, changed_servers: todo.map((p) => p.name), disabled: todo.map((p) => !p.want), liveReload: "unverified" });
 }
 
 // ---------------------------------------------------------------- search ---
@@ -1089,7 +1089,7 @@ async function add() {
   say(`  global config untouched - other projects are unaffected`);
   say(platform().reloadHint(displayPath(target)));
   out({ ok: true, changed: true, scope: "project", key, from: best.name, version: best.version,
-    target: def.type, definition: def, config: target, cached, restartRequired: true });
+    target: def.type, definition: def, config: target, cached, liveReload: "unverified" });
 }
 
 const cmd = argv[0];

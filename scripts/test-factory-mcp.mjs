@@ -293,7 +293,9 @@ const inProject = (args, dir) => run(args, { cwd: dir });
 {
   const d = project("tjson");
   const first = inProject(["enable", "chrome", "--config", toggleConfig(), "--json"], d);
-  check("a real change claims a restart", first.json?.changed === true && first.json?.restartRequired === true, first.out);
+  check("a real change reports live reload as unverified and makes no restart claim",
+    first.json?.changed === true && first.json?.liveReload === "unverified" && first.json?.restartRequired === undefined,
+    first.out);
   const again = inProject(["enable", "chrome", "--config", toggleConfig(), "--json"], d);
   check("the second identical call is a no-op that claims no restart",
     again.json?.changed === false && again.json?.restartRequired === undefined, again.out);
@@ -365,9 +367,9 @@ check("enabling an already-enabled project is a no-op, not an error", r.code ===
   const prFile = existsSync(join(pr, "opencode.json"));
   check("parity: the preview still wrote nothing", pdFile === false, "the dry-run created a file");
   check("parity: the real run did write", prFile === true, "the real run created no file");
-  check("parity: only the real run reports restartRequired",
-    b.json?.restartRequired === true && a.json?.restartRequired === undefined,
-    "preview=" + JSON.stringify(a.json?.restartRequired) + " write=" + JSON.stringify(b.json?.restartRequired));
+  check("parity: only the real run says anything about reload",
+    b.json?.liveReload === "unverified" && a.json?.liveReload === undefined && b.json?.restartRequired === undefined,
+    "preview=" + JSON.stringify(a.json?.liveReload) + " write=" + JSON.stringify(b.json?.liveReload));
 }
 }
 
@@ -422,11 +424,13 @@ check("enable with no server name fails with usage", r.code === 1 && r.json?.sta
   r = inProject(["enable", "chrome", "--config", g, "--json"], d9);
   // First call above already toggled t9, so THIS is the no-op: claiming a
   // restart there would tell someone to reload for nothing.
-  check("a no-op does not claim a restart is needed", r.json?.changed === false && r.json?.restartRequired === undefined, r.out);
+  check("a no-op says nothing about reload at all",
+    r.json?.changed === false && r.json?.liveReload === undefined && r.json?.restartRequired === undefined, r.out);
   r = inProject(["enable", "chrome", "--config", g, "--json"], d9);
   // The previous call already toggled this project, so this is the no-op path:
   // claiming a restart there would be telling someone to reload for nothing.
-  check("a no-op does not claim a restart is needed", r.json?.changed === false && r.json?.restartRequired === undefined, r.out);
+  check("a no-op says nothing about reload at all",
+    r.json?.changed === false && r.json?.liveReload === undefined && r.json?.restartRequired === undefined, r.out);
   check("the JSON reports the global file it did NOT touch", r.json?.globalUntouched !== undefined, r.out);
 }
 
@@ -591,7 +595,8 @@ const scopeConfig = () => config("scope.json", {
   const wrong = ["live", "github"].filter((n) => w[n].disabled !== true);
   check("the written file itself disables the non-allowed servers", wrong.length === 0, "still on: " + wrong.join(", "));
   check("the written file itself enables the allowed server", w.graft.disabled === false, JSON.stringify(w));
-  check("a real change claims a restart", r.json?.restartRequired === true, r.out);
+  check("a real change reports live reload as unverified and makes no restart claim",
+    r.json?.liveReload === "unverified" && r.json?.restartRequired === undefined, r.out);
 }
 {
   const d = project("tscope3");

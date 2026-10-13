@@ -49,8 +49,11 @@ and read what it actually reports.
 
 Every write is followed by a re-read: if the file cannot be parsed back, or
 does not read back as the state requested, the original bytes are restored.
-OpenCode reads its config at startup, so both forms of output say a restart is
-required — and say *nothing* about restarting when nothing changed, because
+The write is persistent, so it survives a restart. Whether the running session
+picks it up without one is **unverified** — `/mcps` connects live but does not
+persist, and the docs are silent on the config-write path in both directions.
+So a real change reports `liveReload: "unverified"` rather than claiming
+either outcome, and says *nothing* about reload when nothing changed, because
 telling someone to reload for a no-op trains them to ignore the line.
 
 `audit` reports every configured server with its owner (bundle-owned or the

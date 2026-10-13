@@ -43,11 +43,25 @@ export const PROFILES = {
       db: () => join(homedir(), ".local", "share", "opencode", "opencode.db"),
       pluginData: (name) => join(homedir(), ".local", "share", "opencode", "storage", "plugin", name),
     },
-    // OpenCode reads config once at startup; a config edit cannot reach the
-    // running process. Every script that writes config says this out loud,
-    // because a toggle that appears to work and silently does not is the worst
-    // outcome available.
-    reloadHint: (p) => `restart OpenCode for this to take effect (it reads ${p} at startup)`,
+    // What we know, and what we do not.
+    //
+    // KNOWN: this file is the config, so a write is persistent and survives a
+    // restart.
+    // NOT KNOWN: whether the running process picks the write up without one.
+    // The V2 docs document that `/mcps` connects and disconnects
+    // a server live with no restart, and they never say a config edit reloads
+    // live - but they never say it does not either. This bundle asserted a
+    // restart was required, and never tested it. The assertion sat in three
+    // payloads and one shared hint, seven test assertions enforced it, and a
+    // doc section was written on top of it as if it were a finding. A guess
+    // printed in a payload becomes a premise nobody re-checks.
+    //
+    // So the hint states the known half and gives the unknown half as advice
+    // rather than as fact: a toggle that appears to work and silently does not
+    // is the worst outcome available, and "restart if nothing changes" is true
+    // advice whether or not the restart was ever necessary.
+    reloadHint: (p) =>
+      `wrote ${p} - persistent, so it survives a restart. Whether this session picks it up without one is unverified: if nothing changes, restart`,
   },
 };
 
