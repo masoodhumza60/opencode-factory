@@ -260,6 +260,16 @@ const REPAIR = PHASES.find((p) => p.detour);
 // at Gate C, not the machine.
 const FINDING_PHASES = new Set(["5", "6"]);
 
+// An UNFINISHED ship phase joins them, for one reason, and only while unfinished.
+// The gate at 7 is machine-enforced, so when a human rejects the work there
+// is nothing left to appeal to: resolving the gate leaves `complete 7` - which
+// ships exactly what was rejected - and 7 was the one phase with nowhere to go.
+// A real run hit this: the approver ruled "fix it" and the only legal moves
+// were to ship it or to go nowhere. Ship is deliberately still absent from
+// FINDING_PHASES, so a run that has ALREADY shipped is still offered no
+// detour - there is nothing left to reject. Only an unfinished one is.
+const UNFINISHED_REPAIR_PHASES = new Set(["7"]);
+
 // ---- legality ------------------------------------------------------------------
 
 function legalNext(bead) {
@@ -321,10 +331,23 @@ function legalNext(bead) {
   // `bd ready`-style emptiness would hide "GATE A pending" behind a phase that
   // is merely unfinished. `blockedOn` is what actually refuses the entry.
   if (done !== phase && !nxt.detour) {
-    return {
-      phase, done, candidates: [nxt.id], blockedOn: phase,
-      note: `phase ${phase} (${cur.name}) is in progress - complete it before advancing`,
-    };
+    // Listed but blocked, except the detour, which is always available. An
+    // unfinished phase that can still produce a finding needs somewhere to go
+    // and fix it BEFORE it is complete - that is the whole point of a phase
+    // that finds things. Offering the detour only once the phase is complete
+    // would mean the finding has to be carried into the next phase by hand.
+    const repair = (FINDING_PHASES.has(phase) || UNFINISHED_REPAIR_PHASES.has(phase)) && REPAIR
+      ? [REPAIR.id]
+      : [];
+    return repair.length
+      ? {
+          phase, done, candidates: [nxt.id, ...repair], blockedOn: phase, alwaysLegal: repair,
+          note: `phase ${phase} (${cur.name}) is in progress - complete it before advancing; ${repair[0]} is always available`,
+        }
+      : {
+          phase, done, candidates: [nxt.id], blockedOn: phase,
+          note: `phase ${phase} (${cur.name}) is in progress - complete it before advancing`,
+        };
   }
   // The debug detour is a BRANCH off every phase that can surface a defect, not
   // just off implement. Verify and review exist to find things that are wrong,

@@ -377,6 +377,30 @@ if (findings) {
     !/\b4p\b/.test(legalOf(r.out)), r.out);
 }
 
+// A human rejecting the work at Gate C is the one finding the machine could
+// not act on. The gate is machine-enforced, so resolving it meant the only
+// legal move left was `complete 7` - shipping exactly what was rejected -
+// and the repair detour, which exists on 5 and 6, was unreachable from 7.
+// Found by run 3: the approver ruled "fix it" and the choices were ship it or
+// go nowhere. Note the asymmetry this is checking: a COMPLETED ship still
+// offers no detour, because there is nothing left to reject. Only an
+// unfinished one does.
+const rejected = newBead("gate c rejects a review finding feature");
+if (rejected) {
+  for (const p of ["0", "1", "2", "3", "4", "5", "6"]) {
+    phase(["enter", rejected, p, "--reason", `walk toward ship (${p})`, "--quiet"]);
+    completePhase(rejected, p, `phase ${p} done`);
+    openGate();
+  }
+  phase(["enter", rejected, "7", "--reason", "ship", "--quiet"]);
+  openGate();
+  r = phase(["next", rejected, "--quiet"]);
+  check("an UNFINISHED ship phase offers the repair detour, so a Gate C rejection is actionable",
+    /\b4p\b/.test(legalOf(r.out)), r.out);
+  r = phase(["enter", rejected, "4p", "--reason", "fix what Gate C rejected", "--quiet"]);
+  check("and a Gate C rejection can be routed to it", r.code === 0, r.out);
+}
+
 r = phase(["handoff", bead, "--quiet"]);
 check("handoff without --next is REFUSED", r.code === 1 && has(r.out, "--next is required"), r.out);
 r = phase(["handoff", bead, "--next", "run vitest"]);

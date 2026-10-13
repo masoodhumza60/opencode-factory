@@ -189,6 +189,19 @@ Seven properties worth relying on:
   as standing state after the run has returned to implement. It is reported as
   incoherent rather than cleared, and it does not block anything.
 
+- **An unfinished ship phase still offers the repair detour.** Verify and
+  review are branching phases: they exist to find defects, so they must have
+  somewhere to go and fix them. Ship was deliberately left out of that set,
+  because a shipped run has nothing left to reject - a completed phase 7 offers
+  no detour, and that is intended. But the gate at ship is *machine-enforced*:
+  resolving Gate C unblocks `complete 7`, so a human who rejects the work at
+  Gate C is left with exactly two moves - ship the thing they just rejected, or
+  go nowhere. Found by a real run where the reviewer found a defect, the human
+  ruled "do not ship, fix it", and `enter <bead> 4p` was refused as an illegal
+  transition. Phase 7 while *incomplete* now offers the detour alongside the
+  blocked advance, and `next` reports both facts at once: the advance is
+  blocked, and the detour is available. Walking back out costs 4 -> 5 -> 6 -> 7,
+  so a rejection costs a re-run rather than a bypass.
 If the script refuses you, that is the gate working, not a bug to route
 around. Fix the state or ask the human — do not start writing files anyway.
 
