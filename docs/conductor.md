@@ -443,6 +443,58 @@ approval; a resolved gate is.
   `finishing-a-development-branch`, and the commits were made with
   `commit-work` — and the human approves the ship.
 
+### What the human must actually see at a gate
+
+`--booted` proves the app answered once. `verify-app` makes that claim
+re-checkable. Neither proves **a human looked at it and was satisfied** — so
+without the rule below a gate is satisfied by the machine's evidence while the
+human's attention is spent somewhere else entirely.
+
+**Present the artifact inline, at every gate, before asking for approval:**
+
+1. **What it says** — the decisions themselves, in prose, not a file listing.
+2. **What it commits the project to** — stack, shape and scope, in words the
+   human can disagree with.
+3. **What it leaves open** — every question it did not answer, named out loud.
+
+Then give the path. **Never request approval of a path alone.** An approval
+given without having seen the content is not an approval — record it in the run
+report as what it was, never as "Gate A satisfied".
+
+The state layer cannot enforce any of this; it can only check that a gate was
+resolved. That gap is deliberate and it is yours to close with your attention,
+which is the entire reason a human stands at this gate. A gate nobody read is a
+gate that was never really there.
+
+### Gate C also rules on the running app
+
+Green tests are not evidence the product is finished. They are evidence the
+claims made in code hold, which is a strictly smaller claim. Before Gate C can
+resolve, for anything with a user-facing surface:
+
+1. **Run it, and say how** — report the URL and the exact command.
+2. **Show it** — screenshots of the real thing at real viewport sizes, not a
+   description of what it does.
+3. **Answer two questions in prose first.** These are the questions a checklist
+   cannot hold, which is exactly why they belong here and not in the ledger:
+   - *"If a user opened this for the first time and left inside ten seconds,
+     what did they think it was?"*
+   - *"What would you do differently with two more days, and what would each
+     of those changes be worth to a user?"*
+
+   Neither has a verifiable answer. An agent that answers either with a spec
+   reference, a task count or a test count has not answered it.
+4. **Then ask the human to rule on what they saw.**
+
+**Measured, in the `bio-link` run.** Every gate passed and the suite was green
+— 72 commits, 41 test files — while the app shipped a stock framework palette,
+hand-rolled inputs sitting beside Nuxt UI buttons, and an exception thrown every
+time the landing page embedded the demo. Three of the seven questions the agent
+asked the human were things this file should have answered, one of them *"What
+should this factory run actually produce by Gate C?"* A green run that nobody
+looked at is not a finished product, and no quantity of machine evidence says
+otherwise.
+
 **No implementation files before spec AND plan approval.** Gates A and B are
 hard human gates before any implementation; the plan is shared mutable state
 between human and agent.
