@@ -587,6 +587,28 @@ Phase 1 runs two tracks that feed each other:
   focused question at a time draws out the feature's purpose, who it serves, and
   what success looks like. The answers become the design brief. The cadence
   stays exactly one question per message.
+- **The first question is a WHY question (hard rule).** Before *any* how-question
+  — no "which database", no "how do we handle X", no "is this in scope" — phase 1
+  must ask and **record the answer to** the question a senior engineer asks
+  first: *"what is this for, and who is it for?"* Both halves are required:
+  the audience named concretely (not "users"), and the specific thing this does
+  that the alternative does not.
+
+  This is not a style preference. A run of the factory asked four scope
+  questions in its first brainstorm — how are profiles addressed, are social
+  icons in scope, what theming, where does it deploy — and answered all four
+  well. **All four were how-questions.** Nothing asked why the thing existed,
+  so nothing noticed it was a faithful reproduction of a product that already
+  ships, and four days of correct work went into it. A brief the human issued
+  while still exploring ("reverse engineer X") is a *hypothesis*, not a spec.
+  Treating it as a specification is the failure this rule exists to stop.
+
+  **A question is a why-question when it can change whether the feature is
+  built at all.** If the answer would be the same either way, it is a how-question
+  and it comes second.
+
+  The answer is recorded verbatim in the brainstorm record, above any
+  decomposition. It may be short. It may be revised later — but it must exist.
 - **Autonomous research** — the system researches on its own, before and during
   the questions: web/technology search and fetch (official docs, ecosystem and
   similar projects, alternatives, prior art, current version landscape), plus
