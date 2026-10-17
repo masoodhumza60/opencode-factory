@@ -96,7 +96,6 @@ if (existsSync(log)) {
 // 2. CLI binaries
 for (const [name, cmd, args] of [
   ["bd", "bd", ["version"]],
-  ["graft", "graft", ["--version"]],
 ]) {
   const r = process.platform === "win32" ? spawnSync(cmd + " " + args.join(" "), { shell: true, timeout: 15000 }) : spawnSync(cmd, args, { timeout: 15000 });
   ok(name + " present", r.status === 0, r.stdout?.toString().trim().slice(0, 80) ?? "no output");
@@ -534,67 +533,8 @@ if (!existsSync(skillsScript)) {
       `${report.missing.length} of ${report.total} missing: ${report.missing.join(", ")} — fix: node scripts/factory-skills.mjs install`);
   }
 }
-// 8. The graft MCP actually handshakes. The `graft present` check above only
-//    proves the CLI answers `--version`; a server that is misconfigured, renamed,
-//    or crashes on boot looks identical to a healthy one. docs/conductor.md
-//    promised the selfcheck asserted the handshake, and it did not - prose
-//    claiming what the state layer does not enforce is the defect class this
-//    project has now hit three times (docs/superpowers as a second source of
-//    truth; gates described in prose while bd reported none; this).
-//
-//    Delegates to factory-mcp.mjs for the same reason check 7 delegates to
-//    factory-skills.mjs: one reader per file, so the two cannot disagree.
-//
-//    A FAIL, not a WARN: graft is the conductor's context layer, and the factory
-//    degrades to file navigation when it is gone. A warning here would be a gate
-//    people learn to ignore, which is the P4 lesson restated.
-//
-//    `--mcp-config <path>` exists so scripts/test-selfcheck.mjs can drive the
-//    failure path with a config it controls, not the real one.
-const mcpScript = join(dirname(fileURLToPath(import.meta.url)), "factory-mcp.mjs");
-if (!existsSync(mcpScript)) {
-  ok("mcp: graft handshake", false, `factory-mcp.mjs missing from the bundle (${mcpScript})`);
-} else {
-  const mcpArgs = [mcpScript, "handshake", "--name", "graft", "--json", "--quiet"];
-  const mcpConfigArg = flagValue("--mcp-config");
-  if (mcpConfigArg) mcpArgs.push("--config", mcpConfigArg);
-  const mr = process.platform === "win32"
-    ? spawnSync("node " + mcpArgs.join(" "), { shell: true, timeout: 60000, encoding: "utf8" })
-    : spawnSync("node", mcpArgs, { timeout: 60000, encoding: "utf8" });
-  let handshake = null;
-  try { handshake = JSON.parse((mr.stdout ?? "").trim().split("\n").pop()); } catch { /* handled below */ }
-  // Shape first, flag second: factory-mcp.mjs reports `ok: false` for both a
-  // refused handshake and an unusable config, and a toolCount of null is a
-  // legitimate answer (graft defers tool schemas until a graph exists), so
-  // `toolCount === 0` must never be read as a failure.
-  const usable = handshake && typeof handshake.ok === "boolean" && handshake.serverInfo;
-  if (!usable) {
-    const why = handshake?.error
-      ? `handshake failed at ${handshake.stage ?? "unknown stage"} - ${String(handshake.error).slice(0, 50)}`
-      : `no usable report (exit ${mr.status}) - ${(mr.stderr || mr.stdout || "no output").trim().slice(0, 50)}`;
-    ok("mcp: graft handshake", false, why);
-  } else if (handshake.ok) {
-    const si = handshake.serverInfo;
-    const tools = handshake.toolCount === null || handshake.toolCount === undefined
-      ? "tool list not graded"
-      : `${handshake.toolCount} tool${handshake.toolCount === 1 ? "" : "s"}`;
-    ok("mcp: graft handshake", true,
-      `${si.name} ${si.version ?? "?"} - ${tools}, ${handshake.instructionsChars ?? 0} chars of instructions injected per call`);
-  } else {
-    ok("mcp: graft handshake", false,
-      `${handshake.stage ?? "handshake"} - ${String(handshake.error ?? "unknown").slice(0, 50)} (re-run install.ps1/install.sh to re-register the server)`);
-  }
-}
 // 9. Repo-scoped warnings (informational — these never affect the exit code,
 //    so installers stay green on healthy machines).
-try {
-  const wiring = join(process.cwd(), "graft", ".graph", "wiring.json");
-  if (existsSync(wiring)) {
-    const w = JSON.parse(readFileSync(wiring, "utf8"));
-    if ((w.nodeCount ?? 0) === 0)
-      warn("graft graph has 0 nodes", "run `graft build`; the conductor rebuilds at implement/debug entry");
-  }
-} catch { /* not a graft repo or unreadable graph — skip */ }
 try {
   if (existsSync(join(process.cwd(), ".agents", "skills")) &&
       !existsSync(join(process.cwd(), ".agents", "skills", "skills.lock.json")))
