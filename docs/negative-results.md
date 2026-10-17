@@ -331,3 +331,43 @@ mechanism is a *discipline above a pointer*, not a system to install. If the
 pointers rot once more, that is the moment to build the store - and it will be
 a decision made from a measured failure, which is the only way this factory has
 ever adopted anything.
+
+## A suite that passes only on the machine it was written on
+
+Removing `graft` produced a green MCP suite - 252 passed, 0 failed - and then
+the installer failed on the same file with 7 failures, all of them saying
+`--allow names graft, which is not configured`.
+
+Both results were correct. The suite resolved `--allow` against
+`~/.config/opencode/opencode.json`, and that file has graft in it on the machine
+where the suite was written. The installer runs with a sandboxed home where it
+does not. The suite did have a temp home, but it created it **for the HTTP
+cache**, partway down the file, after every config-reading test had already run.
+The mechanism was right and its placement was not.
+
+So the number I had been reporting - and the reason I said the suite was green -
+was a statement about one machine, not about the code. **A suite that passes only
+where it was written is not a passing suite.** I had removed the dependency from
+the product, left it in the tests, and certified the result in the shell that
+happened to satisfy it.
+
+The tell was available the whole time. The fixtures wrote
+`config("jsonc-global.json", ...)` into a temp directory, and no `scope` call ever
+passed `--config`. That fixture was dead code that looked load-bearing: a
+declaration in the shape of a setup, checked by nothing.
+
+The fix is placement, not effort. The home redirect is now the first statement in
+the file, before any fixture is built, and a `declareServer(name, server)` helper
+declares into the sandbox user config where `--allow` is actually checked.
+Verified by removing one declaration: the suite goes 252/0 to 251/1 on exactly the
+assertion that depended on it, and the file restores byte-identical. A declaration
+nobody reads would not have done that.
+
+**What would have caught it, and did not:** running the suite where it will
+actually run. A suite is a claim about an environment, and the environment is
+part of the claim. "Green here" and "green there" are different claims, and only
+one of them had ever been tested.
+
+**The rule that generalises: a test which reads anything outside its own fixture
+is not hermetic, even when it has a sandbox.** Point the sandbox at every input,
+at the *start*, or do not claim the sandbox exists.

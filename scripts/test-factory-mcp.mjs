@@ -16,6 +16,34 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(HERE, "factory-mcp.mjs");
 const SANDBOX = mkdtempSync(join(tmpdir(), "factory-mcp-test-"));
 
+// The home redirect has to be the FIRST thing this suite does, not something
+// set up later for the HTTP cache. opencode resolves the user config from the
+// home directory, so any test that calls `scope` without `--config` reads
+// ~/.config/opencode/opencode.json - the operator's real one. That is why the
+// JSONC family passed for me and failed under the installer: my machine has
+// graft in that file, the installer's sandbox does not. The suite was never
+// failing to be hermetic, it was failing to be hermetic only in my shell.
+const fakeHome = mkdtempSync(join(tmpdir(), "mcphome-"));
+const realHome = process.env.USERPROFILE;
+const realHomeProfile = process.env.HOME;
+process.env.USERPROFILE = fakeHome;
+process.env.HOME = fakeHome;
+
+// Where a server must EXIST for `--allow <name>` to be accepted. A fixture that
+// allows a server has to declare it here, so the assertion tests the command and
+// not whatever happens to be in the machine's real config.
+const USER_CONFIG_DIR = join(fakeHome, ".config", "opencode");
+mkdirSync(USER_CONFIG_DIR, { recursive: true });
+const declareServer = (name, server) => {
+  const p = join(USER_CONFIG_DIR, "opencode.json");
+  let cfg = {};
+  if (existsSync(p)) { try { cfg = JSON.parse(readFileSync(p, "utf8")); } catch { cfg = {}; } }
+  cfg.mcp = cfg.mcp || { servers: {} };
+  cfg.mcp.servers[name] = server;
+  writeFileSync(p, JSON.stringify(cfg, null, 2), "utf8");
+  return p;
+};
+
 let pass = 0, fail = 0;
 const failures = [];
 
@@ -502,7 +530,12 @@ check("enable with no server name fails with usage", r.code === 1 && r.json?.sta
 // the EFFECT - a real command over a commented config behaves as over clean JSON.
 // Asserting that a stripper function exists would prove nothing.
 const jc = project("jsonc");
-config("jsonc-global.json", { mcp: { servers: { graft: fakeServer("off", true), github: fakeServer() } } });
+// Declared in the sandbox user config, which is where `--allow` is checked. The
+// old `config("jsonc-global.json", ...)` wrote a file into SANDBOX that nothing
+// ever passed as --config, so this family was really being validated against the
+// operator's real ~/.config/opencode/opencode.json.
+  declareServer("graft", fakeServer("off", true));
+  declareServer("github", fakeServer());
 writeFileSync(join(jc, "opencode.json"), [
   "{",
   "  // the server the factory needs, kept on",
@@ -529,7 +562,7 @@ check("an undeclared server was disabled through a JSONC file", jcAfter?.mcp?.se
 // The trap this guards: a // inside a string is DATA, not a comment. Stripped, the
 // url changes silently and every remote server breaks behind a plausible-looking url.
 const jcUrl = project("jsonc-url");
-config("jsonc-global.json", { mcp: { servers: { graft: fakeServer("off", true) } } });
+  declareServer("graft", fakeServer("off", true));
 writeFileSync(join(jcUrl, "opencode.json"), [
   "{",
   "  \"mcp\": { \"servers\": { \"remote1\": { \"type\": \"remote\", \"url\": \"https://x.example/a//b\" } } }",
@@ -543,7 +576,7 @@ check("and that url survives byte for byte",
 
 // Genuinely broken input must still be refused, not silently recovered.
 const jcBad = project("jsonc-bad");
-config("jsonc-global.json", { mcp: { servers: { graft: fakeServer("off", true) } } });
+  declareServer("graft", fakeServer("off", true));
 writeFileSync(join(jcBad, "opencode.json"), "{ \"mcp\": { \"servers\": { \"graft\": { }");
 const rBad = inProject(["scope", "--allow", "graft", "--json"], jcBad);
 check("truncated JSONC is still refused, not guessed", rBad.code !== 0 && /config-invalid-json/.test(rBad.out), rBad.out);
@@ -812,14 +845,9 @@ const scopeConfig = () => config("scope.json", {
     res.end(payload);
   });
 
-  // Cache is per (url, query) and lives in the user's home. Point the home
-  // directory env vars at a temp dir so the suite never reads or writes the
-  // real cache. homedir() resolves USERPROFILE on Windows, HOME elsewhere.
-  const fakeHome = mkdtempSync(join(tmpdir(), "mcphome-"));
-  const realHome = process.env.USERPROFILE;
-  const realHomeProfile = process.env.HOME;
-  process.env.USERPROFILE = fakeHome;
-  process.env.HOME = fakeHome;
+  // The home redirect itself now happens at the top of this file, before any
+  // test can read the real user config. homedir() resolves USERPROFILE on
+  // Windows and HOME elsewhere, so both were pointed at fakeHome up there.
 
   const listen = () => new Promise((res) => server.listen(0, "127.0.0.1", () => res(server.address().port)));
   const close = () => new Promise((res) => server.close(res));

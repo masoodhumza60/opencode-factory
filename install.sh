@@ -132,7 +132,11 @@ merge_config() {
     if [ ! -f "$user_cfg" ]; then echo '{}' > "$user_cfg"; fi
     local snippet_resolved=""
     snippet_resolved="$(mktemp)"
-    trap 'rm -f "$snippet_resolved"' EXIT
+    # The EXIT trap outlives this function, and `local` is popped when it
+    # returns, so an unguarded reference here dies under `set -u` at exit - the
+    # whole install failed on `snippet_resolved: unbound variable` after it had
+    # already done the work. The default keeps cleanup silent rather than fatal.
+    trap 'rm -f "${snippet_resolved:-}"' EXIT
     node - "$bundle" "$snippet_resolved" "$pin" <<'EOF'
 const fs = require("fs");
 const [bundle, out, pin] = process.argv.slice(2);
