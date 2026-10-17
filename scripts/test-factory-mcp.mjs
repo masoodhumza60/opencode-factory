@@ -133,8 +133,12 @@ console.log("handshake: every failure is reported, none are silent passes");
     ["server that never answers", config("crash.json", { mcp: { servers: { graft: fakeServer("crash") } } }), /exited|before completing/],
     ["server that refuses initialize", config("initerr.json", { mcp: { servers: { graft: fakeServer("init-error") } } }), /handshake refused/],
     ["server disabled in config", config("dis.json", { mcp: { servers: { graft: fakeServer("ok", true) } } }), /disabled/],
-    ["server absent from config", config("none.json", { mcp: { servers: {} } }), /no MCP server named/],
-    ["no mcp section at all", config("nomcp.json", { plugins: [] }), /no MCP server named/],
+    // No configured server, so the fallback has nothing to fall back to. The
+    // message is the bundle-declares-none one rather than "no MCP server named",
+    // because that is the more useful of the two facts: there is no server here
+    // AND the bundle does not want one.
+    ["server absent from config", config("none.json", { mcp: { servers: {} } }), /declares \(none\)/],
+    ["no mcp section at all", config("nomcp.json", { plugins: [] }), /declares \(none\)/],
   ];
   for (const [name, p, re] of cases) {
     const r = run(["handshake", "--config", p, "--quiet"]);
@@ -182,7 +186,12 @@ console.log("audit: inventory");
   // "mine" has no `enabled` key, so it is on - a remote server that is merely
   // present in the config is live unless something sets disabled: true.
   check("counts only enabled ones (graft + mine)", r.json?.enabled === 2, `got ${r.json?.enabled}`);
-  check("graft is bundle-owned", r.json?.servers?.find((s) => s.name === "graft")?.owner === "bundle");
+  // This used to assert that graft was bundle-owned, which tested a NAME, not
+  // a rule. The rule is that ownership follows the declaration, and the bundle
+  // declares none - so every configured server belongs to the operator.
+  check("no server is bundle-owned while the bundle declares none",
+    r.json?.servers?.every((s) => s.owner === "user") === true,
+    JSON.stringify(r.json?.servers?.map((s) => [s.name, s.owner])));
   check("a user server is user-owned", r.json?.servers?.find((s) => s.name === "mine")?.owner === "user");
   check("a disabled server is reported disabled", r.json?.servers?.find((s) => s.name === "off")?.state === "disabled");
   check("an enabled user server is flagged unverified",
@@ -483,9 +492,7 @@ check("enable with no server name fails with usage", r.code === 1 && r.json?.sta
   check("swapping enabled->disabled flips the verdict back to a pass", s.code === 0, s.out);
 }
 
-// ------------------------------------------------------------------- teardown
-try { rmSync(SANDBOX, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); }
-catch { console.log("  warn: could not remove the sandbox (a child may still hold a handle); the suite is unaffected"); }
+
 
 
 // -------------------------------------------------------------------- jsonc ----
@@ -509,14 +516,14 @@ writeFileSync(join(jc, "opencode.json"), [
   "  }",
   "}",
 ].join("\n"));
-const rJc = inProject(["scope", "--json"], jc);
+const rJc = inProject(["scope", "--allow", "graft", "--json"], jc);
 check("a JSONC project config with comments and a trailing comma does not fail", rJc.code === 0, rJc.out);
 // scope always writes plain JSON, so this read is strict on purpose: it proves the
 // command consumed the annotated file rather than us re-reading it ourselves.
 const jcAfter = (() => { try { return JSON.parse(readFileSync(join(jc, "opencode.json"), "utf8")); } catch (e) { return { err: e.message }; } })();
 check("scope wrote valid JSON afterwards", !jcAfter.err, JSON.stringify(jcAfter));
 check("the commented project key survived scope", jcAfter?.mcp?.servers?.note === "kept", JSON.stringify(jcAfter));
-check("the declared server was left enabled through a JSONC file", jcAfter?.mcp?.servers?.graft?.disabled === false, JSON.stringify(jcAfter));
+check("an enabled server stays enabled through a JSONC file", jcAfter?.mcp?.servers?.graft?.disabled === false, JSON.stringify(jcAfter));
 check("an undeclared server was disabled through a JSONC file", jcAfter?.mcp?.servers?.github?.disabled === true, JSON.stringify(jcAfter));
 
 // The trap this guards: a // inside a string is DATA, not a comment. Stripped, the
@@ -528,7 +535,7 @@ writeFileSync(join(jcUrl, "opencode.json"), [
   "  \"mcp\": { \"servers\": { \"remote1\": { \"type\": \"remote\", \"url\": \"https://x.example/a//b\" } } }",
   "}",
 ].join("\n"));
-const rUrl = inProject(["scope", "--json"], jcUrl);
+const rUrl = inProject(["scope", "--allow", "graft", "--json"], jcUrl);
 check("a // inside a url string is not treated as a comment", rUrl.code === 0, rUrl.out);
 const urlAfter = (() => { try { return JSON.parse(readFileSync(join(jcUrl, "opencode.json"), "utf8")); } catch { return {}; } })();
 check("and that url survives byte for byte",
@@ -538,7 +545,7 @@ check("and that url survives byte for byte",
 const jcBad = project("jsonc-bad");
 config("jsonc-global.json", { mcp: { servers: { graft: fakeServer("off", true) } } });
 writeFileSync(join(jcBad, "opencode.json"), "{ \"mcp\": { \"servers\": { \"graft\": { }");
-const rBad = inProject(["scope", "--json"], jcBad);
+const rBad = inProject(["scope", "--allow", "graft", "--json"], jcBad);
 check("truncated JSONC is still refused, not guessed", rBad.code !== 0 && /config-invalid-json/.test(rBad.out), rBad.out);
 
 // ---------------------------------------------------------------- scope ----
@@ -557,9 +564,11 @@ const scopedServers = (d) => {
 const scopeConfig = () => config("scope.json", {
   theme: "a-user-key-that-must-survive",
   mcp: { servers: {
-    // graft is the allowlisted one, so the fixture mirrors the real machine:
-    // the default --allow graft must resolve against it without a flag.
-    graft: { type: "local", command: ["node", "graft-mcp"], disabled: true },
+    // Left enabled deliberately: with no --allow and no bundle declaration,
+    // scope now leaves every server exactly as the operator has it, so a
+    // server that was already on must not be read as disabled. The tests below
+    // pass --allow to pin the behaviour they are actually about.
+    graft: { type: "local", command: ["node", "graft-mcp"] },
     github: { type: "remote", url: "https://api.github.com/mcp" },
     live: { type: "local", command: ["node", "y"] },
   } },
@@ -568,7 +577,7 @@ const scopeConfig = () => config("scope.json", {
 {
   const d = project("tscope1");
   const g = scopeConfig();
-  const r = inProject(["scope", "--config", g, "--json"], d);
+  const r = inProject(["scope", "--allow", "graft", "--config", g, "--json"], d);
   check("scope turns off every server not on the allowlist", r.code === 0 && r.json?.changed === true, r.out);
   const s = scopedServers(d);
   const w = { mcp: { servers: s } };
@@ -582,7 +591,7 @@ const scopeConfig = () => config("scope.json", {
   const g2 = JSON.parse(readTextFile(join(SANDBOX, "scope.json")));
   check("the global user key is intact", g2.theme === "a-user-key-that-must-survive", "user key lost");
 
-  const again = inProject(["scope", "--config", g, "--json"], d);
+  const again = inProject(["scope", "--config", g, "--allow", "graft", "--json"], d);
   check("scope is idempotent: a second run changes nothing",
     again.code === 0 && again.json?.changed === false, again.out);
 }
@@ -590,7 +599,7 @@ const scopeConfig = () => config("scope.json", {
   // The effect, not the guard: read the file back and confirm every non-allowed
   // server is false and the allowed one is true, independently of any payload.
   const d = project("tscope2");
-  const r = inProject(["scope", "--config", scopeConfig(), "--json"], d);
+  const r = inProject(["scope", "--config", scopeConfig(), "--allow", "graft", "--json"], d);
   const w = scopedServers(d);
   const wrong = ["live", "github"].filter((n) => w[n].disabled !== true);
   check("the written file itself disables the non-allowed servers", wrong.length === 0, "still on: " + wrong.join(", "));
@@ -619,7 +628,7 @@ const scopeConfig = () => config("scope.json", {
 {
   const d = project("tscope5");
   writeFileSync(join(d, "opencode.json"), '{ "mcp": { "serv');
-  const r = inProject(["scope", "--config", scopeConfig(), "--json"], d);
+  const r = inProject(["scope", "--config", scopeConfig(), "--allow", "graft", "--json"], d);
   check("an unparseable project config is refused rather than clobbered", r.code !== 0 && r.json?.stage === "config-invalid-json", r.out);
   check("and the user's broken file is left exactly as it was",
     readTextFile(join(d, "opencode.json")) === '{ "mcp": { "serv', "clobbered a file we could not parse");
@@ -627,12 +636,12 @@ const scopeConfig = () => config("scope.json", {
 {
   const orphan = join(SANDBOX, "tscope-orphan");
   mkdirSync(orphan, { recursive: true });
-  const r = inProject(["scope", "--config", scopeConfig(), "--json"], orphan);
+  const r = inProject(["scope", "--config", scopeConfig(), "--allow", "graft", "--json"], orphan);
   check("with no project root it refuses instead of editing global", r.code !== 0 && r.json?.stage === "no-project", r.out);
 }
 {
   const d = project("tscope6");
-  const r = inProject(["scope", "--config", scopeConfig(), "--dry-run", "--json"], d);
+  const r = inProject(["scope", "--config", scopeConfig(), "--dry-run", "--allow", "graft", "--json"], d);
   check("--dry-run writes no file", !existsSync(join(d, "opencode.json")), "dry-run created a file");
   // Every server in this fixture changes, so a truthful preview reports true.
   check("--dry-run reports changed:true when the plan changes servers", r.json?.changed === true, r.out);
@@ -647,7 +656,7 @@ const scopeConfig = () => config("scope.json", {
     model: "someone/anthropic",
     mcp: { servers: { localonly: { command: ["node", "z"], disabled: false } } },
   }, null, 2));
-  inProject(["scope", "--config", scopeConfig(), "--json"], d);
+  inProject(["scope", "--config", scopeConfig(), "--allow", "graft", "--json"], d);
   const w = JSON.parse(readTextFile(join(d, "opencode.json")));
   check("scope keeps an unrelated project key", w.theme === "a-project-key-that-must-survive", JSON.stringify(w));
   check("scope keeps an unrelated model key", w.model === "someone/anthropic", JSON.stringify(w));
@@ -661,7 +670,7 @@ const scopeConfig = () => config("scope.json", {
   // --json promises ONE line. Prose before the payload is unparseable, and a
   // consumer cannot guess which lines are chatter.
   const d = project("tscope7");
-  const r = inProject(["scope", "--config", scopeConfig(), "--json"], d);
+  const r = inProject(["scope", "--config", scopeConfig(), "--allow", "graft", "--json"], d);
   check("--json emits exactly one line", r.out.trim().split(/\r?\n/).length === 1, JSON.stringify(r.out));
   check("and that line parses as JSON", (() => { try { JSON.parse(r.out); return true; } catch { return false; } })(), r.out);
 }
@@ -669,7 +678,7 @@ const scopeConfig = () => config("scope.json", {
   const d = project("tscope8");
   const g = scopeConfig();
   inProject(["disable", "graft", "--config", g, "--json"], d);
-  const r = inProject(["scope", "--config", g, "--json"], d);
+  const r = inProject(["scope", "--config", g, "--allow", "graft", "--json"], d);
   check("scope re-enables an allowlisted server a toggle had turned off",
     scopedServers(d).graft?.disabled === false, r.out);
 }
@@ -682,8 +691,12 @@ const scopeConfig = () => config("scope.json", {
 // These tests exist to keep that from coming back.
 {
   const g = config("flex.json", { mcp: { servers: { github: fakeServer(), live: fakeServer() } } });
+  // The declaration is passed explicitly: the bundle declares none, and these
+  // tests are about what happens when a declaration names a server this machine
+  // does not have.
+  const req = config("req-graft.json", { required: ["graft"] });
   const d = project("tflex1");
-  const r = inProject(["scope", "--config", g, "--json"], d);
+  const r = inProject(["scope", "--config", g, "--requirements", req, "--json"], d);
   check("scope runs on a machine that does not have the declared server", r.code === 0, r.out);
   check("and still turns every configured server off", scopedServers(d).github?.disabled === true, r.out);
   check("reporting the declared server as absent instead of failing",
@@ -697,9 +710,23 @@ const scopeConfig = () => config("scope.json", {
   const req = config("req-empty.json", { required: [] });
   const d = project("tflex2");
   const r = inProject(["scope", "--config", g, "--requirements", req, "--json"], d);
-  check("an empty declaration turns everything off and succeeds", r.code === 0, r.out);
-  check("nothing is kept",
-    scopedServers(d).github?.disabled === true && scopedServers(d).live?.disabled === true, r.out);
+  // This used to assert "an empty declaration turns everything off and succeeds"
+  // - which is the hazard, not the intent. A bundle saying "this factory needs
+  // no MCP server" was switching off every server the operator had. A project
+  // that runs none needs no MCP configuration at all.
+  check("an empty declaration succeeds", r.code === 0, r.out);
+  check("and leaves every configured server running",
+    scopedServers(d).github?.disabled === false && scopedServers(d).live?.disabled === false,
+    "an empty declaration must not switch the operator's servers off: " + JSON.stringify(scopedServers(d)));
+  // This used to read stdout for the explanatory line and fall back to
+  // `changed === false`. Both are wrong here. Under --json the say() text is
+  // not on stdout, so the regex can never match; and `changed` is legitimately
+  // true because scope still writes the project config even when it changes no
+  // server's state. What the payload actually asserts is that nothing was
+  // declared - the condition that makes leaving them alone the right answer.
+  check("and reports that nothing was declared, so leaving them alone was right",
+    Array.isArray(r.json?.declared) && r.json.declared.length === 0 && r.json.ok === true,
+    "an empty declaration must say so: " + r.out.slice(0, 160));
 }
 {
   // The declaration is data. Point it at a server this machine actually has and
@@ -717,10 +744,28 @@ const scopeConfig = () => config("scope.json", {
   const g = config("hand.json", { mcp: { servers: { github: fakeServer("ok") } } });
   const req = config("req-none.json", { required: [] });
   const r = run(["handshake", "--config", g, "--requirements", req, "--json"]);
-  check("handshake with nothing declared and nothing configured to fall back on refuses",
-    r.code !== 0, r.out);
-  check("and names what was declared alongside what is configured",
-    /no-target-server/.test(r.out) && /github/.test(r.out), r.out);
+  // With nothing declared there is no preferred target, so handshake picks the
+  // first configured and enabled server and names it. Refusing here told an
+  // operator nothing: the only thing missing was a preference that no longer
+  // exists.
+  // The message is not sliced. It used to be, and the slice cut the child
+  // process's stderr off exactly where the reason lived, so a fixture failure
+  // reported itself as a product failure. A failure oracle that hides the cause
+  // is worse than no oracle: it sends you looking in the wrong file.
+  check("handshake with nothing declared picks a configured server instead of refusing",
+    r.code === 0 && r.json?.ok === true, r.out);
+  check("and names the server it picked", /github/.test(r.out), r.out);
+}
+{
+  // Nothing declared AND nothing configured is genuinely no target, so refusing
+  // is correct - but the message must name both facts.
+  const req2 = config("req-none2.json", { required: [] });
+  const r2 = run(["handshake", "--config", config("hand-none.json", { mcp: { servers: {} } }),
+    "--requirements", req2, "--json"]);
+  check("with nothing declared and nothing configured it still refuses",
+    r2.code !== 0, r2.out.slice(0, 200));
+  check("and says the bundle declares none",
+    /no-target-server/.test(r2.out) && /declares \(none\)/.test(r2.out), r2.out.slice(0, 200));
 }
 {
   // The bundle/user label in the audit is how a reader tells which servers they
@@ -1059,4 +1104,17 @@ check("tmatch19 a missing definition does NOT match", defMatches(LDEF, undefined
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (failures.length) { console.log("failures:"); for (const f of failures) console.log("  - " + f); }
+
+// ------------------------------------------------------------------- teardown
+// This belongs here, at the end, and it used to sit at line ~496 in the middle
+// of the file. From there it deleted the sandbox - and the fake MCP server
+// inside it - while roughly 250 assertions were still to run. Every later test
+// that only wrote a config carried on passing, because project()'s recursive
+// mkdir quietly brought the directory back; only the tests that actually spawn
+// the fake server failed, and they failed as `Cannot find module
+// ...fake-mcp.mjs`, which indicts the fixture rather than the code under test.
+// That is how a proven-working handshake fallback spent hours looking broken.
+try { rmSync(SANDBOX, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); }
+catch { console.log("  warn: could not remove the sandbox (a child may still hold a handle); the suite is unaffected"); }
+
 process.exit(fail === 0 ? 0 : 1);

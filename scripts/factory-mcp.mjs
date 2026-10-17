@@ -212,7 +212,18 @@ async function handshake() {
   // so plainly when neither is usable.
   const configured = config?.mcp?.servers ?? {};
   const declared = requiredServers();
-  const name = get("--name") || declared.find((n) => configured[n]) || declared[0];
+  const name = get("--name") || declared.find((n) => configured[n]) || declared[0]
+    // The bundle may depend on no server at all, which is a legitimate state
+    // and the common one now. With nothing declared there is no preferred
+    // target, so pick the first server that is configured and enabled and name
+    // it in the report - refusing here told an operator nothing, because the
+    // only thing missing was a preference that no longer exists.
+    || Object.keys(configured).filter((n) => configured[n] && configured[n].disabled !== true).sort()[0]
+    // Prefer an enabled server, but if every configured server is switched off,
+    // name one anyway. "that server is disabled" is the useful answer; "there is
+    // no server to handshake" is misleading when the server is right there and
+    // simply off. The disabled stage below reports it properly either way.
+    || Object.keys(configured).filter((n) => configured[n]).sort()[0];
   if (!name)
     fail(`no server to handshake: this bundle declares ${declared.length ? declared.join(", ") : "(none)"}, ` +
       `and ${path} configures ${Object.keys(configured).length ? Object.keys(configured).sort().join(", ") : "(none)"}. ` +
@@ -632,10 +643,22 @@ function scope() {
   //                   reported and skipped, never fatal.
   //
   // Nothing here names a server. That is what lets this run on a laptop with a
-  // different toolchain, or on a machine where the factory depends on no MCP at
-  // all - in which case every configured server is simply turned off here.
+  // different toolchain.
+  //
+  // One case needs stating rather than inferring. If the bundle declares no
+  // requirement AND the operator passed no --allow, there is nothing to
+  // protect and nothing to turn off, so this writes an empty override and
+  // leaves every configured server running. The previous behaviour derived an
+  // empty allowlist and used it to disable all of them, which meant that adding
+  // one server to a machine made `scope` switch the rest of them off. That is
+  // the opposite of what a bundle saying "I need nothing" should mean. Say so
+  // on stdout so the run is not silent about having done nothing.
   const declared = requiredServers();
   const explicit = has("--allow");
+  const declaredAny = declared.length > 0;
+  const touchNothing = !explicit && !declaredAny;
+  if (touchNothing)
+    say("this bundle declares no MCP requirement and no --allow was given: leaving every configured server as the operator has it");
   const allow = new Set((explicit ? get("--allow") : declared.join(",")).split(",").map((x) => x.trim()).filter(Boolean));
   const unknown = [...allow].filter((n) => !servers[n]).sort();
   if (unknown.length && explicit)
@@ -660,7 +683,12 @@ function scope() {
     const override = projectCfg.mcp && projectCfg.mcp.servers && projectCfg.mcp.servers[name];
     const recorded = stated(override);
     const current = recorded === null ? isOn(servers[name]) : recorded;
-    const want = allow.has(name);
+    // touchNothing is the real half of the empty-declaration rule. Without it an
+    // empty allow set means `allow.has(name)` is false for every server, so
+    // scope writes disabled:true onto all of them - a bundle saying "this factory
+    // needs no MCP server" would switch off every server the operator has. When
+    // there is nothing to apply, the desired state IS the current state.
+    const want = touchNothing ? current : allow.has(name);
     // An allowlisted server is recorded even when it already agrees with global,
     // so the project's server set is stated rather than inherited from whatever
     // global says today. Recording it once is a change; re-recording it is not,
