@@ -13,7 +13,7 @@
 // Run:  node scripts/test-selfcheck.mjs
 // Exits 0 when every expectation holds, 1 otherwise.
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, copyFileSync, appendFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, copyFileSync, appendFileSync, readFileSync, readdirSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -652,6 +652,69 @@ try {
   } catch (e) {
     console.warn(`\n  warn  temp dir left behind (${e.code}): ${tmp}`);
   }
+}
+
+// A cited commit hash that no longer resolves is a claim pointing at nothing.
+// Amending a commit is normal practice here and silently invalidates every doc
+// naming the old hash - which is exactly what happened to the Grounded Claims
+// entry in docs/negative-results.md, when amending 2c55650 into 9462f67 left
+// the entry citing a commit reachable from no ref.
+//
+// The rule is per PARAGRAPH, not per hash. A sentence saying a rewrite "moved
+// its hash from `old` to `new`" cites `old` on purpose, so a paragraph is only
+// a defect when NO hash in it is reachable from HEAD. Paragraph, not line,
+// because markdown wraps: this very entry reads "moved its hash from `2c55650`
+// to" on one line and "`9462f67`, and this pointer" on the next, so judging one
+// line at a time reported a healthy citation as a dead pointer - the check
+// accusing the doc for doing the thing the doc describes. Reachability is
+// merge-base --is-ancestor: cat-file -e answers whether an object exists in the
+// store, which is true for unreachable commits, and would pass for the wrong
+// reason.
+{
+  let gitOk = true;
+  try {
+    execFileSync("git", ["rev-parse", "HEAD"], { cwd: BUNDLE, stdio: "ignore" });
+  } catch {
+    gitOk = false;
+  }
+  const docsDir = join(BUNDLE, "docs");
+  const deadBlocks = [];
+  let cited = 0;
+  if (gitOk) {
+    const live = (h) => {
+      try {
+        execFileSync("git", ["merge-base", "--is-ancestor", h, "HEAD"], { cwd: BUNDLE, stdio: "ignore" });
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    for (const f of readdirSync(docsDir).filter((n) => n.endsWith(".md"))) {
+      const lines = readFileSync(join(docsDir, f), "utf8").split(/\r?\n/);
+      // A blank line ends a paragraph; consecutive non-blank lines are one.
+      let block = [];
+      const flush = () => {
+        const hashes = [...block.map((b) => b.line).join("\n").matchAll(/`([0-9a-f]{7})`/g)].map((m) => m[1]);
+        const at = block[0]?.at;
+        block = [];
+        if (!hashes.length) return;
+        cited += hashes.length;
+        if (!hashes.some(live)) deadBlocks.push(`${f}:${at} (${[...new Set(hashes)].join(", ")})`);
+      };
+      lines.forEach((line, i) => {
+        if (line.trim() === "") return flush();
+        block.push({ at: i + 1, line });
+      });
+      flush();
+    }
+  }
+  report(
+    "a commit hash cited in docs resolves from HEAD, or its paragraph names one that does",
+    gitOk && deadBlocks.length === 0,
+    !gitOk
+      ? "not a git checkout, so no cited commit can be resolved - refusing to report this as a pass"
+      : `${cited} cited across docs/*.md` + (deadBlocks.length ? `; unreachable with no live sibling in ${deadBlocks.length} paragraph(s): ${deadBlocks.join("; ")}` : "; all resolve, or sit in a paragraph with one that does")
+  );
 }
 
 console.log(`\n${ran - failures}/${ran} selfcheck tests passed.`);
