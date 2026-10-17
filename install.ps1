@@ -481,8 +481,34 @@ function Run-Tests {
         # installer's error preferences, and the install dies on a passing suite.
         $log = Join-Path ([IO.Path]::GetTempPath()) "factory-test-$t.log"
         $errLog = "$log.err"
-        $proc = Start-Process -FilePath $script:NodePath -ArgumentList $path -NoNewWindow -Wait -PassThru `
+        # No -Wait, and a bounded wait instead. A suite that blocks forever used to
+        # hang the whole installer: `Start-Process -Wait` has no timeout of its own,
+        # so one stuck child (observed: a suite blocked inside bd behind a 19-day-
+        # stale beads lock, using 1.97s of CPU across 17 minutes) left the installer
+        # silent forever with no way to tell a slow suite from a dead one.
+        # 20 minutes is far longer than any suite legitimately needs (the phase
+        # suite is the slow one, at roughly 15) and still finite.
+        $suiteTimeoutSec = 1200
+        $proc = Start-Process -FilePath $script:NodePath -ArgumentList $path -NoNewWindow -PassThru `
             -RedirectStandardOutput $log -RedirectStandardError $errLog
+        $deadline = (Get-Date).AddSeconds($suiteTimeoutSec)
+        $timedOut = $false
+        while (-not $proc.HasExited) {
+            if ((Get-Date) -gt $deadline) { $timedOut = $true; break }
+            Start-Sleep -Seconds 2
+            $proc.Refresh()
+        }
+        if ($timedOut) {
+            # Kill the tree, not just the parent: these suites spawn children (the
+            # phase suite starts `factory-phase.mjs`, which runs bd). Killing only
+            # the parent orphans them and leaves the very lock files that caused the
+            # hang behind for the next run.
+            & taskkill /PID $proc.Id /T /F 2>&1 | Out-Null
+            Write-Host "--- $t exceeded ${suiteTimeoutSec}s; it was killed. Output so far: ---"
+            Get-Content $log, $errLog -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+            Remove-Item $log, $errLog -Force -ErrorAction SilentlyContinue
+            throw "$t did not finish within ${suiteTimeoutSec}s - the selfcheck cannot be trusted. Fix it before installing."
+        }
         if ($proc.ExitCode -ne 0) {
             Get-Content $log, $errLog -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
             Remove-Item $log, $errLog -Force -ErrorAction SilentlyContinue
