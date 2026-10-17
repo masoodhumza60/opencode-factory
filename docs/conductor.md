@@ -667,14 +667,31 @@ and kept with the design brief for the spec phase.
 - The conductor reads phase state from beads (`bd show <id>`) at every entry,
   so a restarted session or a different device resumes where it left off.
 
-## Graft context freshness (enforced)
+## Graft context freshness (a check, not a gate)
 
-Graft is the code-structure context for phases 4 (implement) and 4' (debug).
+Graft answers "where is X used?" across a codebase. On that question it is
+measured at **98% smaller than reading the files whole** — 66,944 bytes of
+`factory-phase.mjs` plus `test-factory-phase.mjs` become 1,202 bytes for the
+same answer. On "what files exist here?" it is **worse than `ls`**:
+`ls scripts/*.mjs` returns every filename in 556 bytes, where `graft repo-map`
+took 2,773.
+
+So reach for it when you are about to grep across a whole codebase. Do not
+reach for it to look around.
+
+**The MCP tools resolve their repository from the session's working directory.**
+A graph that is fresh and complete can belong to a *different* project, so a
+"fresh" verdict is only an answer about whatever directory the session happens
+to be in. Before using any graft MCP result, confirm the repo it names is the
+one you are working in. If it is not, say so and fall back to file reads
+rather than treating another project's graph as context.
+
 A stale or empty graph is never trusted silently:
 
-1. On entry to phase 4 or 4': **check freshness first** — `graft_check_freshness`
-   when the MCP tool is available; otherwise compare the graph's build time
-   against the newest file mtime, or treat a missing/empty graph as stale.
+1. On entry to phase 4 or 4': compare the graph's build time against the newest
+   file mtime, or treat a missing/empty graph as stale. If you do call
+   `graft_check_freshness`, read its whole output — it can print "NO GRAPH" and
+   "graph check: OK" in the same response, so neither line alone is a verdict.
 2. Graph empty or stale → run `graft build`, then record:
    `bd update <id> --append-notes "graft: rebuilt (N nodes)"`.
 3. Graph fresh → record: `bd update <id> --append-notes "graft: fresh"`.
