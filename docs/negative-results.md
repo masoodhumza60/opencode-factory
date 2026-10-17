@@ -286,11 +286,14 @@ confirmed, rewritten, or retired."*
 **Every serious defect in this factory's history is a claim that outlived its
 evidence.** Three instances, all ours, all in one afternoon:
 
-1. Commit `2c55650`'s message says an empty requirement list no longer disables
-   servers. It did. I wrote the comment and the `say()` line and never changed
-   `const want = allow.has(name)`. **The claim was written; the effect was
-   not.** The evidence - the code - never supported it, and only a test that
-   asserted correct behaviour caught it.
+1. The commit now at `9462f67` carried a message saying an empty requirement
+   list no longer disables servers. It did. I wrote the comment and the
+   `say()` line and never changed `const want = allow.has(name)`. **The claim
+   was written; the effect was not.** The evidence - the code - never supported
+   it, and only a test that asserted correct behaviour caught it. Amending the
+   commit rather than following it up moved its hash from `2c55650` to
+   `9462f67`, and this pointer had to move with it - a dangling hash is the
+   same defect one level down: a pointer that no longer resolves.
 2. `conductor.md` called the MCP gate "enforced" for months of prose. Nothing
    enforced it. Prose cannot refuse anything (`5da020f` withdrew the word).
 3. The entry above: "the MCP is broken", held for a week, pointing at our own
