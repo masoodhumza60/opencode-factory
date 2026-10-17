@@ -16,3 +16,11 @@ AGENTS.md
 CLAUDE.md
 # machine-local: written by factory-mcp.mjs scope/add for THIS project only
 opencode.json
+
+# graft's code graph. A local cache: regenerate with `graft build`, never commit it.
+/graft/
+# .ignore is a ripgrep SEARCH preference, not an ignore rule. graft writes it so its
+# generated cards stay greppable locally. The directory it points at is per-machine and
+# will not exist on another laptop until they run `graft build` themselves, so it must
+# never be shared.
+.ignore
