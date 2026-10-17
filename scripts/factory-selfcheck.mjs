@@ -181,7 +181,19 @@ if (!existsSync(manifestPath)) {
     // The manifest predates the bundle_path field, or the recorded source did not
     // resolve. Either way this file cannot be compared, and cannot be called current.
     const uncomp = [];
-    const bundleRoot = mf.bundle_path;
+    // A manifest written by install.sh under Git bash on Windows records the
+    // MSYS spelling /c/Users/... . node's existsSync() cannot resolve that, so
+    // every file landed in `uncomp` and the check warned forever - blind in the
+    // one direction it exists to see. Prefer the recorded path as written, and
+    // fall back to the Windows spelling. install.sh now records the Windows
+    // spelling; this keeps every already-installed manifest honest in the
+    // meantime rather than waiting for the next install run.
+    const msysToWindows = (p) => {
+      if (!p || existsSync(p)) return p;
+      const m = /^\/([A-Za-z])(\/.*)?$/.exec(p);
+      return m ? `${m[1].toUpperCase()}:${m[2] || "/"}` : p;
+    };
+    const bundleRoot = msysToWindows(mf.bundle_path);
     const bundleGone = bundleRoot ? !existsSync(bundleRoot) : true;
     for (const [name, entry] of Object.entries(mf.files)) {
       // Keys are paths relative to the skills root, because basename collides:

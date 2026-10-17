@@ -80,6 +80,15 @@ install_plugins() {
             exit 1
         fi
     fi
+    # Node resolves the rendered import, not bash. Under Git bash on Windows
+    # $HOME is /c/Users/... , so the substituted path becomes
+    # file:////c/Users/... in opencode-pty.ts and the plugin fails to load with
+    # "Cannot find module". Convert to the Windows spelling when we can; on
+    # Linux/macOS cygpath is absent and the POSIX path is already correct.
+    # install.ps1 never had this bug - it builds the path from $env:USERPROFILE.
+    if [ -n "$pty_index" ] && command -v cygpath >/dev/null 2>&1; then
+        pty_index="$(cygpath -m "$pty_index")"
+    fi
     if [ -n "$pty_index" ]; then
         if [ "$DRY_RUN" = 1 ]; then
             dry "render \"$bundle/plugins/opencode-pty.ts.tmpl\" (substitute __OPENCODE_PTY_V2_INDEX__ = $pty_index) -> \"$oc_config/plugins/opencode-pty.ts\""
@@ -243,9 +252,20 @@ install_skills() {
         done
         _installed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u +%Y-%m-%d)"
         _mp="$agents_skills/factory/install-manifest.json"
+        # Same defect as the pty import, same fix: node reads bundle_path, and
+        # under Git bash on Windows $bundle is the MSYS spelling /c/Users/...,
+        # which node's existsSync() cannot resolve. The result was a manifest
+        # naming a directory that does not exist as far as the selfcheck can
+        # tell, so "install currency not established" warned on every file
+        # forever - a check blind in the one direction it exists to see.
+        # $bundle itself stays MSYS: ~40 bash call sites depend on that spelling.
+        _bundle_resolved="$bundle"
+        if command -v cygpath >/dev/null 2>&1; then
+            _bundle_resolved="$(cygpath -m "$bundle")"
+        fi
         printf '{\n  "installed_at": "%s",\n  "bundle_commit": "%s",\n  "bundle_path": "%s",\n  "files": {%s}\n}\n' \
-            "$_installed_at" "$_bundle_commit" "$bundle" "$_manifest_files" > "$_mp"
-        say "install manifest written -> $_mp ($_manifest_n files, bundle $_bundle_commit at $bundle)"
+            "$_installed_at" "$_bundle_commit" "$_bundle_resolved" "$_manifest_files" > "$_mp"
+        say "install manifest written -> $_mp ($_manifest_n files, bundle $_bundle_commit at $_bundle_resolved)"
     fi
     else
         say "warning: $src_sk not in bundle yet (conductor skill lands with the docs/discovery task); skip - re-run install once it is present."
