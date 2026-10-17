@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// opencode-factory config merge. Call after the installer has resolved the
-// graft command so the snippet carries it in.
+// opencode-factory config merge. Call after the installer has resolved any
+// machine-specific snippet contents so the snippet carries them in.
 // usage: node merge-config.mjs --snippet <path> --user <path> --out <path>
 import { readFileSync, writeFileSync } from "node:fs";
 
@@ -19,9 +19,9 @@ const merged = { ...user };
 // plugins: union, dedupe, bundle plugin list wins on duplicates
 const bundlePlugins = snippet.plugins ?? [];
 merged.plugins = [...new Set([...(user.plugins ?? []), ...bundlePlugins])];
-// mcp.servers: purely additive — the bundle adds `graft` (machine-resolved in
-// the snippet) and every user server, enabled or disabled, is preserved
-// exactly as configured; nothing is ever removed.
+// mcp.servers: purely additive — any server the snippet declares (resolved on
+// the machine at install time) is added, and every user server, enabled or
+// disabled, is preserved exactly as configured; nothing is ever removed.
 const servers = { ...(user.mcp?.servers ?? {}) };
 for (const [name, s] of Object.entries(snippet.mcp?.servers ?? {})) servers[name] = s;
 merged.mcp = { ...(user.mcp ?? {}), servers };

@@ -300,9 +300,8 @@ function Install-MandatorySkills {
     # This runs BEFORE the selfcheck on purpose - the selfcheck FAILs when a
     # mandatory skill is missing, so installing afterwards would guarantee a red
     # install on a fresh machine. A network failure is not hidden: the script
-    # prints the fix line and this throws, the same way a missing graft does,
-    # because a machine that reaches phase 7 with no commit-work to run has
-    # already failed quietly at install time.
+    # prints the fix line and this throws, because a machine that reaches phase
+    # 7 with no commit-work to run has already failed quietly at install time.
     $skillScript = Join-Path $bundle 'scripts\factory-skills.mjs'
     if ($DryRun) {
         Say "[dry-run] & node '$script:NodePath' '$skillScript' install --dry-run"

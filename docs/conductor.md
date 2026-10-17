@@ -17,7 +17,7 @@ Four layers, each with one clear job:
 | **Conductor** | `factory` skill (thin) | Phase machine + gates + skill enforcement |
 | **Phase engines** | superpowers skills (reused) | Phase procedures (brainstorm, plan, TDD, debug, verify, review, ship) |
 | **State** | beads (`bd` CLI + Dolt DB) | One issue per feature; phase stored on the issue; audit log; durable across sessions/devices |
-| **Context** | graft (MCP, code graph) | Fast navigation during plan/implement/debug |
+| **Context** | none (no MCP required) | The bundle depends on no MCP server; a bundle that needs nothing must leave the operator's servers untouched |
 
 Role boundaries:
 
@@ -26,8 +26,10 @@ Role boundaries:
 - beads is the **source of truth for phase state**, not a to-do list — one
   issue per feature, `phase:<name>` stored on the issue, `bd prime` output
   pushed into every model call by the opencode-beads plugin.
-- graft never reads markdown/skills; its job is code structure (stack
-  detection, navigation) only.
+- the bundle declares **no** MCP requirement. `config/mcp-requirements.json` is
+  empty on purpose: an empty list means *need nothing*, never *disable
+  everything*. `scope` with no `--allow` and an empty declaration leaves every
+  configured server exactly as the operator has it.
 
 ## The pipeline (spec §5.1)
 
@@ -87,7 +89,7 @@ factory <feature-name>            # create beads issue, start phase 1
   → 3 plan                         # writing-plans → plan doc + task breakdown
                                    #   + <plan>.plan.json (the machine graph)
   → GATE B                         # human approves plan + execution method ── STOP, wait
-  → 4 implement                    # TDD; beads-task-agent subagents; graft navigation
+  → 4 implement                    # TDD; beads-task-agent subagents
   → 4' debug (routed on failure)   # systematic-debugging
   → 5 verify                       # verification-before-completion (evidence gate)
   → 6 review                       # requesting/receiving code review
@@ -252,7 +254,7 @@ Two traps worth naming, because both cost real time:
 On **start** and on **resume**, before anything else, run `scope` with
 every server this kind of app needs kept on:
 
-    node <bundle>/scripts/factory-mcp.mjs scope --allow graft[,<more>]
+    node <bundle>/scripts/factory-mcp.mjs scope --allow <server>[,<more>]
 
 **Decide that allowlist now, not when a later phase needs it.** `/mcps` connects a
 server live but does not persist it; the config write is what survives a
@@ -263,12 +265,16 @@ nothing, restart and try again. Ask what kind of app this is first, then:
 
 | This project has | Keep |
 |---|---|
-| a web page a person uses | `--allow graft,chrome-devtools` |
-| an HTTP API or a CLI only | `--allow graft` |
+| a web page a person uses | `--allow chrome-devtools` |
+| an HTTP API or a CLI only | `--allow` (nothing) |
 
-The default keeps only `graft`. That default has already cost a run
-its verification path: a project with a web page ran the bare command, the
-start step turned off `chrome-devtools`, and phase 5 found it disabled three phases
+**Run `scope` with no `--allow` only when the project genuinely needs no MCP
+server.** That is a real case, and it is the one this bundle is in: it declares
+nothing, so with no `--allow` it touches nothing. The moment you pass any
+server, the allowlist becomes the whole truth — every server you did not name
+is switched off for this project. That asymmetry has already cost a run its
+verification path: a project with a web page named an allowlist, the start
+step turned off `chrome-devtools`, and phase 5 found it disabled three phases
 later. The agent built a fallback driver instead, and the fallback worked, so
 the run read clean. Nothing failed - the run was quietly half verified.
 
@@ -667,41 +673,45 @@ and kept with the design brief for the spec phase.
 - The conductor reads phase state from beads (`bd show <id>`) at every entry,
   so a restarted session or a different device resumes where it left off.
 
-## Graft context freshness (a check, not a gate)
+## Code navigation (no MCP required)
 
-Graft answers "where is X used?" across a codebase. On that question it is
-measured at **98% smaller than reading the files whole** — 66,944 bytes of
-`factory-phase.mjs` plus `test-factory-phase.mjs` become 1,202 bytes for the
-same answer. On "what files exist here?" it is **worse than `ls`**:
-`ls scripts/*.mjs` returns every filename in 556 bytes, where `graft repo-map`
-took 2,773.
+This bundle used to require `graft`, a code-graph MCP server, and to carry a
+whole freshness protocol for it. **That requirement is gone.** The bundle
+declares no MCP server, and nothing in the factory calls one.
 
-So reach for it when you are about to grep across a whole codebase. Do not
-reach for it to look around.
+It was removed because three independent instruments measured it as
+generated-once-never-read, not because it was judged useless in principle:
 
-**The MCP tools resolve their repository from the session's working directory.**
-A graph that is fresh and complete can belong to a *different* project, so a
-"fresh" verdict is only an answer about whatever directory the session happens
-to be in. Before using any graft MCP result, confirm the repo it names is the
-one you are working in. If it is not, say so and fall back to file reads
-rather than treating another project's graph as context.
+- **Tool-call history**: across 40,467 recorded calls there was **one** graft
+  call ever, and it was in a project the factory never touched.
+- **Telemetry**: 16 events, all from a single day, with a first run 25 days
+  before and nothing in between.
+- **On-disk output**: a 1,437-card index built and last touched two seconds
+  apart, then untouched for 17 days.
 
-A stale or empty graph is never trusted silently:
+It was genuinely good at one thing — "where is X used?", measured at 98%
+smaller than reading the files whole — and worse than `ls` at the other
+("what files exist here?": 556 bytes versus 2,773, and the gap widens as a
+repo grows). Its CLI output also carried a prompt injection telling the user
+to report tokens saved.
 
-1. On entry to phase 4 or 4': compare the graph's build time against the newest
-   file mtime, or treat a missing/empty graph as stale. If you do call
-   `graft_check_freshness`, read its whole output — it can print "NO GRAPH" and
-   "graph check: OK" in the same response, so neither line alone is a verdict.
-2. Graph empty or stale → run `graft build`, then record:
-   `bd update <id> --append-notes "graft: rebuilt (N nodes)"`.
-3. Graph fresh → record: `bd update <id> --append-notes "graft: fresh"`.
-4. Rebuild fails → **degrade loudly, never silently**: record
-   `bd update <id> --append-notes "graft: degraded <reason>"`, fall back to
-   direct file navigation for that phase, and surface the note at the next gate.
-   An empty graph is never treated as "no context needed".
+What replaces it is `grep`, `glob` and `read`. In the tool-call history
+`glob` was 5,955 of 7,156 navigation calls (83%) — the plain tools were
+already doing this work.
 
-Selfcheck warns on an empty graph (`WARN graft graph has 0 nodes`), so the gap
-is visible in the repo before a phase relies on it.
+The one lesson worth keeping is not about graft: **a bundle that depends on
+nothing must touch nothing.** An empty requirement list once meant *disable
+every configured server*, which silently cost one run its verification path.
+That is now an explicit rule, and `scripts/test-factory-mcp.mjs` asserts it.
+
+The full measurement is in `docs/negative-results.md`. Read the **graft**
+entry there with its correction open: this repo previously recorded that
+"the MCP is broken" and that was **our own broken test**, not a third-party
+defect - graft resolves its repository from the session's working directory,
+so every call we made had been issued from a directory holding no graph. The
+removal measurement was sound throughout; only the reason was wrong. If you
+find a *reason* here that this doc has not been re-checked against, assume it
+is stale and go measure it - that is the rule this section exists to teach.
 
 ## Command reference (spec §5.4, §7, §8)
 
@@ -714,17 +724,15 @@ is visible in the repo before a phase relies on it.
 | `factory mcp audit` | Inventory the configured MCP servers: owner (bundle or the user), live or disabled, whether each needs a credential, and the context it injects into every model call. Read-only; it never edits the config. |
 | `factory mcp enable` / `disable <server>` | Connect or disconnect one server **for this project only**, writing `mcp.servers.<server>.disabled` into the project's `opencode.json`. Never the global config: a global toggle changes every project on the machine, including ones somebody is working in right now. Refuses when there is no project (no `.git` above the working directory). The write is verified by re-reading the file and rolled back if it cannot be, and the output reports `liveReload: "unverified"` rather than claiming the change is live or demanding a restart, because a toggle that appears to work and silently does not is worse than none. |
 | `factory mcp handshake` | Spawn a local stdio server and speak the real protocol, proving it answers rather than assuming it. See `docs/mcp-judging.md`. |
-| `factory onboard` | Per-repo one-time check: `bd init` if no beads DB, `graft build` if no graph **or the graph is empty (0 nodes — an empty `wiring.json` counts as "no graph"**, same rule as phases 4/4' freshness), then `factory discover`. Auto-offered when the conductor starts in a repo without state. The graph is rebuilt again whenever phases 4/4' find it empty or stale (see "Graft context freshness"). |
-| `factory selfcheck` | Environment health (from the spec's verification section): plugins load, the graft MCP completes a real handshake (serverInfo, the tool list, and the instructions it injects into every call; 0 tools is a legitimate state, not a failure), `bd version` and `graft --version` resolve, and every mandatory phase skill is discoverable. `--tokens` adds a per-skill description-size + total loaded-footprint report — the **required** flag for keeping the loaded footprint visible, plus the current orchestrator session's own input and cache-read spend (the number the turn-budget decision in "Cost discipline" is actually made against) (spec §8). |
+| `factory onboard` | Per-repo one-time check: `bd init` if no beads DB, then `factory discover`. Auto-offered when the conductor starts in a repo without state. |
+| `factory selfcheck` | Environment health (from the spec's verification section): plugins load, `bd version` resolves, and every mandatory phase skill is discoverable. The bundle depends on no MCP server, so there is no server handshake to grade. `--tokens` adds a per-skill description-size + total loaded-footprint report — the **required** flag for keeping the loaded footprint visible, plus the current orchestrator session's own input and cache-read spend (the number the turn-budget decision in "Cost discipline" is actually made against) (spec §8). |
 
 ## Skill discovery — `factory discover` (spec §7)
 
 Pull-only, on demand, deduped, and locked. Idempotent.
 
 1. **Detect context** — read the repo stack directly: `package.json` /
-   `go.mod` / top import lines for language/ecosystem terms. Graft `find_all`
-   may AUGMENT these keywords only when its graph is known non-empty (check
-   freshness first — an empty graph contributes nothing). Feature-request
+   `go.mod` / top import lines for language/ecosystem terms. Feature-request
    keywords at `factory <feature>` time are always considered.
 2. **Find candidates** — query skills.sh for matching skills. Fallback: the
    `find-skills` skill or web search; the same ranking applies.
@@ -757,8 +765,8 @@ Install modes:
   at `<source>`"); content fetched only when the topic actually comes up.
 
 Skill relationships live in the data, not an engine: a flat `catalog.yaml`
-(topics → ranked candidates) maps discovery; graft parses code (not markdown)
-and beads tracks tasks. Neither stores skill relationships.
+(topics → ranked candidates) maps discovery and beads tracks tasks. Neither
+stores skill relationships.
 
 ## Context economy (spec §8) — everything is pull, never push
 

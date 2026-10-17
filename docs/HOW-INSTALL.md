@@ -1,8 +1,8 @@
 # HOW-INSTALL — set up your factory from this repo
 
 `install.ps1` (Windows) and `install.sh` (Unix) turn a machine into an
-opencode-factory workstation in one go. They install the two CLIs the factory
-relies on (bd and graft), deploy the opencode plugins and beads commands, merge
+opencode-factory workstation in one go. They install the one CLI the factory
+relies on (bd), deploy the opencode plugins and beads commands, merge
 the factory's config into your user config, deploy the `factory` skill, install the
 mandatory hard skills, and run a selfcheck.
 If the selfcheck fails, the installer **aborts** (`factory selfcheck failed -
@@ -21,17 +21,20 @@ installers' success summary points back to this file.
   opencode's user directory, and needs `opencode-pty` available in opencode's
   npm cache — run `opencode` once before installing so it installs its
   dependencies.
-- **A JS package manager for the graft step** — pnpm or bun if you already have
-  one; otherwise npm (which node ≥ 20 ships). The installers auto-select in the
-  order pnpm → bun → npm, so a plain node install works with zero extra setup.
+- **A JS package manager** — pnpm or bun if you already have one; otherwise npm
+  (which node ≥ 20 ships). The installers auto-select in the order pnpm → bun →
+  npm, so a plain node install works with zero extra setup.
 
-One note on the two non-opencode CLIs:
+One note on the non-opencode CLI:
 
 - **beads (`bd`)** — state layer of the factory. The installer tracks the latest
   stable; the known-good pin is **1.3.0**. Confirm with `bd version` after
   installing.
-- **graft** — code-graph MCP server. The installer pins
-  `@nanonets/graft@0.18.0` and applies two patches (see "Graft store caveat").
+
+The factory requires **no MCP server**. `config/mcp-requirements.json` declares
+an empty `required` list, and the bundle's scope step leaves every server the
+operator has configured exactly as they configured it. See
+`docs/conductor.md` § "Code navigation (no MCP required)".
 
 ## One-liner
 
@@ -52,7 +55,6 @@ Both installers accept the same flags:
 | Flag | Effect |
 |---|---|
 | `-SkipBd` | skip installing/verifying the beads CLI |
-| `-SkipGraft` | skip installing/patching graft. An existing graft install is still required — the config merge needs its `cli.js`, and the installer fail-stops rather than fabricate a broken MCP entry. |
 | `-DryRun` | print every step without changing anything (exits 0) |
 
 `install.ps1 -DryRun` / `install.sh -DryRun` always exit 0 (preview only). The
@@ -75,27 +77,22 @@ Both installers run the same steps in the same order:
    → copy-to-`%LOCALAPPDATA%\Programs\bd\bd.exe` fallback, then user-PATH) or
    `executables/install-bd.sh` (`beads.dev/install.sh`), then verify
    `bd version`.
-3. **Install + patch graft** — `@nanonets/graft@0.18.0` via an available package
-   manager (`pnpm add -g` / `bun add -g` / `npm install -g`; auto-selected in
-   that order, npm as the default whenever pnpm/bun are absent), locate the
-   package dir under that manager's global root, then run both patch scripts
-   (see caveat below) and verify `graft --version`.
-4. **Deploy plugins** — copy `plugins/opencode-beads.ts` to
+3. **Deploy plugins** — copy `plugins/opencode-beads.ts` to
    `~/.config/opencode/plugins/`, and render `plugins/opencode-pty.ts.tmpl`
    (substituting the resolved `opencode-pty` v2 index from opencode's cache)
    to `~/.config/opencode/plugins/opencode-pty.ts`.
-5. **Deploy beads commands + task agent** — copy `commands/beads/*.md` to
+4. **Deploy beads commands + task agent** — copy `commands/beads/*.md` to
    `~/.config/opencode/commands/beads/` and `agents/beads-task-agent.md` to
    `~/.config/opencode/agents/`.
-6. **Merge config** — seed `~/.config/opencode/opencode.json` with `{}` if
+5. **Merge config** — seed `~/.config/opencode/opencode.json` with `{}` if
    absent, then `scripts/merge-config.mjs` performs a **union merge**: your
    existing keys are preserved except where the bundle owns them. The bundle
-   adds the DCP plugin pin (`plugins/dcp.pin`) to `plugins` and owns
-   `mcp.servers.graft` (`{type: local, command: [node, <graft>/dist/cli.js,
-   mcp]}`, enabled). The merge is purely additive: every MCP server you
-   already have — enabled or disabled — is preserved exactly as configured;
-   nothing is ever removed.
-7. **Install the factory skill** — copy `skills/factory/SKILL.md` to
+   adds the DCP plugin pin (`plugins/dcp.pin`) to `plugins`. The merge is
+   purely additive: every MCP server you already have — enabled or
+   disabled — is preserved exactly as configured; nothing is ever
+   removed, and nothing is ever added. The bundle declares **no** MCP
+   requirement, so it owns no server entry at all.
+6. **Install the factory skill** — copy `skills/factory/SKILL.md` to
    `~/.agents/skills/factory/`, plus `docs/conductor.md`,
    `docs/how-factory-works.md`, `docs/plan-format.md` and `docs/discovery.md`
    to `~/.agents/skills/factory/docs/`, plus the six runtime scripts
@@ -125,7 +122,7 @@ Both installers run the same steps in the same order:
    The `verify-app` skill ships alongside it at `~/.agents/skills/verify-app/`
    and the selfcheck FAILS without it, because it is what makes the phase-5
    `--booted` claim checkable rather than merely asserted.
-8. **Install the mandatory hard skills** — run
+7. **Install the mandatory hard skills** — run
    `node scripts/factory-skills.mjs install`, which installs the `mandatory`
    section of `skills/catalog.yaml` into `~/.agents/skills/` via
    `npx --yes skills add <source> -s <name> -g -a opencode --copy -y`. Today
@@ -133,10 +130,10 @@ Both installers run the same steps in the same order:
    This step runs **before** the selfcheck on purpose: the selfcheck FAILs when
    a mandatory skill is missing, so installing afterwards would guarantee a red
    install on a clean machine. A network failure here is not swallowed — the
-   installer aborts with the command to fix, the same as a missing graft.
+   installer aborts with the command to fix rather than continuing.
    `--dry-run` prints what it would install and writes nothing; `factory-skills.mjs
    check` reports the current state and exits 1 if anything is missing.
-9. **Pair DCP with the handoff rule** — run `scripts/dcp-prompts.mjs`. It
+8. **Pair DCP with the handoff rule** — run `scripts/dcp-prompts.mjs`. It
    inserts `experimental.customPrompts: true` into
    `~/.config/opencode/dcp.jsonc` (a pure insertion: your comments and
    formatting are left alone, and a second run changes nothing) and writes the
@@ -149,7 +146,7 @@ Both installers run the same steps in the same order:
    override text is our own: DCP is AGPL-3.0-or-later, so we install it but
    never vendor or copy its prompts. Delete the override file to return to
    stock dcp wording.
-10. **Run the selfcheck's own tests** — `node scripts/test-selfcheck.mjs`,
+9. **Run the selfcheck's own tests** — `node scripts/test-selfcheck.mjs`,
    `node scripts/test-install-idempotency.mjs`,
    `node scripts/test-factory-phase.mjs` and
    `node scripts/test-factory-plan.mjs` and
@@ -199,7 +196,7 @@ Both installers run the same steps in the same order:
    backwards — a tool list of **zero is a legitimate state** and never a
    failure, and **no credential can leak** into a record (no header values, no
    header names, no URL query tokens). See `docs/mcp-judging.md`.
-11. **Selfcheck** — run `node scripts/factory-selfcheck.mjs`. Any failed check
+10. **Selfcheck** — run `node scripts/factory-selfcheck.mjs`. Any failed check
    aborts the install (`factory selfcheck failed - install incomplete.`). Two
    of the checks watch DCP rather than merely asserting the plugin loads:
    `dcp: pruning active` reads the state files of the **5 most recent** DCP
@@ -209,7 +206,7 @@ Both installers run the same steps in the same order:
    newest-by-mtime file made it report a WARN on healthy fresh sessions — a
    health check that cries wolf is one people stop reading. `--dcp-session <id>`
    targets one session deliberately. `dcp: turn-nudge override installed`
-   confirms step 9 landed. A session that simply has not needed pruning yet is
+   confirms step 8 landed. A session that simply has not needed pruning yet is
    a `WARN`, not a failure, so a fresh install stays green.
    `mandatory skills: present` is a **FAIL**, never a WARN: `commit-work` and
    `skill-judge` are hard skills, and a hard skill reported as advisory is the
@@ -221,49 +218,36 @@ Both installers run the same steps in the same order:
    parsers of one file drift, and the second one is the one that quietly
    disagrees. On failure it names the missing skill and the fix
    (`factory-skills.mjs install`).
-   `mcp: graft handshake` is a **FAIL** for the same reason. It is not the
-   `graft --version` CLI check: it reads the configured command out of
-   `opencode.json`, spawns it, and speaks the real MCP protocol (`initialize`,
-   then `tools/list`). This is what the doc used to *claim* the selfcheck did
-   while it only ran the CLI, which meant a graft server that was misconfigured,
-   renamed or crashing on boot looked exactly as healthy as a working one. A
-   tool list of **zero passes** — graft defers its schemas until a graph exists,
-   and a healthy server legitimately exposes nothing in some repos. The verdict
-   also reports the instructions the server injects into every model call,
-   because an enabled MCP is a standing context cost, not a skill that costs
-   only when triggered. `--mcp-config <path>` points the check at another
-   config, which is how the negative tests drive it.
+   `mcp requirements deployed` is a **FAIL** for the same reason: it reads
+   the bundle's `config/mcp-requirements.json` off disk, so a bundle whose
+   requirements file never shipped would silently check nothing and grade
+   green. When that file declares a server, the selfcheck also runs
+   `factory-mcp.mjs audit` against a synthetic config and checks that the
+   declared server is actually present — the case that used to hide, where a
+   server named in the requirements was missing from `opencode.json` and
+   nothing said so. **With an empty `required` list the bundle depends on no
+   server, so the selfcheck starts no server and asks for no handshake.** A
+   green `mcp` line now means "the bundle declares nothing it cannot find",
+   which is the honest reading of a factory that requires no MCP.
 
 Why re-runs are safe (and how they behave): the config merge is a union (no
-destructive overwrite of your keys), the two graft patch scripts are idempotent
-(they detect an already-patched state and exit 0), `install-bd` fast-paths when
+destructive overwrite of your keys), `factory-mcp.mjs scope` is idempotent (it
+leaves an already-correct server state alone), `install-bd` fast-paths when
 `bd version` already works, and the plugin/command deploys are plain copies. A
 re-run after everything is in place exits 0 with zero config drift.
 
-## Graft store caveat — re-patch after any graft upgrade
+## MCP servers — the factory requires none
 
-Graft's patches are applied *inside the package manager's global store*. Any
-reinstall or upgrade of graft — via `npm install -g`, `pnpm add -g`, or `bun
-add -g` — replaces the package and **resets the patches**. Re-run them whenever
-you upgrade graft or reinstall it:
+There is no MCP dependency to install, pin, or patch. The bundle ships
+`config/mcp-requirements.json` with an empty `required` list, and its
+`scope` step leaves every server you have configured exactly as you
+configured it — enabled, disabled, or absent from a previous run.
+`scripts/factory-mcp.mjs handshake` still works, but only when you point
+it at a server with `--name`; with nothing declared it picks the first
+configured server and tells you which one it picked.
 
-```bash
-# 1. find the graft package dir (this only works if graft is already installed);
-#    pick the manager you installed graft with:
-node scripts/graft-patch-extract.mjs --dir "$(npm root -g)/@nanonets/graft"
-# ...or with pnpm (pnpm root -g) / bun (bun pm root -g)
-```
-
-```powershell
-# 2. Windows only: rename win32-x64 prebuilds to node.napi.node in the store
-powershell -ExecutionPolicy Bypass -File scripts/graft-patch-store.ps1
-```
-
-Then confirm with `graft --version`. (`graft-patch-extract.mjs` swaps a static
-`tree-sitter-kotlin` import for a dynamic one so graft starts even without a
-Windows prebuilt; `graft-patch-store.ps1` renames the store's `*.node`
-prebuilds to the expected `node.napi.node`.)
-
+Servers you installed for yourself are yours. The installer neither adds
+nor removes any `mcp.servers` entry.
 ## Skill discovery — committed project skills
 
 - The project's **`.agents/skills/`** directory is **committed with the repo**
@@ -295,7 +279,7 @@ sessions exits 1 rather than printing a misleading zero.
 Checks covered: all three plugins loaded with zero failures in the latest
 opencode run that loaded plugins (run-scoped evidence taken from the structured
 `msg="loading plugin"` / `message="failed to load plugin"` lines of the
-opencode log), `bd` and `graft` respond, the factory skill is deployed to
+opencode log), `bd` responds, the factory skill is deployed to
 `~/.agents/skills/factory/SKILL.md`, a beads store is present, both mandatory
 hard skills are present, and DCP is actually pruning rather than merely loaded.
 Failure output says `N check(s) failed. Re-run install.ps1/install.sh.`
@@ -306,7 +290,7 @@ Failure output says `N check(s) failed. Re-run install.ps1/install.sh.`
 |---|---|
 | `powershell` refuses to run the script (execution policy) | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`, then retry. The one-liner already sidesteps this with `-ExecutionPolicy Bypass`. |
 | `bd` missing on PATH after install | Re-run the bd installer: `powershell -ExecutionPolicy Bypass -File executables/install-bd.ps1` (Windows) or `bash executables/install-bd.sh` (Unix), or call it by absolute path: `%LOCALAPPDATA%\Programs\bd\bd.exe` on Windows. |
-| `graft` missing / `graft --version` fails | Install it: `npm install -g @nanonets/graft@0.18.0` (or `pnpm add -g` / `bun add -g`), re-run the two patch scripts ("Graft store caveat"), then re-run the installer. |
+| An MCP server of yours stopped working after installing | The factory merges configs additively and touches no `mcp.servers` entry, so this is something else: re-read `docs/negative-results.md` for what the bundle deliberately does not do to your config. |
 | Installer aborts at the selfcheck | The failing check names the problem (e.g. `bd present` FAIL on very first run). Fix it and re-run — the installer is fail-stop by design. |
 | Selfcheck keeps failing on the plugin checks | Look at the log the selfcheck reads: `%USERPROFILE%\.local\share\opencode\log\opencode.log` (Windows) / `~/.local/share/opencode/log/opencode.log` (Unix). |
 | Want a preview before touching anything | Re-run with `-DryRun` — prints every step, changes nothing, exits 0. |
@@ -329,7 +313,6 @@ there — see **Porting to another harness** below.
 | project skills (committed) | `.agents/skills/` |
 | skills lock | `.agents/skills/skills.lock.json` |
 | bd CLI (Windows) | `%LOCALAPPDATA%\Programs\bd\bd.exe` |
-| graft | the package manager's global root (`npm root -g` / `pnpm root -g` / `bun pm root -g`) |
 | selfcheck log | `~/.local/share/opencode/log/opencode.log` |
 | project MCP overrides | `<project root>/opencode.json` (nearest `.git` above the working directory) |
 

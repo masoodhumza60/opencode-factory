@@ -11,21 +11,26 @@ spec → plan → implement → debug → verify → review → ship — on auto
 only at three human gates (spec, plan, ship), and enforces that the right
 superpowers skill runs at the right phase.
 
-## Four layers, one job each
+## Three layers, one job each
 
 | Layer | Component | Job |
 |---|---|---|
 | Conductor | `factory` skill (thin) | Phase machine + gates + skill enforcement |
 | Phase engines | superpowers skills (reused) | The actual phase procedures |
 | State | beads (`bd` CLI + Dolt DB) | One issue per feature, `phase:` stored on it, audit log |
-| Context | graft (MCP code graph) | Fast navigation during plan/implement/debug |
 
 The design rule that shaped everything: **fewer random pieces, not more glue**.
 The conductor is the *only* new component. Everything else is reused: the
-superpowers skills run the phases, beads owns state, graft owns code-structure
-context. The bundle consolidates the user's scattered existing pieces (plugins,
-beads commands, task agent, graft config, install scripts) into one managed,
-idempotently-installable package.
+superpowers skills run the phases and beads owns state. The bundle consolidates
+the user's scattered existing pieces (plugins, beads commands, task agent,
+install scripts) into one managed, idempotently-installable package.
+
+There is deliberately **no context layer**. The factory once shipped a code-graph
+MCP server for it and removed it after measuring it: across 40,467 recorded tool
+calls it was used once, in a project the factory never touched. Navigation in
+this bundle is `glob`, `grep` and `read` — tools that are already present, cost
+nothing to install, and never need a graph built before they answer. See
+`docs/conductor.md` — "Code navigation (no MCP required)" for the measurement.
 
 ### Role boundaries
 
@@ -34,8 +39,9 @@ idempotently-installable package.
 - beads is the **source of truth for phase state**, not a to-do list. One issue
   per feature; `bd prime` pushes phase state into every model call; the audit
   survives restarts and device moves because beads is Dolt-backed.
-- graft never reads markdown or skills. Its only job is code structure (stack
-  detection, navigation).
+- The filesystem is the context layer, and it is not optional machinery. Reading
+  a file answers "what is here" with no index to build, no server to connect,
+  and no staleness to re-check.
 
 ## Pull, never push (spec §8)
 
@@ -63,7 +69,7 @@ phase complete until that phase's skill content was actually loaded in-session.
 
 The factory deliberately does not try to become:
 
-- **A new task tracker, coding agent, or MCP server product** — beads, graft,
+- **A new task tracker, coding agent, or MCP server product** — beads,
   superpowers, and OpenCode are reused, not replaced.
 - **Automatic merging/deploying without a human** — ship always stops for
   gate C; no lights-out shipping.
@@ -78,17 +84,12 @@ The factory deliberately does not try to become:
   `bd init` when there is no beads DB. If the CLI itself is absent, the
   bootstrap scripts (`install.ps1` / `install.sh`) install beads; re-run them
   — they are idempotent. `factory selfcheck` verifies CLIs resolve.
-- **No graft graph / graft navigation silent.** `factory onboard` runs
-  `graft build` when no graph exists, and the conductor **re-runs it** at
-  implement/debug entry whenever the graph is empty or stale (it never relies
-  on an empty graph silently — check "Graft context freshness" in
-  `docs/conductor.md`). `factory selfcheck` prints a `WARN graft graph has 0
-  nodes` line when a repo's graph is empty. Reinstalls or upgrades can reset
-  graft's native patches; the bootstrap re-applies them as part of install, and
-  `install.ps1` / `install.sh` re-running is the fix.
-- **Graft MCP not connecting.** `factory selfcheck` asserts the graft server
-  handshake (it should return its tools). If it fails, re-run the installer
-  rather than hand-editing MCP config — the installer merges config with
+- **An MCP server of yours is not connecting.** The factory requires none and
+  touches no `mcp.servers` entry, so this is almost never the bundle's doing.
+  Diagnose it with `node scripts/factory-mcp.mjs handshake --name <server>`,
+  which spawns the configured command and speaks the real MCP protocol, and
+  with `node scripts/factory-mcp.mjs audit --json` for what the config claims.
+  Re-run the installer rather than hand-editing MCP config — it merges with
   machine-resolved paths and never touches credential-bearing files.
 - **Skill gate stalls (a phase won't complete).** The gate is the point:
   a phase is incomplete until its mandatory skill's content was loaded
