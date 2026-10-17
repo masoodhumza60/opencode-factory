@@ -1,20 +1,17 @@
 #!/usr/bin/env bash
 # opencode-factory machine install (Unix/macOS). Faithful semantic mirror of
 # install.ps1: same order, same flags, same artifacts, same merge semantics.
-# Usage: ./install.sh [-SkipBd] [-SkipGraft] [-DryRun]
+# Usage: ./install.sh [-SkipBd] [-DryRun]
 # -SkipBd   : do not install/verify the beads CLI
-# -SkipGraft: do not install/patch the graft CLI (plugins+config may still be merged)
 # -DryRun   : print every step without changing anything (exits 0)
 set -euo pipefail
 
 SKIP_BD=0
-SKIP_GRAFT=0
 DRY_RUN=0
 for arg in "$@"; do
     case "$arg" in
         -SkipBd|--skip-bd)          SKIP_BD=1 ;;
-        -SkipGraft|--skip-graft)    SKIP_GRAFT=1 ;;
-        -DryRun|--dry-run|-n)       DRY_RUN=1 ;;
+              -DryRun|--dry-run|-n)       DRY_RUN=1 ;;
         *) echo "install: unknown option: $arg" >&2; exit 2 ;;
     esac
 done
@@ -36,7 +33,6 @@ oc_config="${HOME}/.config/opencode"
 agents_skills="${HOME}/.agents/skills"
 project_skills="${bundle}/.agents/skills"
 node_path="$(node --print process.execPath)"
-graft_pkg=""
 
 # --- dirs --------------------------------------------------------------------
 ensure_dirs() {
@@ -44,35 +40,6 @@ ensure_dirs() {
         "$agents_skills/factory" "$project_skills"; do
         if [ "$DRY_RUN" = 1 ]; then dry "mkdir -p $d"; else mkdir -p "$d"; fi
     done
-}
-
-# --- graft package-dir resolution -------------------------------------------
-# Manager global-root probe order pnpm -> bun -> npm; first root that contains a
-# live graft package wins. Falls back to the pnpm store scan (virtual stores /
-# junctions keep the real pkg deeper). Prints the package dir or exits 1.
-find_graft_dir() {
-    local m="" probe=""
-    for m in pnpm bun npm; do
-        command -v "$m" >/dev/null 2>&1 || continue
-        case "$m" in
-            pnpm) probe="$(pnpm root -g 2>/dev/null || true)" ;;
-            bun)  probe="$(bun pm root -g 2>/dev/null || true)" ;;
-            npm)  probe="$(npm root -g 2>/dev/null || true)" ;;
-        esac
-        if [ -n "$probe" ] && [ -d "$probe/@nanonets/graft/dist" ]; then
-            printf '%s\n' "$probe/@nanonets/graft"
-            return 0
-        fi
-    done
-    for base in "${PNPM_HOME:-$HOME/.local/share/pnpm}/global" "$HOME/.local/share/pnpm"; do
-        [ -d "$base" ] || continue
-        local found=""
-        found="$(find "$base" -maxdepth 3 -type d -name node_modules 2>/dev/null | while read -r d; do
-            if [ -d "$d/@nanonets/graft/dist" ]; then printf '%s\n' "$d"; break; fi
-        done | head -n 1)" || true
-        if [ -n "$found" ]; then printf '%s\n' "$found/@nanonets/graft"; return 0; fi
-    done
-    return 1
 }
 
 # Fresh-install manager order: pnpm -> bun -> npm (npm ships with node >= 20).
@@ -93,58 +60,6 @@ install_bd() {
     "$bundle/executables/install-bd.sh"
     bd version >/dev/null 2>&1 || { echo "install: bd version check failed after install" >&2; exit 1; }
     say "bd ready."
-}
-
-# --- graft --------------------------------------------------------------------
-install_graft() {
-    local found="" m="" cmd=""
-    found="$(find_graft_dir || true)"
-    if [ "$DRY_RUN" = 1 ]; then
-        if [ -n "$found" ]; then
-            dry "graft already installed locally; skipping install"
-        else
-            m="$(first_manager || echo npm)"
-            if [ "$m" = npm ]; then cmd="npm install -g @nanonets/graft@0.18.0"; else cmd="$m add -g @nanonets/graft@0.18.0"; fi
-            dry "$cmd  (auto-select pnpm/bun/npm; npm default)"
-        fi
-        local patch_dir="${found:-<resolved-graft-dir>}"
-        if command -v powershell >/dev/null 2>&1; then
-            dry "node \"$bundle/scripts/graft-patch-extract.mjs\" --dir \"$patch_dir\""
-            dry "powershell -NoProfile -ExecutionPolicy Bypass -File \"$bundle/scripts/graft-patch-store.ps1\" -PackageDir \"$patch_dir\""
-        else
-            dry "skip graft patches (Windows-only kotlin-optional extract + win32-x64 prebuild rename; no PowerShell here)"
-        fi
-        dry "verify: graft --version"
-        graft_pkg="$found"
-        return
-    fi
-    if [ -z "$found" ]; then
-        m="$(first_manager)" || {
-            echo "install: no package manager found to install graft (node >= 20 ships npm)" >&2
-            exit 1
-        }
-        if [ "$m" = npm ]; then
-            npm install -g @nanonets/graft@0.18.0
-        else
-            "$m" add -g @nanonets/graft@0.18.0
-            # Safety net: the chosen manager ran clean but the pkg dir still
-            # doesn't resolve -> redo through npm (always present via node).
-            if ! find_graft_dir >/dev/null 2>&1; then
-                say "graft not resolvable after $m install; retrying with npm..."
-                npm install -g @nanonets/graft@0.18.0
-            fi
-        fi
-        found="$(find_graft_dir)" || { echo "install: graft not found after install" >&2; exit 1; }
-    fi
-    graft_pkg="$found"
-    if command -v powershell >/dev/null 2>&1; then
-        node "$bundle/scripts/graft-patch-extract.mjs" --dir "$graft_pkg"
-        powershell -NoProfile -ExecutionPolicy Bypass -File "$bundle/scripts/graft-patch-store.ps1" -PackageDir "$graft_pkg"
-    else
-        say "note: graft patches skipped (Windows-only kotlin-optional extract + win32-x64 prebuild rename; no PowerShell here)."
-    fi
-    if graft --version >/dev/null 2>&1; then :; else echo "install: graft --version check failed" >&2; exit 1; fi
-    say "graft ready ($graft_pkg/dist/cli.js)."
 }
 
 # --- plugins ------------------------------------------------------------------
@@ -196,34 +111,24 @@ merge_config() {
     local user_cfg="$oc_config/opencode.json"
     local pin=""
     pin="$(head -n 1 "$bundle/plugins/dcp.pin" || true)"
-    local graft_cli_js=""
-    if [ -n "$graft_pkg" ]; then graft_cli_js="$graft_pkg/dist/cli.js"; fi
 
     if [ "$DRY_RUN" = 1 ]; then
         dry "node --print process.execPath => $node_path"
-        dry "write temp snippet: bundle snippet + mcp.servers.graft = {type:local, command:[$node_path, ${graft_cli_js:-<resolved-graft-cli.js>}, mcp], disabled:false} + plugins += [$pin]"
+        dry "write temp snippet: bundle snippet + plugins += [$pin]"
         if [ -f "$user_cfg" ]; then dry "user config: $user_cfg (read-only; purely additive merge)"
         else dry "echo '{}' > \"$user_cfg\"   (no existing config)"; fi
         dry "node \"$bundle/scripts/merge-config.mjs\" --snippet <resolved-snippet> --user \"$user_cfg\" --out \"$user_cfg\""
         return
     fi
     if [ ! -f "$user_cfg" ]; then echo '{}' > "$user_cfg"; fi
-    if [ -z "$graft_cli_js" ]; then
-        # -SkipGraft path: graft wasn't installed here, resolve the cli.js for the config anyway
-        graft_pkg="$(find_graft_dir)" || { echo "install: graft not found; required for mcp.servers.graft config" >&2; exit 1; }
-        graft_cli_js="$graft_pkg/dist/cli.js"
-    fi
     local snippet_resolved=""
     snippet_resolved="$(mktemp)"
     trap 'rm -f "$snippet_resolved"' EXIT
-    node - "$bundle" "$snippet_resolved" "$node_path" "$graft_cli_js" "$pin" <<'EOF'
+    node - "$bundle" "$snippet_resolved" "$pin" <<'EOF'
 const fs = require("fs");
-const [bundle, out, nodePath, graftCliJs, pin] = process.argv.slice(2);
+const [bundle, out, pin] = process.argv.slice(2);
 const base = JSON.parse(fs.readFileSync(bundle + "/config/opencode.snippet.json", "utf8"));
 base.plugins = [pin];
-base.mcp = base.mcp || {};
-base.mcp.servers = base.mcp.servers || {};
-base.mcp.servers.graft = { type: "local", command: [nodePath, graftCliJs, "mcp"], disabled: false };
 fs.writeFileSync(out, JSON.stringify(base, null, 2) + "\n");
 EOF
     node "$bundle/scripts/merge-config.mjs" --snippet "$snippet_resolved" --user "$user_cfg" --out "$user_cfg"
@@ -435,7 +340,6 @@ run_selfcheck() {
 say "opencode-factory install (bundle: $bundle)"
 ensure_dirs
 if [ "$SKIP_BD" = 0 ]; then install_bd; fi
-if [ "$SKIP_GRAFT" = 0 ]; then install_graft; fi
 install_plugins
 install_commands
 merge_config

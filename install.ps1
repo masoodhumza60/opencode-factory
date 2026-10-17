@@ -1,14 +1,12 @@
 #Requires -Version 5.1
 # opencode-factory machine install (Windows).
-# Usage: powershell -ExecutionPolicy Bypass -File install.ps1 [-SkipBd] [-SkipGraft] [-DryRun]
+# Usage: powershell -ExecutionPolicy Bypass -File install.ps1 [-SkipBd] [-DryRun]
 # -SkipBd   : do not install/verify the beads CLI
-# -SkipGraft: do not install/patch the graft CLI (plugins+config may still be merged)
 # -DryRun   : print every step without changing anything (exits 0)
 [CmdletBinding()]
 param(
     [switch]$SkipBd,
-    [switch]$SkipGraft,
-    [switch]$DryRun
+        [switch]$DryRun
 )
 
 $ErrorActionPreference = 'Stop'
@@ -28,7 +26,6 @@ $ocConfig     = Join-Path $env:USERPROFILE ".config\opencode"
 $agentsSkills = Join-Path $env:USERPROFILE ".agents\skills"
 $projectSkills = Join-Path $bundle ".agents\skills"
 $script:NodePath = ((node --print process.execPath | Out-String).Trim()).Replace('\','/')
-$script:GraftPkg  = $null
 
 function Say([string]$msg)                { Write-Host $msg }
 function SayErr([string]$msg)             { Write-Host $msg -ForegroundColor Yellow }
@@ -48,56 +45,6 @@ function Ensure-Dirs {
     }
 }
 
-function Find-GraftRoot {
-    # Manager global-root probe order pnpm -> bun -> npm. Returns the first root
-    # that actually contains a live graft package ('' when none do); a pure npm
-    # machine resolves here too because node >= 20 always ships npm.
-    foreach ($m in 'pnpm','bun','npm') {
-        if (-not (Get-Command $m -ErrorAction SilentlyContinue)) { continue }
-        $root = switch ($m) {
-            'pnpm' { & pnpm root -g 2>$null }
-            'bun'  { & bun pm root -g 2>$null }
-            'npm'  { & npm root -g 2>$null }
-        }
-        $root = ($root | Out-String).Trim()
-        if ($root -and (Test-Path (Join-Path $root '@nanonets\graft\dist\cli.js'))) {
-            return $root
-        }
-    }
-    # pnpm store fallback — virtual stores / junctions keep the real pkg deeper.
-    $candidates = Get-ChildItem "$env:LOCALAPPDATA\pnpm\global" -Directory -ErrorAction SilentlyContinue |
-        ForEach-Object { Get-ChildItem $_.FullName -Directory -ErrorAction SilentlyContinue } |
-        ForEach-Object { Get-ChildItem $_.FullName -Directory -ErrorAction SilentlyContinue } |
-        Where-Object { Test-Path (Join-Path $_.FullName '@nanonets\graft\dist\cli.js') }
-    if ($candidates) { return $candidates[0].FullName }
-    return ''
-}
-
-function Find-GraftDir {
-    # true -> a live graft cli.js exists; outputs its package dir (or '' when absent).
-    $root = Find-GraftRoot
-    if ($root) { return Join-Path $root '@nanonets\graft' }
-    return ''
-}
-
-function Select-GraftManager {
-    # Order pnpm -> bun -> npm (npm ships with node >= 20, so the last is a given).
-    foreach ($m in 'pnpm','bun','npm') {
-        if (Get-Command $m -ErrorAction SilentlyContinue) { return $m }
-    }
-    return ''
-}
-
-function Resolve-GraftDir {
-    # Mirrors scripts/graft-patch-store.ps1: pnpm/bun/npm global root, else the
-    # pnpm store scan. Returns the graft package dir (junctions ok).
-    $found = Find-GraftDir
-    if (-not $found) {
-        throw 'graft CLI not found. Run install (without -SkipGraft) or install @nanonets/graft@0.18.0 (npm i -g / pnpm add -g / bun add -g) first.'
-    }
-    return $found
-}
-
 function Install-Bd {
     $bdScript = Join-Path $bundle 'executables\install-bd.ps1'
     if ($DryRun) {
@@ -111,54 +58,6 @@ function Install-Bd {
     if (Test-Path $bdExe) { & $bdExe version } else { if (Get-Command bd -ErrorAction SilentlyContinue) { bd version } }
     if ($LASTEXITCODE -ne 0) { throw 'bd version check failed after install' }
     Say "bd ready ($bdExe)."
-}
-
-function Install-Graft {
-    $found = Find-GraftDir
-    if ($DryRun) {
-        if ($found) { Say '[dry-run] graft already installed locally; skipping install' }
-        else {
-            $m = Select-GraftManager
-            if (-not $m) { $m = 'npm' }
-            $cmd = if ($m -eq 'npm') { 'npm install -g @nanonets/graft@0.18.0' } else { "$m add -g @nanonets/graft@0.18.0" }
-            Say "[dry-run] $cmd  (auto-select pnpm/bun/npm; npm default)"
-        }
-        $patchDir = if ($found) { $found } else { '<resolved-graft-dir>' }
-        Say "[dry-run] & node '$script:NodePath' '$bundle\scripts\graft-patch-extract.mjs' --dir '$patchDir'"
-        Say "[dry-run] powershell -NoProfile -ExecutionPolicy Bypass -File '$bundle\scripts\graft-patch-store.ps1' -PackageDir '$patchDir'"
-        Say '[dry-run] verify: graft --version'
-        $script:GraftPkg = $found   # may be '' when absent; Merge-Config handles it
-        return
-    }
-    if (-not $found) {
-        $m = Select-GraftManager
-        if (-not $m) {
-            throw 'No package manager found to install graft. Install node >= 20 from nodejs.org (it ships npm) and re-run.'
-        }
-        if ($m -eq 'npm') {
-            & npm install -g @nanonets/graft@0.18.0
-            if ($LASTEXITCODE -ne 0) { throw 'npm install -g @nanonets/graft@0.18.0 failed' }
-        }
-        else {
-            & $m add -g @nanonets/graft@0.18.0
-            if ($LASTEXITCODE -ne 0) { throw "$m add -g @nanonets/graft@0.18.0 failed" }
-            # Safety net: the chosen manager ran clean but the pkg dir still
-            # doesn't resolve -> redo through npm (always present via node).
-            if (-not (Find-GraftDir)) {
-                Say "graft not resolvable after $m install; retrying with npm..."
-                & npm install -g @nanonets/graft@0.18.0
-                if ($LASTEXITCODE -ne 0) { throw 'npm install -g @nanonets/graft@0.18.0 failed (fallback after non-npm manager)' }
-            }
-        }
-    }
-    $script:GraftPkg = Resolve-GraftDir   # re-resolve (after install, when it was absent)
-    & $script:NodePath "$bundle\scripts\graft-patch-extract.mjs" --dir $script:GraftPkg
-    if ($LASTEXITCODE -ne 0) { throw 'graft-patch-extract.mjs failed' }
-    & powershell -NoProfile -ExecutionPolicy Bypass -File "$bundle\scripts\graft-patch-store.ps1" -PackageDir $script:GraftPkg
-    if ($LASTEXITCODE -ne 0) { throw 'graft-patch-store.ps1 failed' }
-    & graft --version
-    if ($LASTEXITCODE -ne 0) { throw 'graft --version check failed' }
-    Say "graft ready ($(Join-Path $script:GraftPkg 'dist\cli.js'))."
 }
 
 function Install-Plugins {
@@ -214,19 +113,9 @@ function Install-Commands {
 function Merge-Config {
     $userCfg = Join-Path $ocConfig 'opencode.json'
     $pin = (Get-Content (Join-Path $bundle 'plugins\dcp.pin') -Raw).Trim()
-    # graft command needs the graft cli.js; resolve here unless Install-Graft already did.
-    if (-not $script:GraftPkg) {
-        try { $script:GraftPkg = Resolve-GraftDir }
-        catch {
-            if ($DryRun) { SayErr ('[dry-run] warning: ' + $_.Exception.Message) }
-            else { throw }
-        }
-    }
-    $graftCliJs = if ($script:GraftPkg) { (Join-Path $script:GraftPkg 'dist\cli.js').Replace('\','/') } else { '<resolved-graft-cli.js>' }
-
-    if ($DryRun) {
+      if ($DryRun) {
         Say "[dry-run] node --print process.execPath => $script:NodePath"
-        Say "[dry-run] write temp snippet: bundle snippet + mcp.servers.graft = {type:local, command:[$script:NodePath, $graftCliJs, mcp], enabled:true} + plugins += [$pin]"
+        Say "[dry-run] write temp snippet: bundle snippet + plugins += [$pin]"
         if (Test-Path $userCfg) { Say "[dry-run] user config: $userCfg (read-only; purely additive merge)" }
         else                    { Say "[dry-run] echo '{}' > '$userCfg'   (no existing config)" }
         Say "[dry-run] & node '$script:NodePath' '$bundle\scripts\merge-config.mjs' --snippet <resolved-snippet> --user '$userCfg' --out '$userCfg'"
@@ -240,21 +129,6 @@ function Merge-Config {
     try {
         $snip = Get-Content (Join-Path $bundle 'config\opencode.snippet.json') -Raw | ConvertFrom-Json
         $snip | Add-Member -NotePropertyName plugins -NotePropertyValue @($pin) -Force
-        $snip.mcp.servers | Add-Member -NotePropertyName graft -NotePropertyValue @{
-            type    = 'local'
-            command = @($script:NodePath, $graftCliJs, 'mcp')
-            # `disabled`, NOT `enabled`. opencode's own V2 MCP docs say
-            # "Use `disabled`, not an `enabled` field, to keep one configured
-            # without connecting it", and both the local and remote field tables
-            # list `disabled` with no `enabled` anywhere. An earlier version of
-            # this file said the opposite, on the authority of the machine-readable
-            # schema at https://opencode.ai/config.json - which is the V1 schema.
-            # The mistake was not cosmetic: writing `enabled` is not a misspelling,
-            # it is an unknown property, so opencode ignored it and every server
-            # ran regardless. Stated here because the wrong claim was written down
-            # confidently once already.
-            disabled = $false
-        } -Force
         $json = $snip | ConvertTo-Json -Depth 10
         [System.IO.File]::WriteAllText($snippetResolved, $json, (New-Object System.Text.UTF8Encoding $false))
         & $script:NodePath "$bundle\scripts\merge-config.mjs" --snippet $snippetResolved --user $userCfg --out $userCfg
@@ -538,7 +412,6 @@ function Run-Selfcheck {
 Say "opencode-factory install (bundle: $bundle)"
 Ensure-Dirs
 if (-not $SkipBd)     { Install-Bd }
-if (-not $SkipGraft)  { Install-Graft }
 Install-Plugins
 Install-Commands
 Merge-Config
