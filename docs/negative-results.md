@@ -125,3 +125,115 @@ instructions before the design skills were installed.
 If role-scoped skills are ever added, this is evidence that **the agent will not
 look for them on its own.** The gap is not capability; it is not knowing a tool
 exists.
+
+
+---
+
+## Reusing the tools we already installed, and the tools we researched
+
+**Status: audited 2026-10-16. Two verdicts recorded, and one correction.**
+
+### graft: the CLI works, the MCP is broken, and we never called it once
+
+`graft build` on this repo: **43 of 43 files parsed, 301 nodes (245 function),
+798 edges, 43 cards, 5.1 seconds, no API key, $0.** It parses Node `.mjs`
+correctly and writes per-file skeletons. `graft/scripts/factory-mcp.md` is
+2,559 bytes of pure signatures for a 30,000+ byte source file.
+
+Its own accounting, on our own code:
+
+```
+graft grep "disabled"                    -> 40,750 tokens saved (92%)
+graft skeleton scripts/factory-mcp.mjs  -> 14,919 tokens saved (96%)
+```
+
+So the "about 10x cheaper" claim is **14x to 28x** in practice. The technology
+is good.
+
+**The MCP surface returns nothing.** `graft_find_code` and `graft_file_api`
+both report *"no definitions indexed"* for `scripts/factory-mcp.mjs` - a file
+with hundreds of functions, in a graph the build reports as fully populated.
+The CLI says 43 indexed files; the MCP says 16. This is guards-present-
+effects-absent, the seventh sighting, and it is inside a third-party tool.
+
+**The part that matters more: across four factory runs, not one `graft_*`
+tool call was ever made.** The bio-link agent tried once, ran
+`factory-mcp handshake --name graft`, and honestly recorded
+`graft ok (handshake: 0 tools legitimate without graph)`. Zero tokens saved.
+`factory-mcp.mjs audit` lists graft as bundle-owned and enabled, which reads
+like an endorsement it never earned.
+
+**The installed thing and the used thing are different things.** That is the
+same shape as our own gates: documented is not enforced.
+
+### DCP: working, and it is carrying the session
+
+`dcp.jsonc` and the turn-nudge override are written by our own installer. It
+fires on essentially every turn, and its compressions have preserved every
+commit hash, measured number, verbatim user quote, and retraction correction
+across dozens of compressions in one session.
+
+**Weakness, honestly:** state has to be re-derived after compression at least
+three times in a long session, and a compression makes *"I was wrong about
+this"* easy to skim past. That is inherent to summarising, not a DCP fault. The
+mitigation is the standing rule: re-verify anything load-bearing rather than
+trusting a summary.
+
+DCP logs nothing to `opencode.log`, so there is no usage telemetry for it at
+all. The only evidence it works is that it fires and the session survives.
+
+### Do not migrate context compression
+
+`ranxianglei/billion-context` is a real technique: pagoda-tiered summary
+blocks, incremental-only compression, server-side range folding. The evidence
+is unusually honest - production logs, no window violations, 94.2% cache-read
+share. Four reasons not to move to it:
+
+1. **Our sessions are too short.** 62% of its compressed tokens come from the
+   1.3% of sessions with more than 1,000 messages. Ours run to hundreds of
+   turns, and there is no evidence the effect survives at our lengths.
+2. **It carves out our class.** *"Verbatim-history task classes - audits,
+   compliance, forensics, simultaneous multi-constraint refactors whose
+   constraint union exceeds any digest - lie outside the support range."* We
+   are a multi-constraint requirement-recall system. That is us, by name.
+3. **Most of the gain is doctrine text.** Its own quiescent control - no
+   compression at all - reproduces nearly the entire reduction from doctrine
+   text alone. **Our installer already writes doctrine text.**
+4. **Provenance.** The author is DCP's most vocal rejected contributor, with
+   roughly 20 issues closed unread. This is a migration from one maintainer's
+   successor, not a neutral tool.
+
+### The correction: "Pi-only" is a porting cost, not a rejection
+
+Fifteen tools were read. Thirteen were rejected, and the reason given for
+several was that they target the Pi agent and have no opencode port.
+
+**That reason is wrong.** A packaging detail is not a verdict. The correct
+question is whether the *mechanism* is worth rebuilding here. Ranked by what
+would actually help this factory:
+
+| mechanism | from | worth porting because |
+|---|---|---|
+| Evidence required before a completion claim | pi-advisor | attacks guards-present-effects-absent, our top defect |
+| Recall what did not work, and why | pi-hermes-memory | `negative-results.md` has 2 entries and 0 recall paths |
+| Corrections saved immediately | pi-hermes-memory | our objections arrive in a channel nothing binds |
+| Proceed / revise / blocked on repeated calls | pi-advisor | loop detection that can actually stop something |
+| Only stdout enters context | context-mode | its own numbers: 98% with hooks, 60% without |
+| Session state in FTS5, not scrollback | context-mode / engram | BM25 retrieval beats re-deriving |
+| Fail closed; unknown suppression is a violation | agent-simple-english | a guard that can fail, by construction |
+| Unknown rule id is itself a hard error | agent-simple-english | you cannot silence a rule that does not exist |
+| Do not silently substitute the model | pi-web-search | refusing to guess, twice |
+| Check the page after the click | pi-agent-browser-native | "command success alone does not prove the app changed" |
+| Proof screenshots | BetterWright | evidence a human can see |
+| External side effects must be idempotent | kxm | we have never thought about phase-machine idempotency |
+
+### The one finding that survived all fifteen
+
+**Every tool sent landed on something we have, could do, or already do by
+hand.** The wins were in discipline and enforcement, not in swapping tools.
+
+The most useful number found in the entire survey is context-mode's: **about
+98% context saved with hooks, against about 60% without.** Hooks intercept a
+tool call and can refuse it. Instruction files can only ask. That is our own
+defect class, measured by someone else - `conductor.md` says the gates are
+hard stops, and they are not, because prose cannot refuse anything.
