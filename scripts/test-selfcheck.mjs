@@ -367,69 +367,41 @@ try {
     );
   }
 
-  console.log("mcp: graft handshake - the real wire protocol, both directions");
-  // A fake MCP server that answers `initialize` and `tools/list` over
-  // newline-delimited JSON-RPC. The PASS path needs a server that genuinely
-  // completes the handshake, otherwise the test would only prove that a
-  // misconfigured server is rejected.
-  const fakeMcp = join(tmp, "fake-mcp.mjs");
-  writeFileSync(fakeMcp, [
-    'let buf = "";',
-    'process.stdin.on("data", (d) => {',
-    '  buf += d;',
-    '  let i;',
-    '  while ((i = buf.indexOf("\\n")) >= 0) {',
-    '    const line = buf.slice(0, i); buf = buf.slice(i + 1);',
-    '    if (!line.trim()) continue;',
-    '    let m; try { m = JSON.parse(line); } catch { continue; }',
-    '    if (m.method === "initialize")',
-    '      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: m.id, result: { protocolVersion: "2024-11-05", serverInfo: { name: "graft", version: "0.18.0" }, capabilities: { tools: {} }, instructions: "fake" } }) + "\\n");',
-    '    else if (m.method === "tools/list")',
-    '      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: m.id, result: { tools: [] } }) + "\\n");',
-    '  }',
-    '});',
-  ].join("\n"), "utf8");
-  const mcpConfig = (name, servers) => state(name, { mcp: { servers } });
-  // 11. A server that completes the handshake must PASS, and the verdict must
-  //     carry the version it reported (proving it came off the wire, not out
-  //     of a constant).
+  console.log("graft is not a requirement - and must stay that way");
+  // These assertions are the inverse of the family they replace. The old one
+  // proved that `mcp: graft handshake` graded a server correctly; the check is
+  // gone, so those assertions would now pass vacuously - they would read a
+  // line that can never appear. A test that cannot fail is not a test, and
+  // this project has shipped several.
+  //
+  // What is asserted instead is the decision itself: the factory must not
+  // require graft. If someone re-adds the requirement, or wires the check
+  // back in, these fail. That is the direction that matters - the failure we
+  // are guarding against is a machine with no graft failing its own
+  // selfcheck, which is what this used to cause.
+  //
+  // Why: measured. 1 graft call in 40,467 recorded tool calls, 0 in PowerShell
+  // history, 0 telemetry events in 25 days, and 1,437 cards built and never
+  // opened again. The CLI was real and good at search (98% smaller than
+  // reading whole files) and useless at navigation, which is 83% of what this
+  // work does: ls beat graft repo-map 317 bytes to 5,185 at 3,557 files.
   {
-    const p = mcpConfig("mcp-ok", { graft: { type: "local", command: [process.execPath, fakeMcp] } });
-    const r = runSelfcheck(["--mcp-config", p]);
-    report("completing handshake PASSes", r.line(/^PASS\s+mcp: graft handshake/) !== "", r.line(/mcp: graft handshake/));
-    report("verdict carries the server version from the wire", /0\.18\.0/.test(r.line(/mcp: graft handshake/)), r.line(/mcp: graft handshake/));
+    const r = runSelfcheck([]);
+    report(
+      "selfcheck emits no graft requirement at all",
+      !/graft/i.test(r.out),
+      (r.line(/graft/i) || "(no graft line in the selfcheck output)"),
+    );
   }
-  // 12. A config with no graft server must FAIL. This is the case the doc used
-  //     to claim was covered while it only ran `graft --version`.
+  // The CLI-presence row went with it: a machine without graft must not be
+  // told it is missing something.
   {
-    const p = mcpConfig("mcp-absent", { somethingelse: { type: "local", command: [process.execPath, fakeMcp] } });
-    const r = runSelfcheck(["--mcp-config", p]);
-    report("absent server FAILs", r.line(/^FAIL\s+mcp: graft handshake/) !== "", r.line(/mcp: graft handshake/));
-  }
-  // 13. A disabled server must FAIL: a server nobody can reach is not healthy.
-  {
-    const p = mcpConfig("mcp-disabled", { graft: { type: "local", command: [process.execPath, fakeMcp], disabled: true } });
-    const r = runSelfcheck(["--mcp-config", p]);
-    report("disabled server FAILs", r.line(/^FAIL\s+mcp: graft handshake/) !== "", r.line(/mcp: graft handshake/));
-    report("disabled failure says it is disabled", /disabl/i.test(r.line(/mcp: graft handshake/)), r.line(/mcp: graft handshake/));
-  }
-  // 14. A command that cannot spawn must FAIL rather than reading as healthy.
-  {
-    const p = mcpConfig("mcp-unspawnable", { graft: { type: "local", command: ["definitely-not-a-real-binary-xyz", "serve"] } });
-    const r = runSelfcheck(["--mcp-config", p]);
-    report("unspawnable command FAILs", r.line(/^FAIL\s+mcp: graft handshake/) !== "", r.line(/mcp: graft handshake/));
-  }
-  // 15. The failure must name the fix, or a person hits it with no next step.
-  {
-    const p = mcpConfig("mcp-fix", { graft: { type: "local", command: ["definitely-not-a-real-binary-xyz", "serve"] } });
-    const r = runSelfcheck(["--mcp-config", p]);
-    report("handshake failure names the fix", /install\.(ps1|sh)/.test(r.out), r.line(/mcp: graft handshake/));
-  }
-  // 16. An unreadable config must FAIL, and must not crash the whole selfcheck
-  //     (the shape-not-flag lesson from the mandatory-skills check).
-  {
-    const r = runSelfcheck(["--mcp-config", state("mcp-broken", "{ not json")]);
-    report("unreadable config FAILs without crashing", r.line(/^FAIL\s+mcp: graft handshake/) !== "" && !/TypeError|Cannot read/.test(r.out), r.line(/mcp: graft handshake/));
+    const r = runSelfcheck([]);
+    report(
+      "a machine with no graft is not failed for having no graft",
+      !/FAIL[^\n]*graft/i.test(r.out),
+      (r.line(/FAIL[^\n]*graft/i) || "(no graft failure)"),
+    );
   }
 
   console.log("live machine sanity");
