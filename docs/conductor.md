@@ -702,7 +702,8 @@ already doing this work.
 The one lesson worth keeping is not about graft: **a bundle that depends on
 nothing must touch nothing.** An empty requirement list once meant *disable
 every configured server*, which silently cost one run its verification path.
-That is now an explicit rule, and `scripts/test-factory-mcp.mjs` asserts it.
+That is now an explicit rule, and the bundle's own MCP suite asserts it (that
+suite lives in the factory repository and is not part of this install).
 
 The full measurement is in `docs/negative-results.md`. Read the **graft**
 entry there with its correction open: this repo previously recorded that
