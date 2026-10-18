@@ -28,8 +28,19 @@ const SELFCHECK = join(here, "factory-selfcheck.mjs");
 const BUNDLE = join(here, "..");
 let failures = 0;
 let ran = 0;
+let skipped = 0;
 
 const report = (name, pass, detail = "") => {
+  // `null` means INCONCLUSIVE: the check could not be evaluated here. That is
+  // not a pass - a pass would be decoration, and this repo has spent 57 checks
+  // refusing to ship decoration. And it is not a failure either: refusing to
+  // verify something is not the same as finding it broken. It gets reported and
+  // stays out of both totals, so a number that means "decided" keeps meaning it.
+  if (pass === null) {
+    skipped += 1;
+    console.log(`  skip ${name}${detail ? " \u2014 " + detail : ""}`);
+    return;
+  }
   ran += 1;
   if (pass) console.log(`  ok   ${name}${detail ? " — " + detail : ""}`);
   else {
@@ -710,14 +721,14 @@ try {
   }
   report(
     "a commit hash cited in docs resolves from HEAD, or its paragraph names one that does",
-    gitOk && deadBlocks.length === 0,
+    gitOk ? deadBlocks.length === 0 : null,
     !gitOk
-      ? "not a git checkout, so no cited commit can be resolved - refusing to report this as a pass"
+      ? "not a git checkout, so there is no HEAD to resolve against - nothing to verify here, not nothing wrong"
       : `${cited} cited across docs/*.md` + (deadBlocks.length ? `; unreachable with no live sibling in ${deadBlocks.length} paragraph(s): ${deadBlocks.join("; ")}` : "; all resolve, or sit in a paragraph with one that does")
   );
 }
 
-console.log(`\n${ran - failures}/${ran} selfcheck tests passed.`);
+console.log(`\n${ran - failures}/${ran} selfcheck tests passed.` + (skipped ? ` (${skipped} could not be evaluated here)` : ""));
 if (failures) {
   console.error(`${failures} test(s) failed.`);
   process.exit(1);

@@ -474,3 +474,57 @@ asserted the shape I had written and passed, so the check that was supposed to
 catch this only ever measured whether my idea of the problem was spelled
 correctly. When a check and the thing it checks were both written in the same
 minute by the same person, the check is not evidence. It is a witness.
+
+## The installer certifying an installation it did not perform
+
+Every one of this bundle's 487 tests runs a script in the repo against a
+fixture. None runs the installer. None executes the *installed* copy of
+anything. So the boundary where the repo becomes an installation was simply
+never crossed by a test - and defects that live only on that boundary were
+invisible to all of them, including to me.
+
+The first test to cross it found two defects on its first run.
+
+**One, now fixed.** `test-selfcheck.mjs` asserts that a commit hash cited in
+the docs still resolves from HEAD. That needs a git checkout. Installed from a
+bundle directory that is not a clone, the installer died at `run_tests` with a
+non-zero exit **even though every single file installed perfectly** - a check
+about this repository's own doc hygiene was sitting inside the install gate.
+It now reports `inconclusive` when there is no HEAD: not a pass, because a pass
+would be decoration, and not a failure either, because refusing to verify
+something is not the same as finding it broken. A check that cannot be evaluated
+says which it is.
+
+**Two, still open, and it is worse.** `install.sh` writes to `$HOME` - bash
+resolves that from the environment. Its own selfcheck runs under node, and
+node's `os.homedir()` on Windows reads `USERPROFILE`. Those are different
+variables. Point the installer at a different home and it installs there and
+then *verifies somewhere else entirely*:
+
+    installer wrote   <temp>/.agents/skills/factory/scripts/...      correct
+    selfcheck read    C:/Users/<you>/.agents/skills/factory/scripts/...   wrong
+
+The selfcheck reported PASS on paths it had never touched. It is not that the
+value is hard-coded - `homedir()` returned the correct home, the operator's own.
+The defect is two dynamic values that can disagree, and the fix is not "make it
+dynamic" because it already is. The fix is to resolve the home **once**, let it
+be overridden explicitly, and thread that one value through every site - so
+there is nothing left to disagree. Today the selfcheck calls `homedir()` at six
+separate sites with no override and no `--home` flag, so this is not fixable
+from outside at all.
+
+The general form, which is the part worth keeping: **an installer that writes
+somewhere and checks somewhere else will, one day, certify an installation it
+did not perform - and it will report success while doing it.** A selfcheck
+that cannot be pointed at a specific installation is not verifying the install.
+That is the whole reason this test exists, and it took two runs of a 35-minute
+boundary test to find, which is the honest cost of not having had one.
+
+### Not adopted
+
+No SHIP GATE, no meter token, no receipt log. The second opinion was explicit
+that these are guards-on-guards, and that a token whose only proof is that the
+suite went red proves the fixture is wired rather than the product. The
+adoption oracle already measured the existing tools at one use in 40,467 calls;
+a new one would meet the same fate. This test needed no budget and no ceremony,
+because it turned out to be forty lines and an hour.
