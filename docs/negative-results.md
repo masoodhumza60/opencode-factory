@@ -332,6 +332,39 @@ pointers rot once more, that is the moment to build the store - and it will be
 a decision made from a measured failure, which is the only way this factory has
 ever adopted anything.
 
+## A check that reports the last failure it saw, and calls it the present
+
+The installer ended every run with `FAIL plugins: zero load failures`. The
+plugin really was broken - but install #5 shipped the fix and still reported
+the failure, because the check reads the newest *completed* run and the run that
+was starting while the fix landed still held the old failures:
+
+```
+last failure in that run   10:14:50.076
+the fixed file written     10:14:50.095     19 ms later
+```
+
+Every failure the check saw happened before the thing that would prevent them
+existed. A check with no notion of time cannot tell a fresh result from a stale
+one, so it will keep reporting a fixed defect until something restarts the thing
+it watches - and it will keep doing so forever, because it is reading a record
+of the past and calling it the present.
+
+**The general form: a verdict with no timestamp is a claim about the last thing
+that happened, whatever you meant it to be a claim about.** The same mistake ran
+in both directions in one afternoon - I once reported a failure as happening
+*after* a fix when it was 7 ms *before* it. Both times a timestamp was compared
+against the wrong reference, and in both cases the number was confident and
+wrong.
+
+This is the same shape as the entry above about pointers that no longer resolve.
+The claim outlived the evidence, except here the evidence is *still being
+written* and nobody marked the boundary.
+
+What would have caught it, and did not: the fix was verified on disk before the
+install's own verdict was read. Reading the verdict first would have reported a
+working plugin as broken, on the strength of a log line that predates the file.
+
 ## A suite that passes only on the machine it was written on
 
 Removing `graft` produced a green MCP suite - 252 passed, 0 failed - and then
