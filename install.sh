@@ -6,6 +6,13 @@
 # -DryRun   : print every step without changing anything (exits 0)
 set -euo pipefail
 
+# One home, not two. Bash resolves the install target from $HOME; node resolves
+# os.homedir() from USERPROFILE on Windows and from $HOME elsewhere. When those
+# disagree the installer writes one folder and then verifies another, and reports
+# success for an installation it did not perform. Pinning them equal is the fix; a
+# third source of truth would only add another thing to keep in sync.
+export USERPROFILE="$HOME"
+
 SKIP_BD=0
 DRY_RUN=0
 for arg in "$@"; do

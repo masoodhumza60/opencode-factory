@@ -528,3 +528,49 @@ suite went red proves the fixture is wired rather than the product. The
 adoption oracle already measured the existing tools at one use in 40,467 calls;
 a new one would meet the same fate. This test needed no budget and no ceremony,
 because it turned out to be forty lines and an hour.
+
+## Fixing it: two homes, made into one
+
+The fix is one line in each installer, and one constant in this file.
+
+`install.sh` resolves every destination from bash `$HOME`. Its own selfcheck
+runs under node, where `os.homedir()` reads `USERPROFILE` on Windows and
+`$HOME` everywhere else. Pin them equal and the split cannot open:
+
+```bash
+# One home, not two.
+[ -n "${USERPROFILE:-}" ] && export USERPROFILE="$HOME"
+```
+
+`install.ps1` gets the mirror (`$env:USERPROFILE = $HOME`), which is a no-op in
+the normal case because it already derived everything from `USERPROFILE` - but
+the two installers should agree about what "the home directory" means, and
+right now only one of them has to say so.
+
+Then `factory-selfcheck.mjs` resolves its home **once**:
+
+```js
+const HOME = (() => {
+  const i = process.argv.indexOf("--home");
+  return (i !== -1 && process.argv[i + 1]) || homedir();
+})();
+```
+
+and every check reads `HOME`. Five call sites that each asked the operating
+system independently now ask one value. `--home` exists so a caller can name the
+installation it means rather than leaving it to whichever variable won.
+
+**The ordering constraint is the part that is easy to get wrong**, and I got it
+wrong the first time: I put the `USERPROFILE` assignment *after* the lines that
+derive paths from it, which would have re-created the exact split being fixed -
+paths derived from the old value, node reporting the new one. **When making two
+values equal, assign before deriving anything from either.** No test caught it;
+reading the diff did.
+
+### What this does and does not buy
+
+It removes the split. It does not make the selfcheck able to verify an arbitrary
+installation on purpose - that is what `--home` is for, and it is deliberately a
+separate concern from the equality fix. One line that makes two things agree is
+a different kind of change from six call sites threaded through a new parameter,
+and keeping them separate means either can be reasoned about on its own.

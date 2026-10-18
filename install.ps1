@@ -22,6 +22,11 @@ if ((& node -p "process.versions.node.split('.')[0]*1 >= 20") -ne 'true') {
 }
 
 $bundle       = $PSScriptRoot
+# One home, not two. install.sh pins USERPROFILE to HOME; this is its mirror. It
+# has to happen BEFORE anything below is derived from USERPROFILE, or the paths
+# we write to and the home node reports would still be two different folders -
+# which is the exact defect this line exists to remove.
+$env:USERPROFILE = $HOME
 $ocConfig     = Join-Path $env:USERPROFILE ".config\opencode"
 $agentsSkills = Join-Path $env:USERPROFILE ".agents\skills"
 $projectSkills = Join-Path $bundle ".agents\skills"

@@ -60,7 +60,17 @@ function dropPhaseFromRuntime(installerPath) {
   writeFileSync(installerPath, after, "utf8");
 }
 
+// Everything throwaway this test makes lives under one folder rather than loose
+// in the system temp root. That root is shared with every other tool on the
+// machine and already holds thousands of unrelated entries, so five prefixes
+// scattered across it are not somewhere a human can usefully look - and if this
+// test ever dies before its finally block, "where did those go" is a question
+// nobody can answer cheaply. One directory answers it.
+const SCRATCH = join(tmpdir(), "opencode", "smoke");
+mkdirSync(SCRATCH, { recursive: true });
+const scratch = (what) => mkdtempSync(join(SCRATCH, what + "-"));
 const t0 = Date.now();
+console.log("scratch root: " + SCRATCH);
 const roots = [];
 try {
   const bdv = spawnSync("bd", ["--version"], { encoding: "utf8" });
@@ -74,8 +84,8 @@ try {
   }
 
   // ---------------- clean run ------------------------------------------------
-  const home = mkdtempSync(join(tmpdir(), "smoke-home-"));
-  const bundle = mkdtempSync(join(tmpdir(), "smoke-bundle-"));
+  const home = scratch("home");
+  const bundle = scratch("bundle");
   roots.push(home, bundle);
   const installer = copyBundle(bundle);
 
@@ -96,7 +106,7 @@ try {
   console.log("  installed: " + (existsSync(join(skill, "scripts")) ? readdirSync(join(skill, "scripts")).join(", ") : "(none)"));
 
   // ---------------- real bead, real transition ------------------------------
-  const work = mkdtempSync(join(tmpdir(), "smoke-work-"));
+  const work = scratch("work");
   roots.push(work);
   const proj = join(work, "proj");
   mkdirSync(proj, { recursive: true });
@@ -131,8 +141,8 @@ try {
 
   // ---------------- THE FALSIFIER --------------------------------------------
   console.log("\n=== FALSIFIER: drop factory-phase.mjs from the runtime array ===");
-  const home2 = mkdtempSync(join(tmpdir(), "smoke-mut-"));
-  const bundle2 = mkdtempSync(join(tmpdir(), "smoke-bundle2-"));
+  const home2 = scratch("mut-home");
+  const bundle2 = scratch("mut-bundle");
   roots.push(home2, bundle2);
   const installer2 = copyBundle(bundle2);
   dropPhaseFromRuntime(installer2);

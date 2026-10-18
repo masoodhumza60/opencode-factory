@@ -8,6 +8,17 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { homedir, tmpdir } from "node:os";
 
+// ONE home for the whole file. os.homedir() reads USERPROFILE on Windows and
+// HOME elsewhere, while the bash installer resolves its target from HOME - so if
+// anything redirects one without the other, a check in here can report on an
+// installation this file never touched. Six separate homedir() calls meant six
+// chances to disagree with the installer. --home lets a caller name the
+// installation it means, rather than leaving it to whichever variable won.
+const HOME = (() => {
+  const i = process.argv.indexOf("--home");
+  return (i !== -1 && process.argv[i + 1]) || homedir();
+})();
+
 const checks = [];
 const ok = (name, pass, extra = "") => {
   checks.push({ name, pass, extra });
@@ -46,13 +57,13 @@ if (existsSync(log)) {
   // right thing.
   const expectedPlugins = () => {
     const names = [];
-    const dir = join(homedir(), ".config", "opencode", "plugins");
+    const dir = join(HOME, ".config", "opencode", "plugins");
     try {
       for (const f of readdirSync(dir)) {
         if (f.endsWith(".ts") || f.endsWith(".js")) names.push(basename(f).replace(/\.[jt]s$/, ""));
       }
     } catch { /* no plugins dir yet - the count below will say so */ }
-    const cfgPath = join(homedir(), ".config", "opencode", "opencode.json");
+    const cfgPath = join(HOME, ".config", "opencode", "opencode.json");
     if (existsSync(cfgPath)) {
       try {
         const declared = JSON.parse(readFileSync(cfgPath, "utf8")).plugins;
@@ -133,7 +144,7 @@ for (const [name, cmd, args] of [
 //    makes dangling: the doc is what tells the agent where conductor.md,
 //    plan-format.md and discovery.md live, so their absence is a real fault,
 //    not a packaging detail.
-const factorySkillDir = join(homedir(), ".agents", "skills", "factory");
+const factorySkillDir = join(HOME, ".agents", "skills", "factory");
 const factorySkill = join(factorySkillDir, "SKILL.md");
 const requiredDocs = ["conductor.md", "how-factory-works.md", "plan-format.md", "discovery.md", "mcp-judging.md"];
 const missingDocs = requiredDocs.filter((d) => !existsSync(join(factorySkillDir, "docs", d)));
@@ -420,14 +431,14 @@ if (missingScripts.length === 0) {
 //     claim, and this skill is what turns that one sentence into a committed,
 //     re-runnable artifact. Shipping the guard without the thing that makes the
 //     claim checkable would be the guard-without-effect shape again.
-const verifyAppSkill = join(homedir(), ".agents", "skills", "verify-app", "SKILL.md");
+const verifyAppSkill = join(HOME, ".agents", "skills", "verify-app", "SKILL.md");
 ok(
   "verify-app skill deployed",
   existsSync(verifyAppSkill),
   existsSync(verifyAppSkill) ? verifyAppSkill : `${verifyAppSkill} (re-run install.ps1/install.sh)`,
 );
 // 4. Beads state accessible (git repo has .beads store)
-const beadsMarker = existsSync(join(homedir(), ".beads")) || existsSync(".beads") || existsSync(".agit");
+const beadsMarker = existsSync(join(HOME, ".beads")) || existsSync(".beads") || existsSync(".agit");
 ok("beads store present", beadsMarker, "in cwd tree");
 // 5. DCP is actually pruning, not merely loaded. Check 1 proves dcp *started*;
 //    it says nothing about whether pruning is doing anything. A loaded-but-idle
