@@ -73,12 +73,15 @@ install_plugins() {
     local pty_index=""
     pty_index="$(ls -t "$HOME/.cache/opencode"/npm/opencode-pty@*/*/node_modules/opencode-pty/dist/src/v2/index.js 2>/dev/null | head -n 1)" || true
     if [ -z "$pty_index" ]; then
-        if [ "$DRY_RUN" = 1 ]; then
-            say "[dry-run] warning: opencode-pty v2 index not found in cache; render would fail here"
-        else
-            echo "install: opencode-pty v2 index not found. Run opencode once so it installs opencode-pty, then re-run install." >&2
-            exit 1
+        # opencode-pty may simply never have been installed on this machine. That
+        # is a missing optional plugin, not a broken install, so warn and carry on
+        # rather than exiting 1 - but do not leave a stale shim behind claiming to
+        # be a plugin.
+        say "warning: opencode-pty v2 index not found in cache; skipping its plugin shim."
+        if [ "$DRY_RUN" != 1 ]; then
+            rm -f "$oc_config/plugins/opencode-pty.ts"
         fi
+        return 0
     fi
     # Node resolves the rendered import, not bash. Under Git bash on Windows
     # $HOME is /c/Users/... , so the substituted path becomes
@@ -89,10 +92,30 @@ install_plugins() {
     if [ -n "$pty_index" ] && command -v cygpath >/dev/null 2>&1; then
         pty_index="$(cygpath -m "$pty_index")"
     fi
+    # Presence is not loadability. opencode-pty@0.4.0 ships TypeScript under
+    # node_modules (bun-pty/src/index.ts), which neither Node nor Bun will strip,
+    # so the import throws before the module can export anything. opencode then
+    # reports that as a schema error about a missing "default" key - a shape error
+    # that is really an import error, which is why rewriting the shim's export
+    # shape could never have fixed it. Only a real import proves loadability, so
+    # ask Node the same question opencode will ask.
+    if [ "$DRY_RUN" = 1 ]; then
+        dry "node import probe of file:///$pty_index (skipped in dry-run)"
+    else
+        local pty_probe_err=""
+        pty_probe_err="$(node --input-type=module -e "import('file:///$pty_index').then(()=>process.exit(0),(e)=>{console.error((e&&e.message)||e);process.exit(1)})" 2>&1 >/dev/null)" || true
+        if [ -n "$pty_probe_err" ]; then
+            say "warning: opencode-pty is installed but will not load here; skipping its plugin shim."
+            say "         reason: $(printf '%s' "$pty_probe_err" | head -n 1)"
+            say "         a shim pointing at it would fail every session start."
+            rm -f "$oc_config/plugins/opencode-pty.ts"
+            return 0
+        fi
+    fi
     if [ -n "$pty_index" ]; then
         if [ "$DRY_RUN" = 1 ]; then
             dry "render \"$bundle/plugins/opencode-pty.ts.tmpl\" (substitute __OPENCODE_PTY_V2_INDEX__ = $pty_index) -> \"$oc_config/plugins/opencode-pty.ts\""
-            dry "export { default } from \"file:///$pty_index\";"
+            dry "import Plugin from \"file:///$pty_index\";"
         else
             # substitute the BARE absolute path (the template already carries file:///)
             sed "s|__OPENCODE_PTY_V2_INDEX__|$pty_index|" "$bundle/plugins/opencode-pty.ts.tmpl" > "$oc_config/plugins/opencode-pty.ts"

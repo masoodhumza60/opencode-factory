@@ -37,7 +37,32 @@ if (existsSync(log)) {
   try {
     fd = openSync(log, "r");
     const size = fstatSync(fd).size;
-    const msgOf = (line) => (line.match(/(?:^|\s)(?:msg|message)="([^"]*)"/) ?? [])[1];
+    // Which plugins SHOULD load is a property of this machine, not of the bundle.
+  // The installer decides that: it writes each shim it can actually load, and
+  // skips - with a warning - any whose module it could not import. So the
+  // expectation is derived from what is on disk plus what the config declares,
+  // never from names typed into this file. Typing them in made this check a
+  // claim about one machine, and it went red the moment the installer did the
+  // right thing.
+  const expectedPlugins = () => {
+    const names = [];
+    const dir = join(homedir(), ".config", "opencode", "plugins");
+    try {
+      for (const f of readdirSync(dir)) {
+        if (f.endsWith(".ts") || f.endsWith(".js")) names.push(basename(f).replace(/\.[jt]s$/, ""));
+      }
+    } catch { /* no plugins dir yet - the count below will say so */ }
+    const cfgPath = join(homedir(), ".config", "opencode", "opencode.json");
+    if (existsSync(cfgPath)) {
+      try {
+        const declared = JSON.parse(readFileSync(cfgPath, "utf8")).plugins;
+        if (Array.isArray(declared)) names.push(...declared.map((d) => String(d).split("@").slice(0, -1).join("@") || String(d)));
+      } catch { /* unreadable config - the count below will say so */ }
+    }
+    return names;
+  };
+
+  const msgOf = (line) => (line.match(/(?:^|\s)(?:msg|message)="([^"]*)"/) ?? [])[1];
     const runOf = (line) => (line.match(/\srun=([0-9a-f]+)/) ?? [])[1];
     const idOf = (line) => {
       const m = line.match(/\sid=(?:"([^"]*)"|([^\s]+))/);
@@ -74,15 +99,18 @@ if (existsSync(log)) {
     const haveRun = typeof targetRun === "string" && targetRun.length > 0;
     const targetLoading = haveRun ? loading.filter((l) => runOf(l) === targetRun) : [];
     const ids = targetLoading.map(idOf).join(" ");
-    const allThree =
-      ids.includes("opencode-beads") && ids.includes("opencode-pty") && ids.includes("@tarquinen/opencode-dcp");
+    const expected = expectedPlugins();
+    const allDeclared = expected.length > 0 && expected.every((n) => ids.includes(n));
+    const missing = expected.filter((n) => !ids.includes(n));
     const targetFailures = haveRun ? failures.filter((l) => runOf(l) === targetRun) : [];
     const basis = haveRun
       ? `from latest opencode run ${targetRun}`
       : loading.length
         ? "plugin-load lines carry no run token (cannot prove same-run)"
         : "no loading-plugin lines in the log tail";
-    ok("plugins: all 3 loading", haveRun && allThree, basis);
+    ok("plugins: all 3 loading", haveRun && allDeclared,
+      haveRun ? `expected ${expected.length} declared on this machine: ${expected.join(", ") || "(none)"}` +
+        (missing.length ? `; not loaded: ${missing.join(", ")}` : "") : basis);
     ok("plugins: zero load failures", haveRun && targetFailures.length === 0, haveRun ? `in run ${targetRun}` : basis);
   } catch (e) {
     ok("plugins: all 3 loading", false, `log unreadable: ${e.message.slice(0, 80)}`);

@@ -404,3 +404,73 @@ one of them had ever been tested.
 **The rule that generalises: a test which reads anything outside its own fixture
 is not hermetic, even when it has a sandbox.** Point the sandbox at every input,
 at the *start*, or do not claim the sandbox exists.
+
+
+## An import failure wearing a shape-error costume
+
+`915f26f` says it fixes the opencode-pty plugin. **It does not, and I have been
+rewriting the export shape of a module that cannot be imported.**
+
+The error opencode prints is a complaint about a plugin's *shape*:
+
+    Plugin must export a default definition with an id and an effect or setup
+    function.  (cause: SchemaError(Missing key at ["default"]))
+
+Two things in that sentence matter and both had to be read before the first is
+acted on. The first - "must export a default definition" - is a claim about the
+form of the export. The second - `Missing key` **at** `["default"]` - is a claim
+about the module *namespace*, and it says there is no `default` at all. A plugin
+that exported something in the wrong shape would still have a `default` key. A
+module whose import threw before it finished evaluating has none.
+
+So the loader was reporting an import error in the vocabulary of a schema error.
+Both a bare re-export and an inline `export default { … }` fail identically,
+because both resolve the same module, and that module is the thing that is broken.
+
+And it is:
+
+    opencode-pty@0.4.0 imports bun-pty/src/index.ts
+
+TypeScript, under `node_modules`, where neither Node nor Bun will strip types.
+`await import()` of either entry point fails with *"Stripping types is currently
+unsupported for files under node_modules"*. Verified against both published
+entries:
+
+    dist/src/v2/index.js   FAIL  Stripping types is currently unsupported
+    dist/index.js          FAIL  Stripping types is currently unsupported
+    dist/src/index.js      ABSENT
+
+**The honest fix is not a better shim. It is to ask Node whether the module
+imports at all, and if it does not, write no shim and say why.** Both installers
+now do that. The check goes from "this check failed since install #2" to "here is
+the exact reason, and here is what we did about it".
+
+The second half is a check that had been wrong for a different reason. It typed
+in the three plugins it expected to see loading:
+
+    ids.includes("opencode-beads") && ids.includes("opencode-pty") && ids.includes("...dcp")
+
+That is a property of one machine wearing the costume of a property of the
+bundle, and it went red the moment the installer did the right thing - because
+"correctly skipped a plugin that cannot load" must not look like "a plugin is
+missing". The expectation is now **derived** from the plugins directory and the
+config's own `plugins` array. The check's name is unchanged, because two documents
+reference it by name and renaming it would break doc closure; the count in its
+basis is now a measurement rather than a typing.
+
+**What this cost:** `915f26f`, and about a day of rewriting the same line. The
+tell was in the message the whole time - the error said *shape*, and the cause
+said *namespace*, and I believed the summary over the cause for far too long.
+
+**The rule: a loader's headline names the layer it blames. Read the cause.**
+"Malformed input", "invalid schema", "unexpected token" - each of those is a
+statement about what the loader saw, not about where the fault started. The
+*cause* is the only part that ran earlier in the process, and it is therefore the
+only part that can tell you what actually went wrong.
+
+**And the one that kept producing false confidence:** `915f26f` is committed with
+a message claiming a fix that its own commit does not contain. A test suite
+asserted the shape I had written and passed, so the check that was supposed to
+catch this only ever measured whether my idea of the problem was spelled
+correctly. When a check and the thing it checks were both written in the same
+minute by the same person, the check is not evidence. It is a witness.

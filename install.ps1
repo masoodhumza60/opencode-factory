@@ -72,21 +72,47 @@ function Install-Plugins {
         Copy-Item $beadsSrc $beadsDst -Force
     }
 
+    # opencode-pty is a third-party optional plugin. Every way it can go wrong
+    # on someone else's machine - never installed, installed but unloadable - is a
+    # reason to skip its shim, not a reason to fail the install. What we must never
+    # do is leave a shim behind that claims to be a plugin and then fails every
+    # single session start.
     $ptyIndex = Get-ChildItem "$env:USERPROFILE\.cache\opencode\npm\opencode-pty@*\*\node_modules\opencode-pty\dist\src\v2\index.js" -ErrorAction SilentlyContinue |
         Sort-Object LastWriteTime -Descending | Select-Object -First 1
     if (-not $ptyIndex) {
-        if ($DryRun) { SayErr '[dry-run] warning: opencode-pty v2 index not found in cache; render would fail here' }
-        else { throw 'opencode-pty v2 index not found. Run `opencode` once so it installs opencode-pty, then re-run install.' }
+        SayErr 'warning: opencode-pty v2 index not found in cache; skipping its plugin shim.'
+        if (-not $DryRun) { Remove-Item $ptyDst -Force -ErrorAction SilentlyContinue }
+        return
     }
-    if ($ptyIndex) {
-        $barePath = $ptyIndex.FullName.Replace('\','/')
-        if ($DryRun) {
-            Say "[dry-run] render '$ptyTmpl' (substitute __OPENCODE_PTY_V2_INDEX__ = $barePath) -> '$ptyDst'"
-            Say "[dry-run]   export { default } from `"file:///$barePath`";"
-        } else {
-            $content = (Get-Content $ptyTmpl -Raw) -replace '__OPENCODE_PTY_V2_INDEX__', $barePath
-            [System.IO.File]::WriteAllText($ptyDst, $content, (New-Object System.Text.UTF8Encoding $false))
+
+    $barePath = $ptyIndex.FullName.Replace('\','/')
+
+    # Presence is not loadability. opencode-pty@0.4.0 ships TypeScript under
+    # node_modules (bun-pty/src/index.ts), which neither Node nor Bun will strip,
+    # so the import throws before the module can export anything. opencode then
+    # reports that as a schema error about a missing 'default' key - a shape error
+    # that is really an import error, which is why rewriting the shim's export
+    # shape could never have fixed it. Only a real import proves loadability, so
+    # ask Node the same question opencode will ask.
+    if ($DryRun) {
+        Say "[dry-run] node import probe of file:///$barePath (skipped in dry-run)"
+    } else {
+        $probe = & node --input-type=module -e "import('file:///$barePath').then(()=>process.exit(0),(e)=>{console.error((e&&e.message)||e);process.exit(1)})" 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            SayErr 'warning: opencode-pty is installed but will not load here; skipping its plugin shim.'
+            SayErr "         reason: $(($probe | Select-Object -First 1))"
+            SayErr '         a shim pointing at it would fail every session start.'
+            Remove-Item $ptyDst -Force -ErrorAction SilentlyContinue
+            return
         }
+    }
+
+    if ($DryRun) {
+        Say "[dry-run] render '$ptyTmpl' (substitute __OPENCODE_PTY_V2_INDEX__ = $barePath) -> '$ptyDst'"
+        Say "[dry-run]   import Plugin from `"file:///$barePath`";"
+    } else {
+        $content = (Get-Content $ptyTmpl -Raw) -replace '__OPENCODE_PTY_V2_INDEX__', $barePath
+        [System.IO.File]::WriteAllText($ptyDst, $content, (New-Object System.Text.UTF8Encoding $false))
     }
 }
 
