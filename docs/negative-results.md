@@ -574,3 +574,96 @@ installation on purpose - that is what `--home` is for, and it is deliberately a
 separate concern from the equality fix. One line that makes two things agree is
 a different kind of change from six call sites threaded through a new parameter,
 and keeping them separate means either can be reasoned about on its own.
+## Fixing it: one home, resolved by the one module that owns it
+
+The previous entry ended with a fix that made two homes into one. It did not
+finish the job, and the way that showed up is the whole point of writing it
+down.
+
+`--home` re-pointed the selfcheck at a different home and it still read your
+real installation's dcp session state. The falsifier caught it:
+
+    DIRECTION B (--home <empty>)   PASS dcp: pruning active 4/5 recent sessions pruning
+    DIRECTION A (no flag)          PASS dcp: pruning active 4/5 recent sessions pruning
+
+Identical session ids in both. Five home lookups had been threaded through
+`factory-selfcheck.mjs`, and the file had five of its own - plus **five more in
+`platform.mjs`**, which `factory-selfcheck.mjs` imports and never told:
+
+    config()  configDir()  state.log()  state.db()  state.pluginData()
+
+`export function platform()` took no home argument. So `--home` aimed five
+lookups out of ten, and the five that mattered most for this question - the
+log, the dcp state, the database - were the five it missed. Direction A passing
+is why it went unnoticed. Running the falsifier in both directions is the only
+reason it was found at all.
+
+The fix is one resolver in the module that already owns the question:
+
+    export function resolveHome(argv = process.argv) {
+      const i = argv.indexOf("--home");
+      return (i !== -1 && argv[i + 1]) || homedir();
+    }
+
+Without `--home` that is `homedir()` exactly as before, deliberately
+unchanged, so nothing that worked yesterday moves. Note what actually made the
+installer agree with its own selfcheck: `export USERPROFILE="$HOME"` in
+`install.sh`, which makes `homedir()` itself answer for the redirected home.
+`--home` is for the caller that cannot set env.
+
+### Two homes, declared after the import that binds it
+
+`const HOME = resolveHome()` sat above the `await import("./platform.mjs")`
+that binds `resolveHome`. That is a temporal-dead-zone ReferenceError and
+`node --check` cannot see it - the syntax is perfect. It has to be declared
+after the line that brings the name into scope.
+
+### "The class" was two members, not seven
+
+Seven checks failed against a home with nothing installed in it. The tempting
+move was a blanket rule - input absent, therefore inconclusive. That would
+have been wrong, and wrong in the direction this repo keeps getting burned in:
+
+| check | what its input is | verdict |
+|---|---|---|
+| `dcp: pruning active` | history | absent history is not a defect -> **skip** |
+| `plugins: log available` | history | no log, so "did any plugin fail to load" cannot be asked -> **skip** |
+| the five `deployed` checks | **the install** | missing files *are* the defect -> **FAIL** |
+| `beads store present in cwd tree` | the project | already passed in the real install |
+
+A check whose input is *history* gets the third verdict. A check whose input is
+*the install* stays loud, because those five are exactly what the smoke test's
+assertions verify, and blanket-skipping them would have disabled the only
+checks that catch a broken install.
+
+The control that makes the skip mean something: a home holding the operator's
+real log **and** real config is still measured and does **not** skip. A skip
+that fires unconditionally is decoration wearing a verdict's clothes.
+
+### The harness was hiding the failure it was built to find
+
+Two runs reported `2 check(s) failed` while showing one FAIL line. The
+harness printed only the last twelve lines of the installer's output:
+
+    console.log(instOut.trim().split(/\r?\n/).slice(-12).map((l) => "  " + l).join("\n"));
+
+The second failing check was above the cut. This is the same failure as reading
+a stale output file, as a scan with a hardcoded file list, and as a regex that
+matched nothing and reported success - except that this one lives in the
+harness whose entire purpose is to prove the install boundary. It now prints
+every FAIL, skip and WARN the installer produced, and keeps six lines only for
+ending context.
+
+### What this does not fix
+
+The check that reports the bundle has moved ahead of the install is the one
+that would have caught the stale install directly, and it was telling me while
+I reported the install was current:
+
+    WARN the bundle has moved ahead of the install - installed 1 day(s) ago
+         (bundle 915f26f); 2 file(s) newer in the bundle
+
+It had been right for hours. I wrote that the install was current at the bundle
+HEAD, flagged it as worth confirming rather than assuming, and then did not
+confirm it. The warning was not ignored; it was outranked by an assumption I
+had not bothered to check.

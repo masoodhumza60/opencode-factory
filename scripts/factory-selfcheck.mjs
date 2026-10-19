@@ -8,21 +8,20 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { homedir, tmpdir } from "node:os";
 
-// ONE home for the whole file. os.homedir() reads USERPROFILE on Windows and
-// HOME elsewhere, while the bash installer resolves its target from HOME - so if
-// anything redirects one without the other, a check in here can report on an
-// installation this file never touched. Six separate homedir() calls meant six
-// chances to disagree with the installer. --home lets a caller name the
-// installation it means, rather than leaving it to whichever variable won.
-const HOME = (() => {
-  const i = process.argv.indexOf("--home");
-  return (i !== -1 && process.argv[i + 1]) || homedir();
-})();
 
 const checks = [];
 const ok = (name, pass, extra = "") => {
   checks.push({ name, pass, extra });
-  console.log(`${pass ? "PASS" : "FAIL  "} ${name}${extra ? " — " + extra : ""}`);
+  // `null` is a third verdict: INCONCLUSIVE - there was nothing here to evaluate.
+  // Not a pass, because a pass would be decoration. Not a failure either, because
+  // refusing to verify something is not the same as finding it broken. It stays out
+  // of both totals, so a number that means "decided" keeps meaning it. A home that
+  // has never run opencode has no dcp session state and no log; reporting that as
+  // a broken install is how this check spent years passing against a log belonging
+  // to some other installation.
+  console.log(
+    `${pass === null ? "skip" : pass ? "PASS" : "FAIL  "} ${name}${extra ? " " + extra : ""}`,
+  );
 };
 // Informational only: never enters `checks`, so it cannot change the exit code.
 // A fresh session that has not needed pruning yet is a fact about the machine's
@@ -38,8 +37,13 @@ const warn = (name, msg) => console.log(`WARN ${name} — ${msg}`);
 //    (bounded, cheap even on huge logs) and group by the `run=<id>` token: all
 //    three factory plugin ids must have loaded in the newest run that loaded
 //    any plugins, and that same run must show zero load failures.
-const { platform } = await import("./platform.mjs");
+const { platform, resolveHome } = await import("./platform.mjs");
 const plat = platform();
+// Declared here, after the import that binds it: resolving the home is this
+// bundle's one job for it (see resolveHome in platform.mjs), and the
+// platform below now reads the same value. Two homes, once again, is how
+// --home ended up aiming five lookups out of ten.
+const HOME = resolveHome();
 const log = plat.state.log();
 const MAX_TAIL = 2 * 1024 * 1024;   // start: read the last 2 MB
 const MAX_GROW = 64 * 1024 * 1024;  // hard bound on expansion for huge logs
@@ -130,7 +134,12 @@ if (existsSync(log)) {
     if (fd !== undefined) { try { closeSync(fd); } catch { /* already closed */ } }
   }
 } else {
-  ok("plugins: log available", false, "no log file found");
+  // A home that has never run opencode has no log, so "did any plugin fail to
+  // load" cannot be asked. Same family as the dcp state below: the input is
+  // absent, and its absence says nothing about whether the install is sound.
+  // Reporting it as a failure is how this check spent its life answering a
+  // question nobody asked, on a log belonging to another installation.
+  ok("plugins: log available", null, "no log file found - this home has never run opencode, so there is nothing here to verify");
 }
 // 2. CLI binaries
 for (const [name, cmd, args] of [
@@ -503,8 +512,20 @@ if (dcpSessionArg && !dcpStateArg) {
   } catch { /* no dcp state yet */ }
   if (!dcpFiles.length) ok("dcp: pruning active", false, `no state file for session ${dcpSessionArg}`);
 }
-if ((!dcpStateArg && !dcpSessionArg && dcpFiles.length === 0) || dcpFiles.some((f) => !existsSync(f))) {
-  ok("dcp: pruning active", false, "no dcp session state found — plugin loaded but never ran");
+// Two different things can go wrong here, and only one of them is a defect.
+const dcpNoState = !dcpStateArg && !dcpSessionArg && dcpFiles.length === 0;
+const dcpStateLost = dcpFiles.some((f) => !existsSync(f));
+if (dcpNoState) {
+  // A home that has never run opencode has no session state at all, so there
+  // is nothing here to verify. That is not the same as finding pruning broken,
+  // and reporting it as a failure is how this check spent its life passing
+  // against a log it had never been pointed at - the path it read belonged to
+  // another installation entirely. Inconclusive: counted in neither total.
+  ok("dcp: pruning active", null,
+    "no dcp session state found - this home has never run opencode, so there is nothing here to verify");
+} else if (dcpStateLost) {
+  ok("dcp: pruning active", false,
+    "session state is listed but the file is gone - pruning lost it");
 } else {
   const seen = [];
   let prunedAny = false;
@@ -635,9 +656,13 @@ if (process.argv.includes("--tokens")) {
     console.log(`\norchestrator spend: unavailable (${e.message.split("\n")[0]}) — node scripts/measure.mjs for the full report.`);
   }
 }
-const failed = checks.filter((c) => !c.pass);
+const skipped = checks.filter((c) => c.pass === null);
+const failed = checks.filter((c) => (c.pass === null ? false : !c.pass));
 if (failed.length) {
   console.error(`\n${failed.length} check(s) failed. Re-run install.ps1/install.sh.`);
   process.exit(1);
 }
-console.log("\nAll selfchecks passed — factory is ready.");
+console.log(
+  `\nAll selfchecks passed — factory is ready.`
+      + (skipped.length ? ` (${skipped.length} could not be evaluated here)` : ""),
+  );

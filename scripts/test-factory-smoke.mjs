@@ -92,7 +92,22 @@ try {
   console.log("\n=== install: HOME=" + home + " bundle=" + bundle + " ===");
   const inst = sh(`HOME="${home}" bash "${installer}" --skip-bd 2>&1`);
   const instOut = (inst.stdout || "") + (inst.stderr || "");
-  console.log(instOut.trim().split(/\r?\n/).slice(-12).map((l) => "  " + l).join("\n"));
+  // Printing only the tail of the installer's output is what hid a failure for
+// two runs: the selfcheck section is longer than the window, so the second
+// failing check was printed above the cut and the summary said "2 check(s)
+// failed" while the visible output showed one. Every FAIL and skip line is
+// what a reader needs, so print those in full and keep only a short tail for
+// the ending context.
+{
+  const lines = instOut.trim().split(/\r?\n/);
+  const verdict = lines.filter((l) => /^\s*(FAIL|skip|WARN)|check\(s\) failed/.test(l));
+  if (verdict.length) {
+    console.log("  --- every FAIL / skip / WARN the installer printed ---");
+    for (const l of verdict) console.log("  " + l);
+  }
+  console.log("  --- last 6 lines ---");
+  console.log(lines.slice(-6).map((l) => "  " + l).join("\n"));
+}
   console.log("  installer exit: " + inst.status + "  (" + Math.round((Date.now() - t0) / 1000) + "s)");
   check("install.sh exited 0", inst.status === 0, instOut.slice(-400));
 
