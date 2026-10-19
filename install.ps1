@@ -372,9 +372,10 @@ function Run-Tests {
         Say "[dry-run] & node '$script:NodePath' scripts/test-factory-plan.mjs"
         Say "[dry-run] & node '$script:NodePath' scripts/test-factory-skills.mjs"
         Say "[dry-run] & node '$script:NodePath' scripts/test-factory-mcp.mjs"
+        Say "[dry-run] & node '$script:NodePath' scripts/test-factory-app.mjs"
         return
     }
-    foreach ($t in @('test-selfcheck.mjs', 'test-install-idempotency.mjs', 'test-factory-phase.mjs', 'test-factory-plan.mjs', 'test-factory-skills.mjs', 'test-factory-mcp.mjs')) {
+    foreach ($t in @('test-selfcheck.mjs', 'test-install-idempotency.mjs', 'test-factory-phase.mjs', 'test-factory-plan.mjs', 'test-factory-skills.mjs', 'test-factory-mcp.mjs', 'test-factory-app.mjs')) {
         $path = Join-Path $bundle "scripts\$t"
         if (-not (Test-Path $path)) { SayErr "warning: $path not in bundle yet; skipping."; continue }
         # Capture rather than discard: a suite that fails without showing why is

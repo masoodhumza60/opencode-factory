@@ -28,7 +28,7 @@ import { fileURLToPath } from "node:url";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, "..");
 const BASH = "C:\\Program Files\\Git\\bin\\bash.exe";
-const SKIP = ["node_modules", ".git", "testapps", "docs/superpowers"];
+const SKIP = ["node_modules", ".git", "docs/superpowers"];
 
 let pass = 0;
 const failures = [];

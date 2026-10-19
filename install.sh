@@ -356,9 +356,10 @@ run_tests() {
         dry "node \"$bundle/scripts/test-factory-plan.mjs\""
         dry "node \"$bundle/scripts/test-factory-skills.mjs\""
         dry "node \"$bundle/scripts/test-factory-mcp.mjs\""
+        dry "node \"$bundle/scripts/test-factory-app.mjs\""
         return
     fi
-    for t in test-selfcheck.mjs test-install-idempotency.mjs test-factory-phase.mjs test-factory-plan.mjs test-factory-skills.mjs test-factory-mcp.mjs; do
+    for t in test-selfcheck.mjs test-install-idempotency.mjs test-factory-phase.mjs test-factory-plan.mjs test-factory-skills.mjs test-factory-mcp.mjs test-factory-app.mjs; do
         local path="$bundle/scripts/$t"
         if [ ! -f "$path" ]; then
             say "warning: $path not in bundle yet; skipping."

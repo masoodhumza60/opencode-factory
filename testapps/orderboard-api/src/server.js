@@ -3,9 +3,10 @@
 // left the process alive after every test had already passed. The entry point
 // is scripts/start.js.
 import { createServer } from "node:http";
+import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { openDb, migrate } from "./db.js";
-import { ROOT } from "./config.js";
+import { config, ROOT } from "./config.js";
 import { makeSessions, sessionForToken, can } from "./auth.js";
 import { sendJson, serveStatic } from "./http.js";
 import { listOrders, getOrder } from "./routes/orders.js";
