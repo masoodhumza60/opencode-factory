@@ -69,20 +69,21 @@ node scripts/test-fake-ship.mjs
    session, timestamp, and commit.
 2. `factory attest` records an artifact; `factory attest --verify` checks existence, hash, freshness
    (commit == HEAD), completeness against policy, and independence.
-3. `complete <phase>` reads the manifest, not the evidence string.
+3. Policy-required manifest: when `config/factory.policy.yaml` exists, `complete <n>` refuses unless every check declared for that phase has an attested artifact whose hash, freshness and producer still match. With no policy file the M0 evidence predicate still applies, so an unconfigured repo behaves exactly as it does today.
 4. `factory.policy.yaml`: tier plus required roles/checks. Four tiers: `prototype`, `internal`,
    `public`, `regulated`.
 
-- `protected_files`: the builder cannot edit the grading machinery (permission rule plus install-manifest hash).
-- Per-role write globs: the reviewer writes only its own verdict file.
-- `phase_ok` vs `accepted`: completing a phase is not accepting its output.
 - `trail.jsonl`: append-only, harness-written, one event per artifact, verdict, refusal, and decision.
-- Human verdicts carry a channel the agent cannot write.
 
 **Exit:** a phase cannot complete without its artifacts; a prototype needs three checks and a
 payments feature needs twenty, from the same policy file.
 
 ### M1b — review and independence (1–1.5 weeks)
+
+- `protected_files`: the builder cannot edit the grading machinery (permission rule plus install-manifest hash).
+- Per-role write globs: the reviewer writes only its own verdict file.
+- `phase_ok` vs `accepted`: completing a phase is not accepting its output.
+- Human verdicts carry a channel the agent cannot write.
 
 1. `factory review` runs a reviewer in a separate session and preferably a different model family,
    read-only, given the diff and artifacts rather than the builder's narrative. It writes

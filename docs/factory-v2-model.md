@@ -231,6 +231,7 @@ payments system without teaching every agent the top bar.
 ```yaml
 version: 1
 tier: public
+profile: web
 
 roles:
   product:
@@ -366,6 +367,40 @@ just produces more elaborate theatre.
   landing page.
 - Do not build a second source of truth. Extend beads with artifacts and
   verdicts; two stores drift and the copy nobody reads wins.
+
+## Evidence manifest
+
+Every run writes `.factory/<bead>/manifest.json` at the project root (the directory holding `.beads`):
+
+```json
+{
+  "version": 1,
+  "bead": "example-1",
+  "artifacts": [
+    {
+      "id": "tests",
+      "kind": "check-output",
+      "path": ".factory/example-1/tests.txt",
+      "sha256": "…",
+      "bytes": 812,
+      "command": "npm test",
+      "producer_session": "ses_abc",
+      "produced_at": "2026-10-21T09:00:00Z",
+      "commit": "d2426e2"
+    }
+  ]
+}
+```
+
+`id` is the policy's check id, `path` is root-relative, and `sha256` is computed from the bytes on disk at attest time. Attesting the same id again replaces the entry and preserves any unknown fields.
+
+`.factory/<bead>/trail.jsonl` is append-only. Each line is one event — `attest`, `verify`, `refusal`, or `complete` — with `at`, `event` and `bead`. Nothing rewrites or truncates it.
+
+The manifest answers three questions and no more:
+
+1. **Did the bytes change after attestation?** The hash answers this. It does not say the named command produced them.
+2. **Is the artifact from this commit?** `commit == HEAD` is freshness relative to a commit, not proof that the work happened at that commit.
+3. **Did a different producer session record it?** `producer_session` is self-declared until the reviewer session exists (M1b); anyone can type any value.
 
 ## Sources
 
