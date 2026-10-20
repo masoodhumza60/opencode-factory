@@ -512,6 +512,34 @@ function cmdNext(bead) {
   if (!open.length && blocked.length) process.exitCode = 2;
 }
 
+function gatesFor(bead) {
+  // Read-only, and deliberately tolerant: this is used on the rollback path,
+  // where a second throw would hide the first error.
+  const raw = bd(["gate", "list", bead, "--all", "--json"], { allowFail: true });
+  try {
+    const rows = JSON.parse(raw);
+    const list = Array.isArray(rows) ? rows : rows && rows.gates;
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
+  }
+}
+
+function rollbackGate(bead, g, beforeIds, phaseBefore) {
+  // Resolve any gate that appeared during the failed creation, then put the
+  // phase back. A gate we cannot name is a gate nobody can resolve, so leaving
+  // it behind is what made the bead permanently stuck.
+  for (const gt of gatesFor(bead)) {
+    if (beforeIds.has(String(gt.id))) continue;
+    const state = String(gt.status || gt.state || "open").toLowerCase();
+    if (state !== "open" && state !== "pending") continue;
+    bd(["gate", "resolve", String(gt.id), "--reason",
+      `factory: rollback, GATE ${g} id could not be recorded`], { allowFail: true });
+  }
+  bd(["set-state", bead, `phase=${phaseBefore ?? "0"}`,
+    "--reason", "factory: rollback after an unrecorded gate"], { allowFail: true });
+}
+
 function cmdEnter(bead, target, reason) {
   // A spec written on a brainstorm that was never written down is a spec resting
   // on nothing. Checked on the way IN to the phase that depends on it, because
@@ -592,19 +620,40 @@ function cmdEnter(bead, target, reason) {
   // phase from `bd ready` instead of us having to remember to ask.
   const g = byId.get(target).gate;
   if (g) {
+    const phaseBefore = phase;
+    const gatesBefore = new Set(gatesFor(bead).map((x) => String(x.id)));
+    // A test seam, not production behaviour: it can only make the id
+    // unparseable, which now refuses instead of succeeding. Never a bypass.
+    const noise = process.env.BD_GATE_CREATE_NOISE ? "noise: " : "";
     const res = bd(["gate", "create", "--type=human", "--blocks", bead,
       "--reason", `GATE ${g}: ${byId.get(target).name} awaiting human approval`], { allowFail: true });
-    // bd prints: "Created gate opencode-factory-gyc (type: human)". Ids contain
+    // bd prints: "✓ Created gate opencode-factory-gyc (type: human)". Ids contain
     // two or more hyphens, so a naive [a-z]+-[a-z]+ match would capture only the
-    // prefix and record a gate id that can never be resolved.
-    const id = (res || "").match(/Created gate\s+(\S+)/)?.[1];
-    if (id) {
-      const m = { ...meta, [GATE_KEY[g]]: id };
-      bd(["update", bead, "--metadata", JSON.stringify(m)], { allowFail: true });
-      say(`GATE ${g} created (${id}) - blocks ${bead} until resolved`);
-    } else {
-      say(`WARNING: gate created but its id could not be parsed; resolve it and re-run status`);
+    // prefix and record a gate id that can never be resolved. With the seam set
+    // the output is mangled noise: the id is unparseable by definition, which
+    // is the parse failure this block must recover from.
+    const id = noise ? null : (res || "").match(/Created gate\s+(\S+)/)?.[1];
+    if (!id) {
+      rollbackGate(bead, g, gatesBefore, phaseBefore);
+      throw new Illegal(
+        `could not record GATE ${g}: bd created a gate but its id was not in the output. ` +
+          `Phase rolled back to ${phaseBefore ?? "(none)"} and the orphan gate was resolved. ` +
+          `Run \`bd gate list ${bead} --all --json\` to confirm, then retry.`
+      );
     }
+    // --set-metadata merges. --metadata replaces, and would wipe the other gate ids.
+    bd(["update", bead, "--set-metadata", `${GATE_KEY[g]}=${id}`], { allowFail: true });
+    const recorded = readMeta(bead)?.[GATE_KEY[g]];
+    if (recorded !== id) {
+      bd(["gate", "resolve", id, "--reason", "factory: rollback, gate id could not be recorded"], { allowFail: true });
+      rollbackGate(bead, g, gatesBefore, phaseBefore);
+      throw new Illegal(
+        `could not record GATE ${g}: bd accepted the metadata write but the id is not there. ` +
+          `Phase rolled back to ${phaseBefore ?? "(none)"}; the orphan gate ${id} was resolved. ` +
+          `Run \`bd gate list ${bead} --all --json\` to confirm, then retry.`
+      );
+    }
+    say(`GATE ${g} created (${id}) - blocks ${bead} until resolved`);
   }
 }
 

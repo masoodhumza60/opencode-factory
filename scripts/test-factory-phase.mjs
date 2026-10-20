@@ -735,6 +735,53 @@ console.log("\nthe gate list cannot fail open");
   );
 }
 
+console.log("\na gate that cannot be recorded does not leave the bead stuck");
+{
+  const b = newBead("gate record failure");
+  phase(["enter", b, "1", "--reason", "setup the failure case", "--quiet"]);
+  phase(["complete", b, "1", "--evidence", "setup complete and verified", "--quiet"]);
+
+  const gatesOf = () => {
+    const raw = run("bd", ["gate", "list", b, "--all", "--json"], { BEADS_DIR: BEADS, BEADS_NO_DOLT: "1" });
+    try {
+      const rows = JSON.parse(raw.out);
+      const list = Array.isArray(rows) ? rows : rows && rows.gates;
+      return Array.isArray(list) ? list : [];
+    } catch {
+      return [];
+    }
+  };
+  const openCount = () =>
+    gatesOf().filter((g) => ["open", "pending"].includes(String(g.status || g.state || "open").toLowerCase())).length;
+
+  const r = run(process.execPath, [SCRIPT, "enter", b, "2", "--reason", "the spec is written and settled"], {
+    BEADS_DIR: BEADS,
+    BD_GATE_CREATE_NOISE: "1",
+  });
+  check(
+    "a gate whose id cannot be recorded REFUSES and rolls the phase back",
+    r.code === 1 && has(r.out, "could not record"),
+    r.out.slice(0, 240)
+  );
+
+  const st = phase(["status", b, "--json"]);
+  let stPhase = null;
+  try {
+    stPhase = JSON.parse(st.out).phase;
+  } catch {
+    /* assertion below reports the raw output */
+  }
+  check("the bead is still in phase 1 after the rollback", String(stPhase) === "1", st.out.slice(0, 200));
+  check("the orphan gate was resolved instead of left blocking the bead", openCount() === 0, `open=${openCount()}`);
+
+  const retry = phase(["enter", b, "2", "--reason", "the spec is written and settled"]);
+  check(
+    "the retry records a gate id and enters phase 2",
+    retry.code === 0 && has(retry.out, "GATE A created"),
+    retry.out.slice(0, 240)
+  );
+}
+
 // ---------------------------------------------------------------- report
 console.log(`\n${pass}/${pass + fail} phase-machine tests passed.`);
 if (fail) { console.log("\nFailures:"); failures.forEach((f) => console.log("  - " + f)); }
