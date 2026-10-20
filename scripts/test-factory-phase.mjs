@@ -85,16 +85,21 @@ function openGate() {
 }
 const legalOf = (o) => (o.match(/legal next:.*/) || [""])[0];
 
-// Completing verify requires a boot claim (see the boot-condition block below).
-// Every walk in this file that passes through phase 5 supplies one, so it lives
-// in a helper rather than a literal at each call site: a forgotten call site then
-// fails as a test-setup problem rather than reading like a machine defect.
-const BOOT_CLAIM = "ran: npm run dev -> 200 OK on GET /health";
+// Completing verify requires a record of the thing that actually ran and the
+// artifact it left behind (see the --ran block below). Every walk in this file
+// that passes through phase 5 supplies both, so they live in a helper rather
+// than a literal at each call site: a forgotten call site then fails as a
+// test-setup problem rather than reading like a machine defect. The artifact is
+// written on demand because a claim that points at no file is refused.
+const RAN_CLAIM = "npm run dev -> 200 OK on GET /health at 2026-10-20T10:00:00Z";
 // (ensureBrainstorm / removeBrainstorm are declared up in the setup block, above
 // their first use.)
 
-const completeVerify = (b, evidence) =>
-  phase(["complete", b, "5", "--evidence", evidence, "--booted", BOOT_CLAIM, "--quiet"]);
+const completeVerify = (b, evidence) => {
+  const f = join(SANDBOX, "boot.log");
+  if (!existsSync(f)) writeFileSync(f, "200 OK\n");
+  return phase(["complete", b, "5", "--evidence", evidence, "--ran", RAN_CLAIM, "--artifact", f, "--quiet"]);
+};
 // Completing verify needs a boot claim; every other phase does not. A single
 // literal for all six phases of a walk silently skipped the claim and produced
 // eight correct failures downstream, so the distinction lives in one helper
@@ -525,8 +530,8 @@ if (bootBead) {
   check("the walk lands in phase 5", has(r.out, "5"), r.out);
 
   r = phase(["complete", bootBead, "5", "--evidence", "ran the verify suite; 12 tests green, app up"]);
-  check("completing verify without --booted is refused", r.code !== 0, `code ${r.code}`);
-  check("the refusal names --booted", has(r.out, "--booted"), r.out);
+  check("completing verify without --ran is refused", r.code !== 0, `code ${r.code}`);
+  check("the refusal names --ran", has(r.out, "--ran"), r.out);
   check("the refusal says a test suite is not a running app", has(r.out, "not a running app"), r.out);
 
   r = bd(["state", bootBead, "phase_done"]);
@@ -547,11 +552,13 @@ if (bootBead) {
   r = bd(["state", bootBead, "booted"]);
   check("neither refusal wrote a booted value", !has(r.out, "x"), r.out.slice(0, 80));
 
+  const artifact = join(SANDBOX, "boot.log");
+  if (!existsSync(artifact)) writeFileSync(artifact, "200 OK\n");
   r = phase(["complete", bootBead, "5", "--evidence", "tests pass, app answered",
-             "--booted", "ran: npm run dev -> 200 OK on GET /health"]);
-  check("completing verify WITH --booted succeeds", r.code === 0, `code ${r.code} ${r.out}`);
+             "--ran", RAN_CLAIM, "--artifact", artifact]);
+  check("completing verify WITH --ran and a real artifact succeeds", r.code === 0, `code ${r.code} ${r.out}`);
   const readBack = bd(["state", bootBead, "booted"]);
-  check("the boot claim is recorded in the state layer",
+  check("the ran claim is recorded in the state layer (the bd dimension is still \"booted\")",
     has(readBack.out, "npm run dev") && has(readBack.out, "/health"), readBack.out);
   const doneBack = bd(["state", bootBead, "phase_done"]);
   check("and phase_done=5 is recorded too", has(doneBack.out, "5"), doneBack.out);
@@ -635,7 +642,7 @@ if (repBead) {
   // Reporting it must not break the run: the legality checks read `done`, and a
   // warning that stops the pipeline would be worse than the bug it reports.
   r = phase(["enter", repBead, "5", "--reason", "re-verify", "--quiet"]);
-  check("but the run can still advance past it", r.code === 0 || has(r.out, "--booted"), r.out);
+  check("but the run can still advance past it", r.code === 0, r.out);
 }
 
 const badBead = newBead("corrupt");
@@ -863,6 +870,43 @@ console.log("\nship cannot complete while Gate C is open");
   check("resolving Gate C succeeds", resolved.code === 0, resolved.out.slice(0, 200));
   const shipped = phase(["complete", b, "7", "--evidence", "deployed and smoke-tested; 200 on /health", "--quiet"]);
   check("the same bead completes 7 once Gate C is resolved", shipped.code === 0, shipped.out.slice(0, 200));
+}
+
+console.log("\n--ran names a command, an observation, a time and an artifact");
+{
+  const b = walkTo("ran evidence", "5");
+  const artifact = join(SANDBOX, "boot.log");
+  if (!existsSync(artifact)) writeFileSync(artifact, "200 OK\n");
+
+  for (const [why, bad] of [
+    ["no timestamp", "npm run dev -> 200 OK"],
+    ["no observation", "npm run dev at 2026-10-20T10:00:00Z"],
+    ["no command", "-> 200 OK at 2026-10-20T10:00:00Z"],
+  ]) {
+    const r = phase(["complete", b, "5", "--evidence", "ran the boot check", "--ran", bad, "--artifact", artifact, "--quiet"]);
+    check(`--ran REFUSES a claim with ${why}`, r.code === 1 && has(r.out, "--ran"), r.out.slice(0, 160));
+  }
+
+  const missing = phase(["complete", b, "5", "--evidence", "ran the boot check",
+    "--ran", "npm run dev -> 200 OK at 2026-10-20T10:00:00Z", "--artifact", join(SANDBOX, "nope.log"), "--quiet"]);
+  check("--ran REFUSES an artifact path that does not exist",
+    missing.code === 1 && has(missing.out, "does not exist"), missing.out.slice(0, 200));
+
+  // Deliberately NOT --quiet: the assertion reads the "ran:" line, and --quiet
+  // suppresses `say` chatter by design. A quiet success would be invisible here.
+  const ok = phase(["complete", b, "5", "--evidence", "ran the boot check",
+    "--ran", RAN_CLAIM, "--artifact", artifact]);
+  check("the same bead completes 5 once --ran names a real artifact",
+    ok.code === 0 && has(ok.out, "ran:"), ok.out.slice(0, 200));
+}
+
+console.log("\n--booted still works as a deprecated alias");
+{
+  const b = walkTo("ran alias", "5");
+  const artifact = join(SANDBOX, "boot.log");
+  if (!existsSync(artifact)) writeFileSync(artifact, "200 OK\n");
+  const alias = phase(["complete", b, "5", "--evidence", "the alias still works", "--booted", RAN_CLAIM, "--artifact", artifact, "--quiet"]);
+  check("--booted still completes phase 5", alias.code === 0, alias.out.slice(0, 200));
 }
 
 // ---------------------------------------------------------------- report

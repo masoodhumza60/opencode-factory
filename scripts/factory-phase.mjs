@@ -10,6 +10,7 @@
 //   node scripts/factory-phase.mjs next     <bead> [--json]
 //   node scripts/factory-phase.mjs enter    <bead> <phase> --reason "..."
 //   node scripts/factory-phase.mjs complete <bead> <phase> --evidence "..."
+//       --ran "<command> -> <observed result> at <ISO-8601>" --artifact <path>
 //   node scripts/factory-phase.mjs handoff  <bead> --next "<action>"
 //   node scripts/factory-phase.mjs gate     <bead> <A|B|C> --evidence "..."
 //
@@ -59,15 +60,15 @@ const REPAIR_DIM = "repair_done";
 // it", then "run it and check its working properly". Every gate in the pipeline
 // had passed by then. A green suite is not a running app, and nothing in the
 // pipeline was able to tell the difference.
-const BOOT_PHASES = new Set(["5"]);
-const BOOT_DIM = "booted";
+const RAN_PHASES = new Set(["5"]);
+const RAN_DIM = "booted";
 
 // Probed against bd 1.3.0 rather than assumed: a dimension value longer than
 // this is REJECTED ("field exceeds maximum length"), and one containing a
 // double quote is split by bd's own argument parser ("accepts 2 arg(s),
 // received 3"). Both are loud, so nothing is silently mangled - but a raw bd
 // error is not something an agent can act on, so both are checked here first.
-const BOOT_MAX = 255;
+const RAN_MAX = 255;
 
 // ---- artifacts and staleness (added after a real run stalled for ten days) -----
 //
@@ -190,13 +191,14 @@ const asJson = args.includes("--json");
 const quiet = args.includes("--quiet");
 // The complete set of flags this script understands, so a flag used as a
 // positional can be reported as exactly that. Every flag is read by name above
-// (flag("reason"), flag("evidence"), flag("booted"), flag("next")) or tested with
-// includes(), so this list and those reads must stay in step.
-const FLAG_NAMES = new Set(["reason", "evidence", "booted", "next", "json", "quiet"]);
+// (flag("reason"), flag("evidence"), flag("ran"), flag("artifact"),
+// flag("booted"), flag("next")) or tested with includes(), so this list and
+// those reads must stay in step.
+const FLAG_NAMES = new Set(["reason", "evidence", "booted", "ran", "artifact", "next", "json", "quiet"]);
 // The flags that consume the argument after them. Needed to tell a positional
 // from a flag's value: counting `--reason "why"` as two positionals is what made
 // this check reject every correct invocation.
-const VALUE_FLAGS = new Set(["reason", "evidence", "booted", "next"]);
+const VALUE_FLAGS = new Set(["reason", "evidence", "booted", "ran", "artifact", "next"]);
 
 let BD = "bd";
 function bd(args2, { allowFail = false } = {}) {
@@ -724,7 +726,7 @@ function cmdEnter(bead, target, reason) {
 //
 // A stoplist is a floor, not a proof. It refuses the words that carry no
 // information; it cannot tell you whether the sentence after them is true. That
-// is why --booted, --evidence and --reason all still exist: the human's job is to
+// is why --ran, --evidence and --reason all still exist: the human's job is to
 // add something only a human knows.
 const GATE_WORDS = [
   "ok", "okay", "k", "yes", "y", "yeah", "yep", "go", "go ahead", "continue", "next",
@@ -824,7 +826,7 @@ function cmdGate(bead, which, evidence) {
   });
 }
 
-function cmdComplete(bead, target, evidence, bootedArg) {
+function cmdComplete(bead, target, evidence, ranArg, artifactArg) {
   if (!byId.has(target)) throw new Illegal(`unknown phase "${target}"`);
   const thinEvidence = uninformativeEvidence(evidence);
   if (thinEvidence)
@@ -849,32 +851,38 @@ function cmdComplete(bead, target, evidence, bootedArg) {
       );
     }
   }
-  // --booted is validated and RECORDED before phase_done, in that order. If the
-  // boot claim cannot be written, phase_done must stay unset so the machine
-  // still refuses to advance. Writing phase_done first would leave a run able to
-  // move past verify having never recorded the app running, which is precisely
-  // the defect this exists to prevent: the guard present, the effect absent.
-  let booted = null;
-  if (BOOT_PHASES.has(target)) {
-    if (!bootedArg)
+  // --ran is validated and RECORDED before phase_done, in that order. If the
+  // ran claim cannot be written, phase_done must stay unset so the machine
+  // still refuses to advance. Writing phase_done first would leave a run able
+  // to move past verify having never recorded the app running, which is
+  // precisely the defect this exists to prevent: the guard present, the effect
+  // absent.
+  let ran = null;
+  let artifact = null;
+  if (RAN_PHASES.has(target)) {
+    if (!ranArg)
       throw new Illegal(
-        `--booted is required to complete ${target} (${byId.get(target).name}): a passing test suite is not a running app. ` +
-          `Record what you started and what it answered, e.g. --booted "ran: npm run dev -> 200 OK on GET /health". ` +
-          `Keep it under ${BOOT_MAX} characters and use no double quotes.`
+        `--ran is required to complete ${target} (${byId.get(target).name}): a passing suite is not a running app. ` +
+          `Record it as --ran "npm run dev -> 200 OK on GET /health at 2026-10-20T10:00:00Z" --artifact boot.log`
       );
-    const v = String(bootedArg).trim();
-    if (!v) throw new Illegal("--booted was given but is empty: say what you started and what it answered");
-    if (v.includes('"'))
-      throw new Illegal(
-        "--booted cannot contain a double quote: bd's argument parser splits on it, so the claim would be recorded broken. " +
-          "Describe the same request without quotes."
-      );
-    if (v.length > BOOT_MAX)
-      throw new Illegal(
-        `--booted is ${v.length} characters; the state field holds at most ${BOOT_MAX}. Shorten it to the command you ran ` +
-          `and the one thing it answered. Do not truncate it yourself - a half-recorded boot claim is worse than none.`
-      );
-    booted = v;
+    const v = String(ranArg).trim();
+    if (v.includes('"')) throw new Illegal("--ran cannot contain a double quote: bd splits arguments on it");
+    if (v.length > RAN_MAX) throw new Illegal(`--ran is ${v.length} characters, over the ${RAN_MAX} character limit`);
+    const parts = v.split("->");
+    if (parts.length !== 2)
+      throw new Illegal("--ran must contain exactly one `->` separating the command that ran from what it answered");
+    if (!parts[0].trim())
+      throw new Illegal("--ran must name the command that ran, before `->`: a result with no command is not a run");
+    if (!parts[1].trim())
+      throw new Illegal("--ran must say what the command answered, after `->`: a command with no result is not a run");
+    if (!/T\d\d:\d\d/.test(v)) throw new Illegal("--ran must carry an ISO-8601 timestamp, e.g. 2026-10-20T10:00:00Z");
+    if (!/\bat\b/.test(v)) throw new Illegal("--ran must put the timestamp after the word `at`");
+    if (!artifactArg)
+      throw new Illegal("--artifact is required: the evidence file the run wrote, e.g. --artifact boot.log");
+    if (!existsSync(artifactArg))
+      throw new Illegal(`--artifact "${artifactArg}" does not exist: the claim points at nothing`);
+    ran = v;
+    artifact = artifactArg;
   }
   // A detour is an ACTION, not a phase of the run, so completing it must not
   // write to phase_done. Found by a real 7b run that deadlocked: completion is a
@@ -886,9 +894,9 @@ function cmdComplete(bead, target, evidence, bootedArg) {
   // back-door protection free: enter 4 -> 4p -> complete 4p still leaves
   // phase_done empty, so phase 5 is still correctly refused.
   const dim = byId.get(target).detour ? REPAIR_DIM : DONE_DIM;
-  if (booted) {
-    bd(["set-state", bead, `${BOOT_DIM}=${booted}`, "--reason", `booted: ${booted}`]);
-    say(`booted: ${booted}`);
+  if (ran) {
+    bd(["set-state", bead, `${RAN_DIM}=${ran}`, "--reason", `ran: ${ran} (artifact ${artifact})`]);
+    say(`ran: ${ran} (artifact ${artifact})`);
   }
   bd(["set-state", bead, `${dim}=${target}`, "--reason", `completed ${target} (${byId.get(target).name}): ${evidence}`]);
   const n = legalNext(bead);
@@ -943,7 +951,15 @@ try {
   if (cmd === "status") cmdStatus(bead);
   else if (cmd === "next") cmdNext(bead);
   else if (cmd === "enter") cmdEnter(bead, args[2], flag("reason"));
-  else if (cmd === "complete") cmdComplete(bead, args[2], flag("evidence"), flag("booted"));
+  else if (cmd === "complete") {
+    // --booted stays parseable for one release as a deprecated alias: an old
+    // command line still completes, with a note pointing at the new form.
+    const ranArg = flag("ran") ?? flag("booted");
+    const artifactArg = flag("artifact");
+    if (args.includes("--booted") && !args.includes("--ran"))
+      say('--booted is deprecated; use --ran "<command> -> <observed result> at <ISO-8601>" --artifact <path>');
+    cmdComplete(bead, args[2], flag("evidence"), ranArg, artifactArg);
+  }
   else if (cmd === "handoff") cmdHandoff(bead, flag("next"));
   else if (cmd === "gate") cmdGate(bead, args[2], flag("evidence"));
   else throw new Illegal(`unknown command "${cmd}"`);
