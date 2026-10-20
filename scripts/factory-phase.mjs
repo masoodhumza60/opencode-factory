@@ -559,7 +559,8 @@ function cmdGate(bead, which, evidence) {
     throw new Illegal(
       `no ${String(which).toUpperCase()} gate is pending on ${bead}` +
         (phase ? ` (phase ${phase} ${byId.get(phase)?.name ?? ""})` : "") +
-        ". There is nothing to resolve - a gate that does not exist cannot be approved, and approving one by id alone would let anyone past a gate the machine never raised."
+        ". There is nothing to resolve - a gate that does not exist cannot be approved, and approving one by id alone would let anyone past a gate the machine never raised. " +
+        `Run factory-phase.mjs gate <bead> ${String(which).toUpperCase()} --evidence "..." while the gate is open, or status <bead> to see which gates exist.`
     );
   }
   bd(["gate", "resolve", id, "--reason", v]);
@@ -687,7 +688,7 @@ try {
   else if (cmd === "enter") cmdEnter(bead, args[2], flag("reason"));
   else if (cmd === "complete") cmdComplete(bead, args[2], flag("evidence"), flag("booted"));
   else if (cmd === "handoff") cmdHandoff(bead, flag("next"));
-else if (cmd === "gate") cmdGate(bead, args[2], flag("evidence"));
+  else if (cmd === "gate") cmdGate(bead, args[2], flag("evidence"));
   else throw new Illegal(`unknown command "${cmd}"`);
 } catch (e) {
   const blocked = e instanceof Blocked;

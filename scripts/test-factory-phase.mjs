@@ -633,8 +633,17 @@ if (badBead) {
     phase(["complete", bead, "1", "--evidence", "the gate-command test's own setup", "--quiet"]);
 
     const entered = phase(["enter", bead, "2", "--reason", "gate command test", "--quiet"]);
-    const gateRows = JSON.parse(bd(["gate", "list", "--all", "--json"]).out);
-    const gateList = Array.isArray(gateRows) ? gateRows : (gateRows.gates || []);
+    // Scoped to THIS bead: `--all` alone lists every gate in the sandbox database,
+    // and earlier blocks leave gates behind, so an unscoped `some` could pass for
+    // the wrong reason. bd prints the literal `null` when a bead has no gate, and
+    // a parse failure must fail this one assertion, not crash the run - so parse
+    // defensively, like openGate() above.
+    const gateList = (() => {
+      try {
+        const rows = JSON.parse(bd(["gate", "list", bead, "--all", "--json"]).out) ?? [];
+        return Array.isArray(rows) ? rows : (rows.gates || []);
+      } catch { return []; }
+    })();
     check("the setup reached phase 2 with a gate pending, so the refusals below mean something",
       entered.code === 0 && gateList.some((g) => ["open", "pending"].includes(String(g.status || g.state || "open"))),
       entered.out.slice(0, 200));
