@@ -354,6 +354,14 @@ check("2 a deleted manifest entry is MISSING, exit 1",
   vr.status === 1 && /^  MISSING\s+tests\s/m.test(vr.stdout), `status=${vr.status} ${vr.stdout}`);
 check("2 the printed fix names --id tests --kind check-output",
   vr.stdout.includes("--id tests --kind check-output"), vr.stdout);
+// The failing run must be on the trail too: a verdict of false is the record
+// the phase machine will read, not just the passing ones.
+const missTrail = readTrail(vs.sandbox, vbead).filter((e) => e.event === "verify");
+const missLast = missTrail[missTrail.length - 1];
+check("2 the failing run appends exactly one verify event with ok: false and a phase",
+  missTrail.length === 2 && missLast.ok === false &&
+  missLast.phase === "7" && missLast.total === 2 && missLast.failed === 1,
+  JSON.stringify(missTrail));
 
 console.log("\nverify 3: absent");
 vr = attest2(vs, [vbead, "out/tests.txt", "--id", "tests", "--kind", "check-output"]);
@@ -452,6 +460,17 @@ vr = verify(vs, [noPhase]);
 check("11 without --phase the same bead refuses naming the recorded phase",
   vr.status === 1 && vr.stderr.includes("has no recorded phase") && vr.stderr.includes("--phase <n>"),
   `status=${vr.status} stderr=${JSON.stringify(vr.stderr)}`);
+// --phase must beat a phase the bead DID record, not only fill in a missing
+// one: the flag is an override, so a bead sitting at 3 still verifies as 7.
+execFileSync("bd", ["set-state", noPhase, "phase=3"], { cwd: vs.sandbox, env: vs.env, stdio: "ignore" });
+vr = verify(vs, [noPhase]);
+check("11 the bead's own phase 3 is used when --phase is absent",
+  vr.status === 0 && vr.stdout.includes("phase 3") && vr.stdout.includes("0 checks, 0 ok, 0 failed"),
+  `status=${vr.status} ${vr.stdout}`);
+vr = verify(vs, [noPhase, "--phase", "7"]);
+check("11 --phase 7 overrides a recorded phase 3",
+  vr.status === 1 && vr.stdout.includes("phase 7") && /^  MISSING\s+tests\s/m.test(vr.stdout),
+  `status=${vr.status} ${vr.stdout}`);
 
 console.log("\nverify 12: no policy, no verification");
 const np = makeSandbox();
@@ -472,6 +491,58 @@ check("13 a phase with no checks exits 0",
 check("13 a phase with no checks still appends one verify line",
   readTrail(vs.sandbox, vbead).length === beforePhase0 + 1,
   `${beforePhase0} -> ${readTrail(vs.sandbox, vbead).length}`);
+
+console.log("\nverify 15: a malformed manifest entry is data, not a crash");
+// A hand-edited manifest can drop a field the manifest module never validates.
+// The walker reaches `stale`/`hash` by inequality, so the report must render
+// `<unknown>` for the missing side rather than dereferencing undefined.
+let mr = attest2(vs, [vbead, "out/tests.txt", "--id", "tests", "--kind", "check-output"]);
+check("15 setup: tests is attested and current", mr.status === 0, `status=${mr.status}`);
+
+// (a) drop `commit`: the entry cannot equal HEAD, so the row is stale.
+const noCommitManifest = readManifestRaw();
+delete noCommitManifest.artifacts.find((x) => x.id === "tests").commit;
+writeManifestRaw(noCommitManifest);
+vr = verify(vs, [vbead]);
+check("15a an entry with no commit prints STALE and <unknown>, exit 1",
+  vr.status === 1 && /^  STALE\s+tests\s/m.test(vr.stdout) && vr.stdout.includes("<unknown>"),
+  `status=${vr.status} ${vr.stdout}`);
+check("15a the human report does not crash: no stack trace on stderr",
+  !/TypeError/.test(vr.stderr) && vr.stderr.trim() === "",
+  `stderr=${JSON.stringify(vr.stderr)}`);
+const noCommitJson = verify(vs, [vbead, "--json"]);
+let ncParsed = null;
+try { ncParsed = JSON.parse(noCommitJson.stdout); } catch { /* asserted below */ }
+check("15a --json stays parseable and reports the same stale result",
+  noCommitJson.status === 1 && ncParsed !== null &&
+  ncParsed.checks.find((c) => c.id === "tests").result === "stale" &&
+  ncParsed.checks.find((c) => c.id === "tests").recorded_commit === null,
+  JSON.stringify(noCommitJson.stdout));
+
+// (b) a non-string sha256: the recomputed hash cannot equal it, so the row is
+// hash - and the row dereferences that same field to print the recorded side.
+mr = attest2(vs, [vbead, "out/tests.txt", "--id", "tests", "--kind", "check-output"]);
+check("15 setup: tests is re-attested cleanly", mr.status === 0, `status=${mr.status}`);
+editEntry("tests", { sha256: 12345 });
+vr = verify(vs, [vbead]);
+check("15b a non-string sha256 prints a HASH row and <unknown>, exit 1",
+  vr.status === 1 && /^  HASH\s+tests\s/m.test(vr.stdout) && vr.stdout.includes("<unknown>"),
+  `status=${vr.status} ${vr.stdout}`);
+check("15b the human report does not crash: no stack trace on stderr",
+  !/TypeError/.test(vr.stderr) && vr.stderr.trim() === "",
+  `stderr=${JSON.stringify(vr.stderr)}`);
+const badShaJson = verify(vs, [vbead, "--json"]);
+let bsParsed = null;
+try { bsParsed = JSON.parse(badShaJson.stdout); } catch { /* asserted below */ }
+check("15b --json stays parseable and reports the same hash result",
+  badShaJson.status === 1 && bsParsed !== null &&
+  bsParsed.checks.find((c) => c.id === "tests").result === "hash",
+  JSON.stringify(badShaJson.stdout));
+
+// Leave the sandbox consistent for anything that follows.
+mr = attest2(vs, [vbead, "out/tests.txt", "--id", "tests", "--kind", "check-output"]);
+check("15 cleanup: tests is re-attested and verifies", mr.status === 0 && verify(vs, [vbead]).status === 0,
+  `status=${mr.status}`);
 
 rmSandbox(sandbox);
 rmSandbox(pb.sandbox);

@@ -295,9 +295,10 @@ export function loadBeadMeta(bead) {
   } catch (e) {
     throw new AttestError(`bead ${bead} was not found: bd show did not return JSON (${firstLine(e.message)})`);
   }
-  // bd show --json answers with an array; older/filtered shapes may answer with
-  // one object. Either way the first record is the bead we asked for.
-  const record = Array.isArray(parsed) ? parsed[0] : parsed;
+  // bd show --json answers with an array; a filtered or wrapped shape may
+  // answer with one object under `issue`. Either way the first record is the
+  // bead we asked for.
+  const record = Array.isArray(parsed) ? parsed[0] : (parsed.issue || parsed);
   const declared = record && typeof record === "object" ? record.metadata : null;
   const meta = {};
   if (declared && typeof declared === "object") {
@@ -364,13 +365,21 @@ export function verifyChecks(root, bead, phase, policy) {
       sha256: entry ? entry.sha256 : null,
       commit: entry ? entry.commit : null,
       kind: def.kind,
-      fix: fixCommand(bead, id, { path: "<path>", kind: def.kind, command: def.command }),
+      fix: fixCommand(bead, id, {
+        path: entry && typeof entry.path === "string" ? entry.path : "<path>",
+        kind: def.kind,
+        command: def.command,
+      }),
     };
     // Two fields the shape wants always, filled once the result is known: the
     // commit being checked against, and - only for a stale artifact - the
-    // commit the artifact was actually recorded at.
+    // commit the artifact was actually recorded at. A hand-edited manifest can
+    // leave that field missing or non-string; the walker found `stale` by
+    // inequality, so the honest report is "we do not know", never a crash.
     row.head = head;
-    if (result === "stale") row.recorded_commit = entry.commit;
+    if (result === "stale") {
+      row.recorded_commit = typeof entry.commit === "string" ? entry.commit : null;
+    }
 
     // Independence is only ever asked of a verdict artifact: a prr whose
     // producer is the session now verifying it proves nothing about that
@@ -404,13 +413,18 @@ export function verifyChecks(root, bead, phase, policy) {
 // ---- verify: rendering ------------------------------------------------------
 
 // `ok` is the only lowercase label; every other result is loud on purpose, so
-// a report scanned quickly cannot mistake a failure for a pass.
+// a report scanned quickly cannot mistake a failure for a pass. Every value a
+// hand-edited manifest can leave malformed is rendered as `<unknown>` rather
+// than dereferenced: the report must survive the input it is reporting on.
+const UNKNOWN = "<unknown>";
+const short = (v, n) => (typeof v === "string" ? v.slice(0, n) : UNKNOWN);
+
 function rowLine(row, details) {
   const label = row.result === "ok" ? "ok" : row.result.toUpperCase();
   const left = `  ${label.padEnd(5)} ${row.id.padEnd(9)} ${row.path ?? "<no path recorded>"}`;
   switch (row.result) {
     case "ok":
-      return `${left}  sha256 ${row.sha256.slice(0, 12)}…  commit ${row.commit.slice(0, 7)}…`;
+      return `${left}  sha256 ${short(row.sha256, 12)}…  commit ${short(row.commit, 7)}…`;
     case "not-applicable":
       return `${left}  no verdict independence to check: FACTORY_SESSION is not set`;
     case "missing":
@@ -420,9 +434,9 @@ function rowLine(row, details) {
     case "not-a-file":
       return `${left}  the path is not a regular file; attest the file it produced`;
     case "hash":
-      return `${left}  sha256 changed: recorded ${row.sha256.slice(0, 12)}…, on disk ${details.onDisk[row.id].slice(0, 12)}…`;
+      return `${left}  sha256 changed: recorded ${short(row.sha256, 12)}…, on disk ${short(details.onDisk?.[row.id], 12)}…`;
     case "stale":
-      return `${left}  recorded at commit ${row.recorded_commit.slice(0, 7)}, HEAD is ${row.head.slice(0, 7)}`;
+      return `${left}  recorded at commit ${short(row.recorded_commit, 7)}, HEAD is ${short(row.head, 7)}`;
     case "producer":
       return `${left}  no producer session recorded`;
     case "independence":
