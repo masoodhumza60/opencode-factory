@@ -56,6 +56,13 @@ The evidence layer currently accepts `" "` as proof. Nothing else matters until 
 **Exit:** the ~20-command fake-ship path fails at the first missing artifact. Suite green on Windows
 and Linux.
 
+Prove the exit criterion with:
+
+```bash
+node scripts/test-factory-phase.mjs
+node scripts/test-fake-ship.mjs
+```
+
 ### M1a — mechanical attestation (4–5 days)
 
 1. `.factory/<bead>/manifest.json`: every artifact with path, sha256, producing command, producer
