@@ -94,7 +94,7 @@ Every profile declares exactly these fields:
    check refuses the gate; a check marked `not_applicable` needs a reason.
 3. The evidence manifest records a `kind` per artifact, so G3 validates the
    *right* artifact rather than a screenshot for an API. `kind` is one of: `screenshot`, `transcript`, `contract`, `api-diff`, `plan`, `eval`, `hil-log`, `prr`, `exit-code-matrix`, `golden-file`, `help-snapshot`, `tty-transcript`, `completion-script`, `install-log`, `device-capture`, `check-output`.
-4. The Reviewer rubric is a property of the role, not the profile; it lives in `factory-v2-model.md` §Roles.
+4. The Reviewer rubric is a property of the role, not the profile; it lives in `factory-v2-model.md` § Role contracts.
 5. Multi-surface beads (web + API, mobile + backend) declare a **list** of
    profiles; G3 needs evidence for every surface. In a monorepo, profile is
    per package.
