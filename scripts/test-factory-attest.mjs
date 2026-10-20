@@ -204,8 +204,12 @@ mkdirSync(join(ngEn, ".beads"));
 const ngEnv = { ...process.env, BEADS_DIR: join(ngEn, ".beads") };
 delete ngEnv.FACTORY_SESSION;
 r = run({ sandbox: ngEn, env: ngEnv }, ["beads-nothing", join(ngEn, "whatever.txt"), "--id", "run", "--kind", "eval"]);
+// Pinned to the CLI's own sentence, not git's: git prints "... not a git
+// repository ..." itself, so asserting on "git repository" alone would stay
+// green if the CLI's refusal were deleted and git's raw text leaked through.
 check("11 a non-git directory is refused naming the git repository fix",
-  r.status === 1 && r.stderr.includes("git repository"), `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
+  r.status === 1 && r.stderr.includes("run this inside a git repository"),
+  `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
 r = run({ sandbox, env }, ["beads-does-not-exist", "out/log.txt", "--id", "run", "--kind", "check-output"]);
 check("12 a bead that does not exist is refused",
   r.status === 1 && r.stderr.includes("was not found"), `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
