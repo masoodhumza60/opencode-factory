@@ -104,9 +104,7 @@ refuses, regardless of how good the prose is.
 Roles are **capabilities, not job titles**. A profile without a visual surface has
 no UX/UI designer, but it still has an *interface* role: the API designer, the CLI
 designer, the library's public-surface owner. A profile without a browser has no
-axe-core, but it still has an accessibility decision to make and sign. The mapping
-from role to profile is in `docs/factory-domain-profiles.md`; the rule is that every
-profile must name who owns its interface and what "usable" means there.
+axe-core, but it still has an accessibility decision to make and sign. The profile contract in `docs/factory-domain-profiles.md` names, for every profile, who owns its interface and what "usable" means there.
 
 Two roles are routinely forgotten and both caused real defects in this repo's
 history: **accessibility** (not a subset of QA) and **the independent critic**
