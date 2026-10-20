@@ -834,6 +834,21 @@ function cmdComplete(bead, target, evidence, bootedArg) {
   const phase = readPhase(bead);
   if (phase !== target)
     throw new Illegal(`${bead} is in phase ${phase ?? "(none)"}, cannot complete ${target}`);
+  // Starting the ship phase raised GATE C, and completing it must not sail past
+  // the human who has not approved the ship yet. Phase 2 refuses on Gate A and
+  // phase 3 on Gate B; 7 was the one gate-bearing phase whose completion never
+  // looked at its gate. This is the same check, phased the same way: evaluate
+  // the gate before any evidence predicate, so a pending ship gate is reported
+  // as blocked (exit 2), never as bad evidence (exit 1).
+  if (target === "7") {
+    const pending = gatePending(bead, readMeta(bead), GATE_KEY.C);
+    if (pending) {
+      throw new Blocked(
+        `GATE C is pending (${pending}): the ship gate has not been approved. ` +
+          `Resolve it with \`factory-phase gate ${bead} C --evidence "<decision and why>"\` after the evidence is on disk.`
+      );
+    }
+  }
   // --booted is validated and RECORDED before phase_done, in that order. If the
   // boot claim cannot be written, phase_done must stay unset so the machine
   // still refuses to advance. Writing phase_done first would leave a run able to

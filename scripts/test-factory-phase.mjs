@@ -371,6 +371,13 @@ if (findings) {
   check("from a COMPLETED 6 ship AND the repair detour are BOTH legal",
     /\b4p\b/.test(legalOf(r.out)) && /(^|[\s,])7($|[\s,])/.test(legalOf(r.out)), r.out);
   phase(["enter", findings, "7", "--reason", "ship", "--quiet"]);
+  // Entering 7 raises GATE C, and completing ship now refuses while it is
+  // pending - that refusal is the walk-to-ship test's own subject. Resolving it
+  // through the machine's bead-scoped `gate` command (never openGate(), which
+  // resolves the FIRST open gate globally) keeps this block asserting what it
+  // always meant to: a COMPLETED ship with an approved gate offers no detour.
+  r = phase(["gate", findings, "C", "--evidence", "approved the release: artifact hashes match, smoke test returned 200", "--quiet"]);
+  check("the walk to a completed ship resolves GATE C on the way", r.code === 0, r.out.slice(0, 200));
   phase(["complete", findings, "7", "--evidence", "shipped the build; release notes and tag recorded", "--quiet"]);
   r = phase(["next", findings, "--quiet"]);
   check("but the repair detour is NOT offered once shipping - Gate C decides that",
@@ -481,6 +488,34 @@ function intoVerify(title) {
     openGate();
   }
   phase(["enter", b, "5", "--reason", "walk to verify"]);
+  return b;
+}
+
+// Walk a fresh bead to `target`, resolving exactly the gates that stand in the
+// way: Gate A before completing phase 2, Gate B before completing phase 3.
+// Gate C is created by enter 7 and is deliberately left open.
+// Do NOT use openGate() here: it resolves the first open gate globally and
+// would resolve Gate C before complete 7 ever runs.
+function walkTo(title, target) {
+  const b = newBead(title);
+  if (!b) throw new Error(`walkTo: could not create bead for "${title}"`);
+  for (const p of ["0", "1", "2", "3", "4", "5", "6"]) {
+    if (Number(p) >= Number(target)) break;
+    const entered = phase(["enter", b, p, "--reason", `walk to phase ${p}`, "--quiet"]);
+    if (entered.code !== 0) throw new Error(`walkTo: enter ${p} failed: ${entered.out.slice(0, 300)}`);
+    if (p === "2") {
+      const g = phase(["gate", b, "A", "--evidence", "the spec and the design direction are settled and written down", "--quiet"]);
+      if (g.code !== 0) throw new Error(`walkTo: gate A failed: ${g.out.slice(0, 300)}`);
+    }
+    if (p === "3") {
+      const g = phase(["gate", b, "B", "--evidence", "the plan names every file to change and every test that proves it", "--quiet"]);
+      if (g.code !== 0) throw new Error(`walkTo: gate B failed: ${g.out.slice(0, 300)}`);
+    }
+    const done = completePhase(b, p, `phase ${p} ran its checks and they passed`);
+    if (done.code !== 0) throw new Error(`walkTo: complete ${p} failed: ${done.out.slice(0, 300)}`);
+  }
+  const target_ = phase(["enter", b, String(target), "--reason", `walk to phase ${target}`, "--quiet"]);
+  if (target_.code !== 0) throw new Error(`walkTo: enter ${target} failed: ${target_.out.slice(0, 300)}`);
   return b;
 }
 
@@ -797,6 +832,37 @@ console.log("\nevidence has to say something");
   }
   const ok = phase(["complete", b, "1", "--evidence", "ran the parser over 3 malformed files; all 3 exited 2", "--quiet"]);
   check("a real result is accepted", ok.code === 0, ok.out.slice(0, 160));
+}
+
+console.log("\nship cannot complete while Gate C is open");
+{
+  const b = walkTo("gate c blocks ship", "7");
+
+  // The suite reads phase through `status --json` (the same pattern the gate
+  // rollback block uses) rather than guessing bd's raw `show` shape, and gate
+  // status through the same JSON's `gates_pending` — the machine's own report,
+  // which statuses C as pending exactly when gatePending() would refuse.
+  const st = phase(["status", b, "--json"]);
+  const stJson = (() => { try { return JSON.parse(st.out); } catch { return {}; } })();
+  check(
+    "the walk really reached phase 7 with Gate C open, so the refusal below means something",
+    String(stJson.phase) === "7" && (stJson.gates_pending || []).includes("C"),
+    st.out.slice(0, 240)
+  );
+
+  const refused = phase(["complete", b, "7", "--evidence", "deployed and smoke-tested; 200 on /health", "--quiet"]);
+  check(
+    "complete 7 REFUSES while Gate C is pending",
+    refused.code === 2 && has(refused.out, "GATE C is pending"),
+    `${refused.code} ${refused.out.slice(0, 200)}`
+  );
+
+  // Positive control: the same bead completes once C is resolved, so the
+  // refusal above is about the gate and not about a broken walk.
+  const resolved = phase(["gate", b, "C", "--evidence", "reviewed the release: artifact hashes match, smoke test returned 200", "--quiet"]);
+  check("resolving Gate C succeeds", resolved.code === 0, resolved.out.slice(0, 200));
+  const shipped = phase(["complete", b, "7", "--evidence", "deployed and smoke-tested; 200 on /health", "--quiet"]);
+  check("the same bead completes 7 once Gate C is resolved", shipped.code === 0, shipped.out.slice(0, 200));
 }
 
 // ---------------------------------------------------------------- report
