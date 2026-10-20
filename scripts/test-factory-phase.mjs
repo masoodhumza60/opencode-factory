@@ -146,7 +146,7 @@ r = phase(["complete", bead, "0", "--evidence", "bd init; graft build 9/9", "--q
 check("completing 0 succeeds", r.code === 0, r.out);
 r = phase(["enter", bead, "1", "--reason", "onboard complete", "--quiet"]);
 check("entering 1 is allowed once 0 is complete", r.code === 0, r.out);
-r = phase(["complete", bead, "1", "--evidence", "back to 0 state", "--quiet"]);
+r = phase(["complete", bead, "1", "--evidence", "ran the rollback walk; the state was cleared and re-entered clean", "--quiet"]);
 check("completing 1 returns the bead to a walkable state", r.code === 0, r.out);
 
 r = phase(["enter", bead, "9", "--reason", "bogus", "--quiet"]);
@@ -183,7 +183,7 @@ if (u) {
   check("status says the current phase is not completed", has(r.out, "not completed"), r.out);
   // No --quiet: the assertion below is on the reported next phase, which is
   // chatter, not payload. --quiet is for tests that only care about the exit code.
-  r = phase(["complete", u, "1", "--evidence", "done properly"]);
+  r = phase(["complete", u, "1", "--evidence", "ran the blocked phase's work through; it finished and 2 became legal"]);
   check("completing it unblocks the successor", r.code === 0 && has(r.out, "next legal: 2"), r.out);
   r = phase(["enter", u, "2", "--reason", "now allowed", "--quiet"]);
   check("and the successor is now enterable", r.code === 0, r.out);
@@ -248,8 +248,8 @@ check("after resolving GATE B, entering 4 succeeds", r.code === 0, r.out);
 
 console.log("\ncompletion is evidence-gated");
 r = phase(["complete", bead, "4", "--quiet"]);
-check("complete without --evidence is REFUSED", r.code === 1 && has(r.out, "--evidence is required"), r.out);
-r = phase(["complete", bead, "5", "--evidence", "x", "--quiet"]);
+check("complete without --evidence is REFUSED", r.code === 1 && has(r.out, "not informative"), r.out);
+r = phase(["complete", bead, "5", "--evidence", "verified the export path; 12 rows matched the contract", "--quiet"]);
 check("completing a phase you are not in is REFUSED", r.code === 1 && has(r.out, "cannot complete"), r.out);
 r = phase(["complete", bead, "4", "--evidence", "tests green: 12/12", "--quiet"]);
 check("completing the current phase succeeds", r.code === 0, r.out);
@@ -276,17 +276,17 @@ check("returning from debug to 4 succeeds", r.code === 0, r.out);
 const d = newBead("detour feature");
 if (d) {
   r = phase(["enter", d, "0", "--reason", "onboard", "--quiet"]);
-  r = phase(["complete", d, "0", "--evidence", "ok", "--quiet"]);
+  r = phase(["complete", d, "0", "--evidence", "ran the onboarding walk; bd open listed no open issues", "--quiet"]);
   for (const p of ["1", "2"]) {
     phase(["enter", d, p, "--reason", "walk", "--quiet"]);
-    phase(["complete", d, p, "--evidence", "ok", "--quiet"]);
+    phase(["complete", d, p, "--evidence", `walked phase ${p}: ran its checks and answered cleanly`, "--quiet"]);
   }
   bd(["gate", "resolve", (() => {
     try { const rows = JSON.parse(bd(["gate", "list", "--all", "--json"]).out);
       const l = Array.isArray(rows) ? rows : (rows.gates || []); return l[0] && (l[0].id || l[0].gate_id); } catch { return null; }
   })()]);
   phase(["enter", d, "3", "--reason", "plan", "--quiet"]);
-  phase(["complete", d, "3", "--evidence", "ok", "--quiet"]);
+  phase(["complete", d, "3", "--evidence", "applied plan.md and plan.json; 4 tasks planned", "--quiet"]);
   const gb = (() => {
     try { const rows = JSON.parse(bd(["gate", "list", "--all", "--json"]).out);
       const l = (Array.isArray(rows) ? rows : (rows.gates || [])).filter((g) => {
@@ -322,12 +322,12 @@ if (branched) {
   };
   for (const p of ["0", "1", "2", "3"]) {
     phase(["enter", branched, p, "--reason", `walk toward implement (${p})`, "--quiet"]);
-    phase(["complete", branched, p, "--evidence", `phase ${p} done`, "--quiet"]);
+    phase(["complete", branched, p, "--evidence", `phase ${p} walked: ran its checks and answered cleanly`, "--quiet"]);
     resolveOpenGate();
   }
   r = phase(["enter", branched, "4", "--reason", "implement", "--quiet"]);
   check("reached implement with a clean history", r.code === 0, r.out);
-  phase(["complete", branched, "4", "--evidence", "implemented", "--quiet"]);
+  phase(["complete", branched, "4", "--evidence", "wrote the parser and tests; suite green 12/12", "--quiet"]);
   r = phase(["next", branched, "--quiet"]);
   // Assert on the `legal next:` line itself, not the whole output: the note text
   // also mentions "5" ("...or proceed to 5"), so `has(out, "5")` would pass even
@@ -354,7 +354,7 @@ const findings = newBead("verify found defects feature");
 if (findings) {
   for (const p of ["0", "1", "2", "3", "4", "5"]) {
     phase(["enter", findings, p, "--reason", `walk toward verify (${p})`, "--quiet"]);
-    completePhase(findings, p, `phase ${p} done`);
+    completePhase(findings, p, `phase ${p} walked: ran its checks and answered cleanly`);
     openGate();
   }
   r = phase(["next", findings, "--quiet"]);
@@ -364,14 +364,14 @@ if (findings) {
   check("a verify finding can be routed to the repair detour", r.code === 0, r.out);
   r = phase(["enter", findings, "5", "--reason", "re-verify the fix", "--quiet"]);
   check("and the fix can be re-verified from the detour", r.code === 0, r.out);
-  completeVerify(findings, "re-verified");
+  completeVerify(findings, "re-ran the verify checks; 4 findings fixed, suite green");
   phase(["enter", findings, "6", "--reason", "review", "--quiet"]);
-  phase(["complete", findings, "6", "--evidence", "reviewed", "--quiet"]);
+  phase(["complete", findings, "6", "--evidence", "reviewed the diff; 2 findings filed and both addressed", "--quiet"]);
   r = phase(["next", findings, "--quiet"]);
   check("from a COMPLETED 6 ship AND the repair detour are BOTH legal",
     /\b4p\b/.test(legalOf(r.out)) && /(^|[\s,])7($|[\s,])/.test(legalOf(r.out)), r.out);
   phase(["enter", findings, "7", "--reason", "ship", "--quiet"]);
-  phase(["complete", findings, "7", "--evidence", "shipped", "--quiet"]);
+  phase(["complete", findings, "7", "--evidence", "shipped the build; release notes and tag recorded", "--quiet"]);
   r = phase(["next", findings, "--quiet"]);
   check("but the repair detour is NOT offered once shipping - Gate C decides that",
     !/\b4p\b/.test(legalOf(r.out)), r.out);
@@ -389,7 +389,7 @@ const rejected = newBead("gate c rejects a review finding feature");
 if (rejected) {
   for (const p of ["0", "1", "2", "3", "4", "5", "6"]) {
     phase(["enter", rejected, p, "--reason", `walk toward ship (${p})`, "--quiet"]);
-    completePhase(rejected, p, `phase ${p} done`);
+    completePhase(rejected, p, `phase ${p} walked: ran its checks and answered cleanly`);
     openGate();
   }
   phase(["enter", rejected, "7", "--reason", "ship", "--quiet"]);
@@ -416,7 +416,7 @@ const deadlock = newBead("detour must not erase completion");
 if (deadlock) {
   for (const p of ["0", "1", "2", "3", "4", "5"]) {
     phase(["enter", deadlock, p, "--reason", `walk to verify (${p})`, "--quiet"]);
-    completePhase(deadlock, p, `phase ${p} done`);
+    completePhase(deadlock, p, `phase ${p} walked: ran its checks and answered cleanly`);
     openGate();
   }
   r = phase(["enter", deadlock, "4p", "--reason", "fix what verify found", "--quiet"]);
@@ -448,7 +448,7 @@ const backdoor = newBead("detour must not be a back door");
 if (backdoor) {
   for (const p of ["0", "1", "2", "3"]) {
     phase(["enter", backdoor, p, "--reason", `walk toward implement (${p})`, "--quiet"]);
-    phase(["complete", backdoor, p, "--evidence", `phase ${p} done`, "--quiet"]);
+    phase(["complete", backdoor, p, "--evidence", `phase ${p} walked: ran its checks and answered cleanly`, "--quiet"]);
     openGate();
   }
   // Entered and deliberately NOT completed. My first version completed it in the
@@ -489,7 +489,7 @@ if (bootBead) {
   r = phase(["status", bootBead, "--quiet"]);
   check("the walk lands in phase 5", has(r.out, "5"), r.out);
 
-  r = phase(["complete", bootBead, "5", "--evidence", "tests pass"]);
+  r = phase(["complete", bootBead, "5", "--evidence", "ran the verify suite; 12 tests green, app up"]);
   check("completing verify without --booted is refused", r.code !== 0, `code ${r.code}`);
   check("the refusal names --booted", has(r.out, "--booted"), r.out);
   check("the refusal says a test suite is not a running app", has(r.out, "not a running app"), r.out);
@@ -500,13 +500,13 @@ if (bootBead) {
   // bd's own argument parser splits on a double quote, so a claim like this one
   // is realistic. Caught here so the message is something an agent can act on
   // rather than bd's raw "accepts 2 arg(s), received 3".
-  r = phase(["complete", bootBead, "5", "--evidence", "e", "--booted", 'ran: curl -H "X-Test: 1" /health -> ok']);
+  r = phase(["complete", bootBead, "5", "--evidence", "ran the verify suite; app answered on /health", "--booted", 'ran: curl -H "X-Test: 1" /health -> ok']);
   check("a double quote in --booted is refused", r.code !== 0, `code ${r.code}`);
   check("the quote refusal explains why", has(r.out, "double quote"), r.out);
 
   // bd rejects a value over 255 characters. Refused rather than truncated: a
   // half-recorded boot claim is a claim nobody can check.
-  r = phase(["complete", bootBead, "5", "--evidence", "e", "--booted", "x".repeat(300)]);
+  r = phase(["complete", bootBead, "5", "--evidence", "ran the verify suite; app answered on /health", "--booted", "x".repeat(300)]);
   check("an over-long --booted is refused", r.code !== 0, `code ${r.code}`);
   check("the length refusal names the limit", has(r.out, "255"), r.out);
   r = bd(["state", bootBead, "booted"]);
@@ -537,9 +537,9 @@ const noBrain = newBead("missing brainstorm feature");
 if (noBrain) {
   removeBrainstorm();
   r = phase(["enter", noBrain, "0", "--reason", "walk", "--quiet"]);
-  phase(["complete", noBrain, "0", "--evidence", "onboarded", "--quiet"]);
+  phase(["complete", noBrain, "0", "--evidence", "ran the onboarding walk; bd ready showed no blockers", "--quiet"]);
   phase(["enter", noBrain, "1", "--reason", "walk", "--quiet"]);
-  phase(["complete", noBrain, "1", "--evidence", "brainstormed", "--quiet"]);
+  phase(["complete", noBrain, "1", "--evidence", "brainstormed the design; 6 ideas captured, 3 kept", "--quiet"]);
   r = phase(["enter", noBrain, "2", "--reason", "write the spec", "--quiet"]);
   check("entering spec with NO brainstorm on disk is REFUSED", r.code !== 0, `code ${r.code}`);
   check("the refusal names the missing artifact", has(r.out, "brainstorm"), r.out);
@@ -559,7 +559,7 @@ console.log("\nstaleness and incoherent state are reported, not hidden");
 const idleBead = newBead("stale run feature");
 if (idleBead) {
   phase(["enter", idleBead, "0", "--reason", "walk", "--quiet"]);
-  phase(["complete", idleBead, "0", "--evidence", "onboarded", "--quiet"]);
+  phase(["complete", idleBead, "0", "--evidence", "ran the onboarding walk; bd ready showed no blockers", "--quiet"]);
   phase(["enter", idleBead, "1", "--reason", "walk", "--quiet"]);
   r = phase(["status", idleBead, "--json"]);
   // An unfinished phase is the precondition; a fresh bead is 0 days idle, so the
@@ -572,7 +572,7 @@ if (idleBead) {
   check("status prints an idle line", /idle:/.test(r.out), r.out.slice(0, 160));
   // And the STALE constant is real: a walk that has finished is never stale even
   // though done === phase, so the flag cannot fire on completed work.
-  phase(["complete", idleBead, "1", "--evidence", "brainstormed", "--quiet"]);
+  phase(["complete", idleBead, "1", "--evidence", "brainstormed the design; 6 ideas captured, 3 kept", "--quiet"]);
   r = phase(["status", idleBead, "--json"]);
   const j2 = (() => { try { return JSON.parse(r.out); } catch { return {}; } })();
   check("a COMPLETED phase is not stale no matter how old", j2.stale === false, `stale=${j2.stale}`);
@@ -587,11 +587,11 @@ if (repBead) {
   ensureBrainstorm();
   for (const p of ["0", "1", "2", "3", "4"]) {
     phase(["enter", repBead, p, "--reason", `walk to ${p}`, "--quiet"]);
-    completePhase(repBead, p, `phase ${p} done`);
+    completePhase(repBead, p, `phase ${p} walked: ran its checks and answered cleanly`);
     openGate();
   }
   phase(["enter", repBead, "4p", "--reason", "found a defect", "--quiet"]);
-  phase(["complete", repBead, "4p", "--evidence", "fixed", "--quiet"]);
+  phase(["complete", repBead, "4p", "--evidence", "fixed the parsing bug; 3 failing cases now pass", "--quiet"]);
   phase(["enter", repBead, "4", "--reason", "back to implement", "--quiet"]);
   r = phase(["status", repBead, "--json"]);
   const j3 = (() => { try { return JSON.parse(r.out); } catch { return {}; } })();
@@ -656,7 +656,7 @@ if (badBead) {
     check("an unknown gate letter is REFUSED", r.code !== 0 && has(r.out, "unknown gate"), r.out.slice(0, 140));
 
     r = phase(["gate", bead, "A"]);
-    check("a gate with no evidence is REFUSED", r.code !== 0 && has(r.out, "--evidence is required"), r.out.slice(0, 140));
+    check("a gate with no evidence is REFUSED", r.code !== 0 && has(r.out, "not informative"), r.out.slice(0, 140));
 
     r = phase(["gate", bead, "A", "--evidence", "ok"]);
     check("a bare ok is REFUSED as uninformative", r.code !== 0 && has(r.out, "not informative"), r.out.slice(0, 140));
@@ -780,6 +780,23 @@ console.log("\na gate that cannot be recorded does not leave the bead stuck");
     retry.code === 0 && has(retry.out, "GATE A created"),
     retry.out.slice(0, 240)
   );
+}
+
+console.log("\nevidence has to say something");
+{
+  const b = newBead("thin evidence");
+  phase(["enter", b, "1", "--reason", "start", "--quiet"]);
+  for (const [label, value] of [
+    ["whitespace", "   "],
+    ["one repeated character", "aaaaaaaaaaaa"],
+    ["punctuation only", "............"],
+    ["two words", "ok done"],
+  ]) {
+    const r = phase(["complete", b, "1", "--evidence", value, "--quiet"]);
+    check(`${label} is REFUSED as evidence`, r.code === 1 && has(r.out, "not informative"), r.out.slice(0, 160));
+  }
+  const ok = phase(["complete", b, "1", "--evidence", "ran the parser over 3 malformed files; all 3 exited 2", "--quiet"]);
+  check("a real result is accepted", ok.code === 0, ok.out.slice(0, 160));
 }
 
 // ---------------------------------------------------------------- report

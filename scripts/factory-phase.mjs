@@ -732,7 +732,24 @@ const GATE_WORDS = [
   "ship it", "yes please", "sure", "whatev", "yeah sure", "do it", "proceed", "confirmed",
 ];
 const GATE_MAX = 600;
+// Presence is not evidence. " " is truthy, "aaaaaaaaaaaa" is long, and
+// "ok done" is two words. None of them says what was checked or what it
+// answered, so none of them may finish a phase or resolve a gate.
+function uninformativeEvidence(text) {
+  const v = String(text ?? "").trim();
+  if (!v) return "it is empty or only whitespace";
+  const letters = v.replace(/[\s\p{P}\p{S}]/gu, "");
+  if (letters.length < 12) return "it is too short to be checkable";
+  if (new Set(letters).size < 4) return "it repeats one or two characters, which is not a result";
+  const words = v.toLowerCase().match(/[a-z0-9]+/g) ?? [];
+  if (words.length < 3 || new Set(words).size < 3)
+    return "it does not name what was checked and what it answered";
+  return null;
+}
+
 function uninformative(evidence) {
+  const base = uninformativeEvidence(evidence);
+  if (base) return base;
   const norm = evidence.toLowerCase().replace(/[^a-z ]/g, " ").replace(/\s+/g, " ").trim();
   if (norm.length < 12) return "it is too short to carry a reason";
   // An unconditional floor measured in words, not just characters. "go ahead looks
@@ -754,8 +771,14 @@ function uninformative(evidence) {
 function cmdGate(bead, which, evidence) {
   const key = GATE_KEY[String(which || "").toUpperCase()];
   if (!key) throw new Illegal(`unknown gate "${which}" - expected A, B or C`);
-  if (!evidence) throw new Illegal("--evidence is required: a gate is the one transition a human makes, so it is the one that cannot be a bare yes");
-  const v = String(evidence).trim();
+  // The cheap rejections first: a missing reason says nothing, a quote would be
+  // recorded broken by bd's parser, and an over-long reason would be refused by
+  // bd itself. Only after those does what the text SAYS get judged.
+  const v = String(evidence ?? "").trim();
+  if (!v)
+    throw new Illegal(
+      "--evidence is not informative: it is empty or only whitespace. A gate is the one transition a human makes, so it is the one that cannot be a bare yes"
+    );
   if (v.includes('"'))
     throw new Illegal(
       "--evidence cannot contain a double quote: bd's argument parser splits on it, so the reason would be recorded broken. " +
@@ -803,7 +826,11 @@ function cmdGate(bead, which, evidence) {
 
 function cmdComplete(bead, target, evidence, bootedArg) {
   if (!byId.has(target)) throw new Illegal(`unknown phase "${target}"`);
-  if (!evidence) throw new Illegal("--evidence is required: completion must be checkable, not asserted");
+  const thinEvidence = uninformativeEvidence(evidence);
+  if (thinEvidence)
+    throw new Illegal(
+      `--evidence is not informative: ${thinEvidence}. Say what you checked and what it answered - e.g. "ran the export; 12 rows, header order matches the contract".`
+    );
   const phase = readPhase(bead);
   if (phase !== target)
     throw new Illegal(`${bead} is in phase ${phase ?? "(none)"}, cannot complete ${target}`);
