@@ -24,3 +24,4 @@ opencode.json
 # will not exist on another laptop until they run `graft build` themselves, so it must
 # never be shared.
 .ignore
+.factory/
