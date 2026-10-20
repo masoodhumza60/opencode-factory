@@ -22,7 +22,7 @@
 
 import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 const PHASES = [
   { id: "0", name: "onboard", gate: null },
@@ -125,6 +125,59 @@ function staleDays(bead) {
   const t = Date.parse(issue.updated_at || issue.time_updated || issue.modified || "");
   if (Number.isNaN(t)) return null;
   return Math.floor((Date.now() - t) / 86400000);
+}
+
+// bd resolves its database from the working directory, or BEADS_DIR. A run
+// started one directory away finds no database; the old allGates() turned that
+// error into "there are no gates", which opened every gate at once.
+function readdirSafe(dir) {
+  try {
+    return readdirSync(dir);
+  } catch {
+    return [];
+  }
+}
+
+// A `.beads` directory is a workspace only if it contains a database. Probed
+// against bd 1.3.0 on this host: `bd init` (both with and without
+// BEADS_NO_DOLT) stores the database in `.beads/embeddeddolt`, and
+// `bd where` reports that path as the database. But bd ALSO writes
+// telemetry into `~/.beads` (eventsData/ + machine-id) with no database in
+// it - a directory this script must NOT count as a workspace, because the
+// bd that then runs underneath rejects it with "no beads database found"
+// and every gate lookup would be answered from a list that never loaded.
+// "Non-empty" is therefore not the test; presence of the database is.
+// Unknown shapes (an older or different bd backend) are refused here too -
+// fail closed - and the message says to set BEADS_DIR, where an explicit
+// pointer is trusted exactly as the user gave it.
+function isWorkspaceBeads(dir) {
+  const entries = readdirSafe(dir);
+  if (!entries.length) return false;
+  return entries.some(
+    (e) =>
+      e === "embeddeddolt" || e === "issues.jsonl" ||
+      e.endsWith(".db") || e.endsWith(".sqlite")
+  );
+}
+
+function findWorkspace() {
+  if (process.env.BEADS_DIR) {
+    const dir = process.env.BEADS_DIR;
+    if (existsSync(dir) && readdirSafe(dir).length > 0) return dir;
+  }
+  let dir = process.cwd();
+  for (;;) {
+    const candidate = join(dir, ".beads");
+    if (existsSync(candidate) && isWorkspaceBeads(candidate)) return candidate;
+    const parent = dirname(dir);
+    if (parent === dir) {
+      throw new Illegal(
+        "no beads workspace found: there is no .beads directory here or in any parent, so the gate list cannot be read. " +
+          "Run this from the project root (the directory that contains .beads), or set BEADS_DIR."
+      );
+    }
+    dir = parent;
+  }
 }
 
 const args = process.argv.slice(2);
@@ -235,12 +288,32 @@ function readMeta(bead) {
 // only inside the description text. Rather than scrape prose, we look gates up
 // by the id we recorded in the bead's metadata when we created them.
 function allGates() {
-  const raw = bd(["gate", "list", "--all", "--json"], { allowFail: true });
-  if (!raw) return [];
+  // No allowFail: a read failure is not "no gates". If bd exits non-zero, or
+  // returns something that is not JSON, the run stops rather than opening.
+  const raw = bd(["gate", "list", "--all", "--json"]);
+  let rows;
   try {
-    const rows = JSON.parse(raw);
-    return Array.isArray(rows) ? rows : (rows.gates || []);
-  } catch { return []; }
+    rows = JSON.parse(raw);
+  } catch (e) {
+    throw new Illegal(
+      `could not read the gate list: bd returned output that is not JSON (${e.message}). ` +
+        "Refusing to guess whether a gate is pending. Run `bd gate list --all --json` by hand to see what bd said."
+    );
+  }
+  const list = Array.isArray(rows) ? rows : rows && rows.gates;
+  // With NO gates in the database, bd prints the literal `null` and exits 0 -
+  // probed, not assumed, and the same encoding it uses for a bead with no gate.
+  // That null is bd's empty list, so it is the one non-array shape that must
+  // not refuse: returning [] for it still fails closed on every FAILURE, which
+  // is the exploit this fix exists to close.
+  if (list === null) return [];
+  if (!Array.isArray(list)) {
+    throw new Illegal(
+      "could not read the gate list: bd did not return a list. " +
+        "Refusing to guess whether a gate is pending. Run `bd gate list --all --json` by hand to see what bd said."
+    );
+  }
+  return list;
 }
 
 function gatePending(bead, meta, key) {
@@ -450,12 +523,48 @@ function cmdEnter(bead, target, reason) {
   const { phase, candidates, blockedOn, alwaysLegal } = legalNext(bead);
   const meta = readMeta(bead);
 
-  if (target === "3" && gatePending(bead, meta, "gate_a"))
-    throw new Blocked("GATE A is pending - the human has not approved the spec");
-  if (target === "4" && gatePending(bead, meta, "gate_b"))
-    throw new Blocked("GATE B is pending - the human has not approved the plan");
-  if (target === "8" && gatePending(bead, meta, "gate_c"))
-    throw new Blocked("GATE C is pending - the human has not approved the ship");
+  // A gate id is recorded in the bead's metadata by the phase that raised it
+  // (2 -> GATE A, 3 -> GATE B, 7 -> GATE C). If the record is missing, then
+  // gatePending() returns null ("no gate was ever created") and the transition
+  // sails through with a gate nobody can evaluate - this is the fail-open hole.
+  // So the record is demanded BEFORE the pending check: refuse to enter rather
+  // than guess whether an unrecorded gate is open.
+  if (target === "3") {
+    const requiredKey = GATE_KEY.A;
+    if (!meta?.[requiredKey]) {
+      throw new Illegal(
+        `GATE A has no recorded gate id for this bead, so it cannot be shown pending or approved. ` +
+          `Run \`bd gate create --type=human --blocks ${bead} --reason "GATE A backfill"\`, then ` +
+          `\`bd update ${bead} --set-metadata ${requiredKey}=<id>\`, and retry.`
+      );
+    }
+    if (gatePending(bead, meta, "gate_a"))
+      throw new Blocked("GATE A is pending - the human has not approved the spec");
+  }
+  if (target === "4") {
+    const requiredKey = GATE_KEY.B;
+    if (!meta?.[requiredKey]) {
+      throw new Illegal(
+        `GATE B has no recorded gate id for this bead, so it cannot be shown pending or approved. ` +
+          `Run \`bd gate create --type=human --blocks ${bead} --reason "GATE B backfill"\`, then ` +
+          `\`bd update ${bead} --set-metadata ${requiredKey}=<id>\`, and retry.`
+      );
+    }
+    if (gatePending(bead, meta, "gate_b"))
+      throw new Blocked("GATE B is pending - the human has not approved the plan");
+  }
+  if (target === "8") {
+    const requiredKey = GATE_KEY.C;
+    if (!meta?.[requiredKey]) {
+      throw new Illegal(
+        `GATE C has no recorded gate id for this bead, so it cannot be shown pending or approved. ` +
+          `Run \`bd gate create --type=human --blocks ${bead} --reason "GATE C backfill"\`, then ` +
+          `\`bd update ${bead} --set-metadata ${requiredKey}=<id>\`, and retry.`
+      );
+    }
+    if (gatePending(bead, meta, "gate_c"))
+      throw new Blocked("GATE C is pending - the human has not approved the ship");
+  }
   // Legality applies to a virgin bead too. An earlier draft guarded this with
   // `phase !== null &&`, which meant a feature with no recorded phase could
   // enter ANY phase - exactly the transition the tests exist to forbid.
@@ -651,6 +760,7 @@ function cmdHandoff(bead, next) {
 // ---- main -----------------------------------------------------------------------
 
 try {
+  findWorkspace();
   if (!cmd) {
     console.error("usage: factory-phase.mjs <status|next|enter|complete|handoff|gate> ...");
     process.exit(1);

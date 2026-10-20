@@ -708,6 +708,33 @@ if (badBead) {
     check("a factual reason that clears the floor is ACCEPTED", r.code === 0 && has(r.out, "resolved"), r.out.slice(0, 170));
   }
 
+console.log("\nthe gate list cannot fail open");
+{
+  // The exploit: run from a directory with no beads database. bd exits
+  // non-zero, allGates() returned [], every gate id lookup missed, and a bead
+  // with Gate C open reported "nothing pending".
+  const empty = mkdtempSync(join(tmpdir(), "factory-no-beads-"));
+  const escaped = (() => {
+    try {
+      return {
+        code: 0,
+        out: execFileSync(process.execPath, [SCRIPT, "status", bead, "--quiet"], {
+          encoding: "utf8",
+          cwd: empty,
+          env: { ...process.env, BEADS_DIR: "" },
+        }),
+      };
+    } catch (e) {
+      return { code: e.status ?? 1, out: `${e.stdout || ""}${e.stderr || ""}` };
+    }
+  })();
+  check(
+    "a run outside a beads workspace REFUSES instead of reporting no gates",
+    escaped.code === 1 && has(escaped.out, "no beads workspace"),
+    escaped.out.slice(0, 240)
+  );
+}
+
 // ---------------------------------------------------------------- report
 console.log(`\n${pass}/${pass + fail} phase-machine tests passed.`);
 if (fail) { console.log("\nFailures:"); failures.forEach((f) => console.log("  - " + f)); }
