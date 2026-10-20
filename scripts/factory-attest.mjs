@@ -1,26 +1,29 @@
-// factory-attest.mjs - the `attest` command: record one artifact on a bead.
+// factory-attest.mjs - the `attest` and `verify` commands.
 //
-// One invocation writes two things, both through primitives that already
-// exist and are already tested: the artifact lands in the bead's manifest
-// (hash, size, path, commit, session) and an `attest` event lands in its
-// append-only trail. Nothing here decides WHEN attestation is due or enough
-// - that is the verify work that follows - it only records an artifact, and
-// refuses loudly when the record would be meaningless: no repo, no bead, no
-// file, an empty file, an unknown kind, an id the policy does not declare.
+// `attest` records one artifact on a bead: the artifact lands in the bead's
+// manifest (hash, size, path, commit, session) and an `attest` event lands in
+// its append-only trail.
+//
+// `verify` is the other half: it decides whether the artifacts a phase
+// requires are actually there, current, and produced by someone else. It
+// reads disk, git and `bd`, and renders a report - it never writes an
+// artifact, only a `verify` event on the trail when it got as far as a
+// decision.
 //
 // Refusals are part of the interface. Every one exits 1 and its message
-// names the thing that fixes it - the flag, the file, the declared ids.
+// names the thing that fixes it - the flag, the file, the declared ids, the
+// missing policy.
 
 import { execFileSync } from "node:child_process";
 import { statSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { relative, resolve, sep } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   projectRoot, gitHead, sha256File, loadManifest, saveManifest,
   upsertArtifact, appendTrail,
 } from "./factory-manifest.mjs";
-import { loadPolicy } from "./factory-policy.mjs";
+import { loadPolicy, effectiveChecks, requiredForPhase } from "./factory-policy.mjs";
 
 // The sixteen kinds are copy-anchored to factory-policy's KINDS and to
 // docs/factory-domain-profiles.md; changing the set means changing all three.
@@ -251,16 +254,370 @@ export function attest(argv) {
     `(sha256 ${artifact.sha256.slice(0, 12)}…, commit ${artifact.commit.slice(0, 7)}…)`;
 }
 
+// ---- verify: reading what the bead says about itself ------------------------
+
+const PHASE_RE = /^[0-8]$/;
+const NO_STATE_RE = /^\(no .* state set\)$/;
+
+// The phase the bead claims it is at, read from its own state labels through
+// bd. `null` is a real answer - the bead has no phase recorded yet - and is
+// kept distinct from "unreadable", which is a refusal. The environment is
+// passed through untouched, exactly as in requireBead, so BEADS_DIR works.
+export function readBeadPhase(bead) {
+  let out;
+  try {
+    out = execFileSync("bd", ["state", bead, "phase"], { encoding: "utf8" });
+  } catch (e) {
+    const detail = firstLine(e && e.stderr ? e.stderr : e.message);
+    throw new AttestError(`bead ${bead} was not found: bd state failed (${detail || "no stderr"})`);
+  }
+  const raw = String(out ?? "").trim();
+  if (raw === "" || NO_STATE_RE.test(raw)) return null;
+  const bare = raw.replace(/^phase:\s*/, "");
+  if (PHASE_RE.test(bare)) return bare;
+  throw new AttestError(`unrecognized phase state for ${bead}: ${raw}`);
+}
+
+// The bead's tier/profile overrides. Absent, empty or unreadable metadata all
+// mean "no override": the policy file's own default applies. A missing bead is
+// a refusal, using the same shape as requireBead so the message is stable.
+export function loadBeadMeta(bead) {
+  let out;
+  try {
+    out = execFileSync("bd", ["show", bead, "--json"], { encoding: "utf8" });
+  } catch (e) {
+    const detail = firstLine(e && e.stderr ? e.stderr : e.message);
+    throw new AttestError(`bead ${bead} was not found: bd show failed (${detail || "no stderr"})`);
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(out);
+  } catch (e) {
+    throw new AttestError(`bead ${bead} was not found: bd show did not return JSON (${firstLine(e.message)})`);
+  }
+  // bd show --json answers with an array; older/filtered shapes may answer with
+  // one object. Either way the first record is the bead we asked for.
+  const record = Array.isArray(parsed) ? parsed[0] : parsed;
+  const declared = record && typeof record === "object" ? record.metadata : null;
+  const meta = {};
+  if (declared && typeof declared === "object") {
+    if (typeof declared.tier === "string" && declared.tier !== "") meta.tier = declared.tier;
+    if (typeof declared.profile === "string" && declared.profile !== "") meta.profile = declared.profile;
+  }
+  return meta;
+}
+
+// ---- verify: the decision ---------------------------------------------------
+
+// The exact command that would replace one artifact, so a failing report tells
+// the reader what to run rather than only what is wrong.
+function fixCommand(bead, id, check) {
+  let cmd = `factory-attest attest ${bead} ${check.path} --id ${id} --kind ${check.kind}`;
+  if (typeof check.command === "string" && check.command !== "") {
+    cmd += ` --command "${check.command}"`;
+  }
+  return cmd;
+}
+
+// One check's ladder: existence, type, hash, freshness, producer. The first
+// rung that fails is the result - a re-hash says nothing when the file is gone.
+function decide(entry, abs, expectedSha, head) {
+  if (!entry) return "missing";
+  let stat;
+  try {
+    stat = statSync(abs);
+  } catch (e) {
+    if (e && (e.code === "ENOENT" || e.code === "ENOTDIR")) return "absent";
+    throw e;
+  }
+  if (stat.isDirectory()) return "not-a-file";
+  if (sha256File(abs) !== expectedSha) return "hash";
+  if (entry.commit !== head) return "stale";
+  if (typeof entry.producer_session !== "string" || entry.producer_session === "") return "producer";
+  return "ok";
+}
+
+// The whole decision, pure apart from reading disk, git and bd. It never
+// prints and never throws for a broken artifact: a broken artifact is data
+// about the run, not a crash. Task 6 calls this directly before set-state.
+export function verifyChecks(root, bead, phase, policy) {
+  const meta = loadBeadMeta(bead);
+  const { tier, profile } = effectiveChecks(policy, meta);
+  const ids = requiredForPhase(policy, meta, phase);
+  const head = gitHead(root);
+  const manifest = loadManifest(root, bead);
+  const session = process.env.FACTORY_SESSION;
+
+  const checks = ids.map((id) => {
+    const entry = manifest.artifacts.find((a) => a.id === id) || null;
+    const def = policy.checks[id] || {};
+    const result = decide(
+      entry,
+      entry ? join(root, entry.path) : null,
+      entry ? entry.sha256 : null,
+      head,
+    );
+    const row = {
+      id,
+      result,
+      path: entry ? entry.path : null,
+      sha256: entry ? entry.sha256 : null,
+      commit: entry ? entry.commit : null,
+      kind: def.kind,
+      fix: fixCommand(bead, id, { path: "<path>", kind: def.kind, command: def.command }),
+    };
+    // Two fields the shape wants always, filled once the result is known: the
+    // commit being checked against, and - only for a stale artifact - the
+    // commit the artifact was actually recorded at.
+    row.head = head;
+    if (result === "stale") row.recorded_commit = entry.commit;
+
+    // Independence is only ever asked of a verdict artifact: a prr whose
+    // producer is the session now verifying it proves nothing about that
+    // session. No session set at all means there is no second party to
+    // compare against, which is not a failure - it is not applicable.
+    if (result === "ok" && def.kind === "prr") {
+      if (typeof session !== "string" || session === "") {
+        row.result = "not-applicable";
+      } else if (entry.producer_session === session) {
+        row.result = "independence";
+      }
+    }
+    return row;
+  });
+
+  const total = checks.length;
+  const ok = checks.filter((c) => c.result === "ok").length;
+  const failed = checks.filter((c) => c.result !== "ok" && c.result !== "not-applicable").length;
+
+  return {
+    bead,
+    phase: String(phase),
+    tier,
+    profile,
+    ok: failed === 0,
+    checks,
+    counts: { total, ok, failed },
+  };
+}
+
+// ---- verify: rendering ------------------------------------------------------
+
+// `ok` is the only lowercase label; every other result is loud on purpose, so
+// a report scanned quickly cannot mistake a failure for a pass.
+function rowLine(row, details) {
+  const label = row.result === "ok" ? "ok" : row.result.toUpperCase();
+  const left = `  ${label.padEnd(5)} ${row.id.padEnd(9)} ${row.path ?? "<no path recorded>"}`;
+  switch (row.result) {
+    case "ok":
+      return `${left}  sha256 ${row.sha256.slice(0, 12)}…  commit ${row.commit.slice(0, 7)}…`;
+    case "not-applicable":
+      return `${left}  no verdict independence to check: FACTORY_SESSION is not set`;
+    case "missing":
+      return `${left}  no artifact recorded; attest it with: ${row.fix}`;
+    case "absent":
+      return `${left}  the file is gone; attest it again with: ${row.fix}`;
+    case "not-a-file":
+      return `${left}  the path is not a regular file; attest the file it produced`;
+    case "hash":
+      return `${left}  sha256 changed: recorded ${row.sha256.slice(0, 12)}…, on disk ${details.onDisk[row.id].slice(0, 12)}…`;
+    case "stale":
+      return `${left}  recorded at commit ${row.recorded_commit.slice(0, 7)}, HEAD is ${row.head.slice(0, 7)}`;
+    case "producer":
+      return `${left}  no producer session recorded`;
+    case "independence":
+      return `${left}  recorded by the same session that is verifying it (${details.session})`;
+    default:
+      return left;
+  }
+}
+
+export function renderVerify(result, details = { onDisk: {}, session: null }) {
+  const where = `verify ${result.bead} phase ${result.phase} (tier ${result.tier}, profile ${result.profile})`;
+  const rows = result.checks.map((row) => rowLine(row, details));
+  const summary = `${result.counts.total} checks, ${result.counts.ok} ok, ${result.counts.failed} failed`;
+  return [where, ...rows, summary].join("\n");
+}
+
+// ---- verify: the command ----------------------------------------------------
+
+const VERIFY_FLAGS = {
+  phase: "the phase to verify (0-8); defaults to the phase recorded on the bead",
+  policy: "the policy file to read checks from instead of config/factory.policy.yaml (optional)",
+  json: "print one JSON object instead of the human report",
+};
+
+function parseVerifyArgs(argv) {
+  const values = { phase: null, policy: null, json: false };
+  const positional = [];
+
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (!arg.startsWith("--")) {
+      positional.push(arg);
+      continue;
+    }
+    let name = arg.slice(2);
+    let inline = null;
+    const eq = name.indexOf("=");
+    if (eq >= 0) {
+      inline = name.slice(eq + 1);
+      name = name.slice(0, eq);
+    }
+    if (!Object.hasOwn(VERIFY_FLAGS, name)) {
+      throw new AttestError(
+        `unknown flag "${arg}"; accepted flags are --phase <n>, --policy <path>, --json`,
+      );
+    }
+    if (name === "json") {
+      if (inline !== null) throw new AttestError(`flag --json takes no value`);
+      values.json = true;
+      continue;
+    }
+    let value = inline;
+    if (value === null) {
+      value = argv[++i];
+      if (value === undefined) {
+        throw new AttestError(`flag --${name} is missing its value: write --${name} <value>; --${name} is ${VERIFY_FLAGS[name]}`);
+      }
+    }
+    values[name] = value;
+  }
+
+  const [bead] = positional;
+  if (bead === undefined) {
+    throw new AttestError("missing required argument <bead>: the bead whose phase artifacts to verify");
+  }
+  if (values.phase !== null && !PHASE_RE.test(values.phase)) {
+    throw new AttestError(
+      `--phase "${values.phase}" is not a phase; the accepted range is 0-8, one digit`,
+    );
+  }
+  return { bead, ...values };
+}
+
+// `runVerify` resolves everything the decision needs, runs it, records the
+// event and renders. It prints nothing itself: the caller owns stdout, which
+// keeps `--json` to exactly one line. It returns the rendered text together
+// with the verdict, because the exit code has to come from the decision, not
+// from whether rendering succeeded.
+export function runVerify(argv) {
+  const args = parseVerifyArgs(argv);
+
+  let root;
+  try {
+    root = projectRoot(process.cwd());
+  } catch (e) {
+    throw new AttestError(e.message);
+  }
+
+  // The bead must exist before anything else: a report about a ghost is noise.
+  requireBead(args.bead);
+
+  // Verification is the one command that cannot run policy-free: with no
+  // policy there is no set of required checks to be missing.
+  const policy = loadChecksPolicy(root, args.policy);
+  if (policy === null) {
+    throw new AttestError(
+      "there is no policy to verify against: create config/factory.policy.yaml or pass --policy <path>",
+    );
+  }
+
+  // The phase is the caller's when given, otherwise what the bead recorded.
+  // No phase and none recorded is a refusal, not a guess.
+  let phase = args.phase;
+  if (phase === null) {
+    phase = readBeadPhase(args.bead);
+    if (phase === null) {
+      throw new AttestError(
+        `bead ${args.bead} has no recorded phase; pass --phase <n> to verify a phase explicitly`,
+      );
+    }
+  }
+
+  // Anchor the commit before the decision, so a non-git directory refuses
+  // instead of reporting every artifact stale against a HEAD that does not
+  // exist.
+  try {
+    gitHead(root);
+  } catch (e) {
+    const detail = firstLine(e && e.stderr ? e.stderr : e.message);
+    throw new AttestError(
+      `${detail}: run this inside a git repository: ` +
+      `verification compares each artifact's commit with HEAD`,
+    );
+  }
+
+  const result = verifyChecks(root, args.bead, phase, policy);
+
+  // The renderer needs two things the frozen shape deliberately does not
+  // carry: the hash currently on disk (to show both sides of a mismatch) and
+  // the session doing the verifying. Derive them here, once, rather than
+  // widening what Task 6 receives.
+  const details = { onDisk: {}, session: process.env.FACTORY_SESSION ?? null };
+  for (const row of result.checks) {
+    if (row.result === "hash") details.onDisk[row.id] = sha256File(join(root, row.path));
+  }
+
+  appendTrail(root, args.bead, {
+    event: "verify",
+    phase: result.phase,
+    tier: result.tier,
+    profile: result.profile,
+    ok: result.ok,
+    total: result.counts.total,
+    passed: result.counts.ok,
+    failed: result.counts.failed,
+  });
+
+  if (args.json) {
+    return {
+      ok: result.ok,
+      text: JSON.stringify({
+        bead: result.bead,
+        phase: result.phase,
+        tier: result.tier,
+        profile: result.profile,
+        ok: result.ok,
+        counts: result.counts,
+        checks: result.checks.map((c) => ({
+          id: c.id,
+          result: c.result,
+          path: c.path,
+          sha256: c.sha256,
+          commit: c.commit,
+          ...(c.recorded_commit === undefined ? {} : { recorded_commit: c.recorded_commit }),
+          head: c.head,
+          kind: c.kind,
+          fix: c.fix,
+        })),
+      }),
+    };
+  }
+  return { ok: result.ok, text: renderVerify(result, details) };
+}
+
+// The frozen signature Task 6 imports: the human report, or a refusal. The
+// verdict that decides the exit code is `runVerify`'s, since a string cannot
+// carry it.
+export function verify(argv) {
+  return runVerify(argv).text;
+}
+
 // ---- entry ------------------------------------------------------------------
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   try {
     // The subcommand word is part of the command line, not the arguments:
-    // `attest` is this file's only verb.
+    // `attest` is the default verb, `verify` the other.
     const argv = process.argv.slice(2);
-    if (argv[0] === "attest") argv.shift();
-    console.log(attest(argv));
-    process.exit(0);
+    const command = argv[0] === "verify" ? "verify" : "attest";
+    if (argv[0] === "attest" || argv[0] === "verify") argv.shift();
+    const run = command === "verify" ? runVerify(argv) : null;
+    console.log(run ? run.text : attest(argv));
+    // verify's exit code is its verdict; attest's is always success once it
+    // recorded.
+    process.exit(run && !run.ok ? 1 : 0);
   } catch (e) {
     // AttestError is a refusal: print and leave. Anything else is a bug and
     // rethrows with its stack - a crash must never dress up as a refusal.
