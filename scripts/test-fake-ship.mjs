@@ -96,7 +96,7 @@ const isOpen = (g) => ["open", "pending"].includes(String(g.status || g.state ||
 // floor speaking, exit 1. " " is truthy - a machine without the floor accepts
 // it, which is the exact lying this milestone exists to kill.
 let r = phase(["complete", bead, "0", "--evidence", "   ", "--quiet"]);
-check("case 1: whitespace evidence is REFUSED", r.code === 1 && has(r.out, "not informative"),
+check("case 1: whitespace evidence is REFUSED", r.code === 1 && has(r.out, "not informative") && !has(r.out, "cannot complete"),
   `code ${r.code} ${r.out.slice(0, 200)}`);
 
 // ---------------------------------------------------------------- setup
