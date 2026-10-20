@@ -318,13 +318,38 @@ function allGates() {
   return list;
 }
 
+// bd's `gate resolve` takes --reason as optional, so a gate resolved by hand
+// and a gate approved by the factory are both just "closed". Only a reason
+// written by cmdGate carries the [factory-gate:<id>] token; anything else is
+// treated as still pending.
+// Probed against bd 1.3.0 rather than assumed: the resolution reason is carried
+// by `close_reason` on the gate row - visible in BOTH `bd gate list --all --json`
+// and `bd gate show <id> --json` - and a bare resolve leaves the row in the
+// `--all` list with status "closed" and no close_reason at all. Several field
+// names are tried because bd's shape is not something to implement against a
+// guess; the fallbacks cost nothing and fail closed if the shape changes.
+function gateReason(g) {
+  const candidates = [g.reason, g.close_reason, g.resolved_reason, g.resolution_reason];
+  const value = candidates.find((x) => typeof x === "string" && x.trim());
+  return value ? value.trim() : null;
+}
+
+function factoryApproved(g) {
+  const reason = gateReason(g);
+  return Boolean(reason && /\[factory-gate:[^\]]+\]/.test(reason));
+}
+
 function gatePending(bead, meta, key) {
   const id = meta?.[key];
   if (!id) return null;                       // no gate was ever created
   const g = allGates().find((x) => (x.id || x.gate_id) === id);
-  if (!g) return null;                        // resolved gates drop out of the list
+  // Probed: bd 1.3.0 keeps closed gates in the `--all` list (status "closed"),
+  // so an absent row means bd genuinely lost it - approved, as before.
+  if (!g) return null;
   const status = String(g.status || g.state || "open");
-  return status === "open" || status === "pending" ? id : null;
+  if (status === "open" || status === "pending") return id;
+  // Resolved. It counts only if cmdGate wrote the token.
+  return factoryApproved(g) ? null : id;
 }
 
 // The one detour in the pipeline, derived from the table rather than hardcoded,
@@ -802,7 +827,35 @@ function cmdGate(bead, which, evidence) {
         `Run factory-phase.mjs gate <bead> ${String(which).toUpperCase()} --evidence "..." while the gate is open, or status <bead> to see which gates exist.`
     );
   }
-  bd(["gate", "resolve", id, "--reason", v]);
+  // Probed bd 1.3.0: a gate resolved with no --reason stays in the `--all`
+  // list as "closed" with no close_reason, which gatePending() now reports as
+  // pending. Before resolving, re-raise such a gate: the approval is recorded
+  // on a gate whose id the bead actually points at, so the recorded approval
+  // and the passing gatePending check describe the same row.
+  const row = allGates().find((x) => (x.id || x.gate_id) === id);
+  const closedWithoutToken = row && (row.status || row.state) !== "open" && (row.status || row.state) !== "pending" && !factoryApproved(row);
+  let target = id;
+  if (closedWithoutToken) {
+    // The gate was resolved outside the factory. Re-raise it so the approval is
+    // recorded on a gate whose id the bead actually points at.
+    const res = bd(["gate", "create", "--type=human", "--blocks", bead,
+      "--reason", `GATE ${String(which).toUpperCase()} re-raised: the previous gate was resolved without a factory record`]);
+    const raised = res.match(/Created gate\s+(\S+)/)?.[1];
+    if (!raised) {
+      throw new Illegal(
+        `could not re-raise GATE ${String(which).toUpperCase()}: bd did not report a new gate id. ` +
+          `Run \`bd gate list ${bead} --all --json\` to see what exists, then retry.`
+      );
+    }
+    bd(["update", bead, "--set-metadata", `${key}=${raised}`]);
+    target = raised;
+  }
+  // The close_reason is the evidence of record, so the token that proves the
+  // factory wrote it rides in the same field. A value over the limit or one
+  // with a quote was refused above; this reason is larger than the evidence by
+  // the token's length, which is the point of the token check: a reason with
+  // the token in it, but not written here, stays pending.
+  bd(["gate", "resolve", target, "--reason", `${v} [factory-gate:${target}]`]);
 
   // Fail closed: re-read rather than trust the write. bd returning 0 is a claim,
   // the same class of claim as an installer that printed success.
@@ -812,7 +865,7 @@ function cmdGate(bead, which, evidence) {
   out({
     ok: true,
     gate: String(which).toUpperCase(),
-    gate_id: id,
+    gate_id: target,
     bead,
     resolved: true,
     reason_recorded: true,
@@ -822,7 +875,7 @@ function cmdGate(bead, which, evidence) {
     // human-readable form in this field. `say` used to do this job, but it is
     // suppressed by --quiet while out() is not, so the message could vanish on
     // the one call where a human most wants to see it recorded.
-    text: [`gate ${String(which).toUpperCase()} resolved on ${bead} (${id}) - reason recorded in bd`],
+    text: [`gate ${String(which).toUpperCase()} resolved on ${bead} (${target}) - reason recorded in bd`],
   });
 }
 

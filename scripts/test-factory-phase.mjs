@@ -75,14 +75,25 @@ function newBead(title) {
 // phase 3 and every later assertion fails for a reason that has nothing to do
 // with what is being tested. Two of my first test attempts forgot this and
 // cascaded four failures out of one missing helper.
-function openGate() {
-  try {
-    const rows = JSON.parse(bd(["gate", "list", "--all", "--json"]).out);
-    const list = Array.isArray(rows) ? rows : (rows.gates || []);
-    const open = list.find((x) => ["open", "pending"].includes(String(x.status || x.state || "open")));
-    if (open) bd(["gate", "resolve", open.id || open.gate_id]);
-  } catch { /* no gate to resolve */ }
+//
+// Probed against bd 1.3.0 (a scratch sandbox, a real human gate resolved both
+// with `--reason "probe"` and with no reason at all): the resolution reason is
+// carried by `close_reason` on the gate row, in BOTH `bd gate list --all
+// --json` and `bd gate show <id> --json`, and a bare `bd gate resolve` leaves
+// the row in the `--all` list with status "closed" and no close_reason at all.
+// The machine reads exactly that (gateReason / factoryApproved in
+// factory-phase.mjs), so a bare resolve no longer counts as an approval - which
+// is the defect this task closes. A setup must therefore clear gates through
+// the factory command, never with a raw resolve and never by writing the
+// [factory-gate:<id>] token itself - that would test the token check with the
+// token.
+function approveGate(bead, letter, why = `the ${letter} gate evidence is on disk and the checklist passed`) {
+  return phase(["gate", bead, letter, "--evidence", why, "--quiet"]);
 }
+// The gate standing in the way at the end of phase p, as the phase table has
+// it: 2 -> GATE A, 3 -> GATE B. Entering 7 raises GATE C, which walkTo() and
+// the walk loops clear explicitly when they mean to.
+const GATE_LETTER = { "2": "A", "3": "B" };
 const legalOf = (o) => (o.match(/legal next:.*/) || [""])[0];
 
 // Completing verify requires a record of the thing that actually ran and the
@@ -223,7 +234,9 @@ const gateId = (() => {
 check("gate id was recorded", !!gateId, gates.out.slice(0, 200));
 
 if (gateId) {
-  bd(["gate", "resolve", gateId]);
+  // GATE A was raised by enter 2; clearing it through the machine (approveGate,
+  // not a raw resolve) so the setup matches the semantics it is walking under.
+  approveGate(bead, "A");
   r = phase(["complete", bead, "2", "--evidence", "spec approved at GATE A", "--quiet"]);
   check("completing 2 after GATE A resolves succeeds", r.code === 0, r.out);
   r = phase(["enter", bead, "3", "--reason", "gate A approved", "--quiet"]);
@@ -245,7 +258,7 @@ const g2 = (() => {
     return list[0] && (list[0].id || list[0].gate_id);
   } catch { return null; }
 })();
-if (g2) bd(["gate", "resolve", g2]);
+if (g2) approveGate(bead, "B");
 r = phase(["complete", bead, "3", "--evidence", "plan.md + plan.json applied", "--quiet"]);
 check("completing 3 succeeds", r.code === 0, r.out);
 r = phase(["enter", bead, "4", "--reason", "gate B approved", "--quiet"]);
@@ -286,10 +299,7 @@ if (d) {
     phase(["enter", d, p, "--reason", "walk", "--quiet"]);
     phase(["complete", d, p, "--evidence", `walked phase ${p}: ran its checks and answered cleanly`, "--quiet"]);
   }
-  bd(["gate", "resolve", (() => {
-    try { const rows = JSON.parse(bd(["gate", "list", "--all", "--json"]).out);
-      const l = Array.isArray(rows) ? rows : (rows.gates || []); return l[0] && (l[0].id || l[0].gate_id); } catch { return null; }
-  })()]);
+  approveGate(d, "A");
   phase(["enter", d, "3", "--reason", "plan", "--quiet"]);
   phase(["complete", d, "3", "--evidence", "applied plan.md and plan.json; 4 tasks planned", "--quiet"]);
   const gb = (() => {
@@ -298,7 +308,7 @@ if (d) {
         const s = String(g.status || g.state || "open"); return s === "open" || s === "pending"; });
       return l[0] && (l[0].id || l[0].gate_id); } catch { return null; }
   })();
-  if (gb) bd(["gate", "resolve", gb]);
+  if (gb) approveGate(d, "B");
   r = phase(["enter", d, "4", "--reason", "implement", "--quiet"]);
   check("a second feature reaches implement", r.code === 0, r.out);
   r = phase(["enter", d, "4p", "--reason", "build failed mid-implement", "--quiet"]);
@@ -317,18 +327,11 @@ if (d) {
 // was broken for the ordinary, successful case.
 const branched = newBead("completed implement feature");
 if (branched) {
-  const resolveOpenGate = () => {
-    try {
-      const rows = JSON.parse(bd(["gate", "list", "--all", "--json"]).out);
-      const list = Array.isArray(rows) ? rows : (rows.gates || []);
-      const open = list.find((x) => ["open", "pending"].includes(String(x.status || x.state || "open")));
-      if (open) bd(["gate", "resolve", open.id || open.gate_id]);
-    } catch { /* no gate to resolve */ }
-  };
   for (const p of ["0", "1", "2", "3"]) {
     phase(["enter", branched, p, "--reason", `walk toward implement (${p})`, "--quiet"]);
     phase(["complete", branched, p, "--evidence", `phase ${p} walked: ran its checks and answered cleanly`, "--quiet"]);
-    resolveOpenGate();
+    const letter = GATE_LETTER[p];
+    if (letter) approveGate(branched, letter);
   }
   r = phase(["enter", branched, "4", "--reason", "implement", "--quiet"]);
   check("reached implement with a clean history", r.code === 0, r.out);
@@ -360,7 +363,8 @@ if (findings) {
   for (const p of ["0", "1", "2", "3", "4", "5"]) {
     phase(["enter", findings, p, "--reason", `walk toward verify (${p})`, "--quiet"]);
     completePhase(findings, p, `phase ${p} walked: ran its checks and answered cleanly`);
-    openGate();
+    const letter = GATE_LETTER[p];
+    if (letter) approveGate(findings, letter);
   }
   r = phase(["next", findings, "--quiet"]);
   check("from a COMPLETED 5 review AND the repair detour are BOTH legal",
@@ -378,8 +382,8 @@ if (findings) {
   phase(["enter", findings, "7", "--reason", "ship", "--quiet"]);
   // Entering 7 raises GATE C, and completing ship now refuses while it is
   // pending - that refusal is the walk-to-ship test's own subject. Resolving it
-  // through the machine's bead-scoped `gate` command (never openGate(), which
-  // resolves the FIRST open gate globally) keeps this block asserting what it
+  // through the machine's bead-scoped `gate` command (not a first-open-gate
+  // scrambler) keeps this block asserting what it
   // always meant to: a COMPLETED ship with an approved gate offers no detour.
   r = phase(["gate", findings, "C", "--evidence", "approved the release: artifact hashes match, smoke test returned 200", "--quiet"]);
   check("the walk to a completed ship resolves GATE C on the way", r.code === 0, r.out.slice(0, 200));
@@ -402,10 +406,11 @@ if (rejected) {
   for (const p of ["0", "1", "2", "3", "4", "5", "6"]) {
     phase(["enter", rejected, p, "--reason", `walk toward ship (${p})`, "--quiet"]);
     completePhase(rejected, p, `phase ${p} walked: ran its checks and answered cleanly`);
-    openGate();
+    const letter = GATE_LETTER[p];
+    if (letter) approveGate(rejected, letter);
   }
   phase(["enter", rejected, "7", "--reason", "ship", "--quiet"]);
-  openGate();
+  approveGate(rejected, "C");
   r = phase(["next", rejected, "--quiet"]);
   check("an UNFINISHED ship phase offers the repair detour, so a Gate C rejection is actionable",
     /\b4p\b/.test(legalOf(r.out)), r.out);
@@ -429,7 +434,8 @@ if (deadlock) {
   for (const p of ["0", "1", "2", "3", "4", "5"]) {
     phase(["enter", deadlock, p, "--reason", `walk to verify (${p})`, "--quiet"]);
     completePhase(deadlock, p, `phase ${p} walked: ran its checks and answered cleanly`);
-    openGate();
+    const letter = GATE_LETTER[p];
+    if (letter) approveGate(deadlock, letter);
   }
   r = phase(["enter", deadlock, "4p", "--reason", "fix what verify found", "--quiet"]);
   check("the repair detour is reachable from a completed verify", r.code === 0, r.out);
@@ -461,7 +467,8 @@ if (backdoor) {
   for (const p of ["0", "1", "2", "3"]) {
     phase(["enter", backdoor, p, "--reason", `walk toward implement (${p})`, "--quiet"]);
     phase(["complete", backdoor, p, "--evidence", `phase ${p} walked: ran its checks and answered cleanly`, "--quiet"]);
-    openGate();
+    const letter = GATE_LETTER[p];
+    if (letter) approveGate(backdoor, letter);
   }
   // Entered and deliberately NOT completed. My first version completed it in the
   // walk loop and then asserted the back door was closed - which it correctly
@@ -490,7 +497,10 @@ function intoVerify(title) {
   for (const p of ["0", "1", "2", "3", "4"]) {
     phase(["enter", b, p, "--reason", `walk to ${p}`]);
     phase(["complete", b, p, "--evidence", `walk evidence for ${p}`]);
-    openGate();
+    // The gate for this phase (A at 2, B at 3) is cleared through the machine
+    // so it counts as approved: the next iteration's `enter` requires that.
+    const letter = GATE_LETTER[p];
+    if (letter) approveGate(b, letter);
   }
   phase(["enter", b, "5", "--reason", "walk to verify"]);
   return b;
@@ -499,8 +509,9 @@ function intoVerify(title) {
 // Walk a fresh bead to `target`, resolving exactly the gates that stand in the
 // way: Gate A before completing phase 2, Gate B before completing phase 3.
 // Gate C is created by enter 7 and is deliberately left open.
-// Do NOT use openGate() here: it resolves the first open gate globally and
-// would resolve Gate C before complete 7 ever runs.
+// Resolve ONLY the named gate for the phase standing in the way (see
+// approveGate / GATE_LETTER above): a "first open gate anywhere in the
+// database" resolve would also clear Gate C before complete 7 ever runs.
 function walkTo(title, target) {
   const b = newBead(title);
   if (!b) throw new Error(`walkTo: could not create bead for "${title}"`);
@@ -630,7 +641,8 @@ if (repBead) {
   for (const p of ["0", "1", "2", "3", "4"]) {
     phase(["enter", repBead, p, "--reason", `walk to ${p}`, "--quiet"]);
     completePhase(repBead, p, `phase ${p} walked: ran its checks and answered cleanly`);
-    openGate();
+    const letter = GATE_LETTER[p];
+    if (letter) approveGate(repBead, letter);
   }
   phase(["enter", repBead, "4p", "--reason", "found a defect", "--quiet"]);
   phase(["complete", repBead, "4p", "--evidence", "fixed the parsing bug; 3 failing cases now pass", "--quiet"]);
@@ -679,7 +691,7 @@ if (badBead) {
     // and earlier blocks leave gates behind, so an unscoped `some` could pass for
     // the wrong reason. bd prints the literal `null` when a bead has no gate, and
     // a parse failure must fail this one assertion, not crash the run - so parse
-    // defensively, like openGate() above.
+    // defensively, like the gate lookups at the top of this file.
     const gateList = (() => {
       try {
         const rows = JSON.parse(bd(["gate", "list", bead, "--all", "--json"]).out) ?? [];
@@ -907,6 +919,56 @@ console.log("\n--booted still works as a deprecated alias");
   if (!existsSync(artifact)) writeFileSync(artifact, "200 OK\n");
   const alias = phase(["complete", b, "5", "--evidence", "the alias still works", "--booted", RAN_CLAIM, "--artifact", artifact, "--quiet"]);
   check("--booted still completes phase 5", alias.code === 0, alias.out.slice(0, 200));
+}
+
+console.log("\na gate resolved outside the machine is not an approval");
+{
+  // Walk to phase 2, complete it, and stop at GATE A: enter 2 creates the gate,
+  // and completing 2 leaves the gate as the only thing standing before 3 (the
+  // same reasoning the gate-command block records above). If phase 2 were left
+  // unfinished, `enter 3` would be refused as an ILLEGAL TRANSITION rather than
+  // as a pending gate, and the assertion below would be measuring the wrong
+  // refusal.
+  const b = newBead("raw gate resolve");
+  const steps = [
+    ["enter", "0", "walking to the gate"],
+    ["complete", "0", "onboarded: bd init and the graft build both ran"],
+    ["enter", "1", "walking to the gate"],
+    ["complete", "1", "brainstorm written; three directions rejected"],
+    ["enter", "2", "walking to the gate"],
+    ["complete", "2", "the spec is written and the design direction is settled"],
+  ];
+  for (const [cmd, p, ev] of steps) {
+    const r = cmd === "enter"
+      ? phase([cmd, b, p, "--reason", ev, "--quiet"])
+      : phase([cmd, b, p, "--evidence", ev, "--quiet"]);
+    if (r.code !== 0) throw new Error(`setup failed at ${cmd} ${p}: ${r.out.slice(0, 300)}`);
+  }
+
+  const rows = JSON.parse(bd(["gate", "list", b, "--all", "--json"]).out);
+  const list = Array.isArray(rows) ? rows : (rows && rows.gates) || [];
+  const gate = list.find((g) => ["open", "pending"].includes(String(g.status || g.state || "open")));
+  if (!gate) throw new Error(`setup failed: no open gate on ${b}: ${JSON.stringify(rows).slice(0, 300)}`);
+
+  // The bypass: close it with no reason at all. This is the exact move a hand
+  // resolution makes, and after Task 9 it must not read as an approval. A token
+  // is deliberately NOT written here - fabricating it would test the token
+  // check with the token.
+  const raw = bd(["gate", "resolve", gate.id]);
+  if (raw.code !== 0) throw new Error(`setup failed: raw resolve: ${raw.out.slice(0, 300)}`);
+
+  const refused = phase(["enter", b, "3", "--reason", "skipping the gate", "--quiet"]);
+  check(
+    "a gate resolved with no reason is still PENDING",
+    refused.code === 2 && has(refused.out, "GATE A is pending"),
+    `${refused.code} ${refused.out.slice(0, 200)}`
+  );
+
+  // Recovery: the factory re-raises the hand-resolved gate and records its own.
+  const recovered = phase(["gate", b, "A", "--evidence", "the spec and the design direction are settled and written down", "--quiet"]);
+  check("the factory can re-raise and approve a gate that was resolved by hand", recovered.code === 0, recovered.out.slice(0, 240));
+  const opened = phase(["enter", b, "3", "--reason", "gate approved by the factory", "--quiet"]);
+  check("once the factory approves, the phase opens", opened.code === 0, opened.out.slice(0, 240));
 }
 
 // ---------------------------------------------------------------- report
