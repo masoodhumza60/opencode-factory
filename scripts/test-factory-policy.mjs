@@ -112,6 +112,13 @@ check("a missing override is refused with its path in the message", (() => {
 })());
 check("an explicit override path is read", overridden.tiers.prototype.checks.length === 0);
 
+const dirRoot = mkdtempSync(join(tmpdir(), "factory-policy-dir-"));
+mkdirSync(join(dirRoot, "config", "factory.policy.yaml"), { recursive: true });
+check("a directory at the policy path is refused as unreadable", (() => {
+  try { loadPolicy(dirRoot); return false; }
+  catch (e) { return e instanceof PolicyError && /factory\.policy\.yaml: cannot read the policy file \(EISDIR\)/.test(e.message); }
+})());
+
 console.log("\neffectiveChecks");
 const eff = effectiveChecks(policy, { tier: "public", profile: "web" });
 check("public+web dedupes a11y and perf", eff.checks.length === 13, String(eff.checks.length));
@@ -121,9 +128,19 @@ check("metadata tier beats the file default",
   effectiveChecks(policy, { tier: "regulated", profile: "api" }).tier === "regulated");
 check("metadata profile beats the file default",
   effectiveChecks(policy, { tier: "regulated", profile: "api" }).profile === "api");
-check("an undeclared metadata tier is refused", (() => {
+check("an undeclared metadata tier is refused, naming the legal tiers", (() => {
   try { effectiveChecks(policy, { tier: "nope", profile: "web" }); return false; }
-  catch (e) { return e instanceof PolicyError && /tier "nope" is not declared/.test(e.message); }
+  catch (e) {
+    return e instanceof PolicyError &&
+      /tier "nope" is not declared under tiers; declared: prototype, internal, public, regulated$/.test(e.message);
+  }
+})());
+check("an undeclared metadata profile is refused, naming the legal profiles", (() => {
+  try { effectiveChecks(policy, { tier: "prototype", profile: "nope" }); return false; }
+  catch (e) {
+    return e instanceof PolicyError &&
+      /profile "nope" is not declared under profiles; declared: web, api, cli, library, mobile, desktop, data-ml, infra, embedded, game$/.test(e.message);
+  }
 })());
 
 console.log("\nrequiredForPhase");
@@ -214,5 +231,6 @@ check("an empty block at EOF is an empty map",
 rmSync(root, { recursive: true, force: true });
 rmSync(bare, { recursive: true, force: true });
 rmSync(bad, { recursive: true, force: true });
+rmSync(dirRoot, { recursive: true, force: true });
 console.log(`\n${pass}/${pass + fail} policy tests passed.`);
 process.exit(fail ? 1 : 0);

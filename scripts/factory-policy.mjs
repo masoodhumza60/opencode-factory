@@ -42,6 +42,13 @@ function fail(file, line, reason) {
   throw new PolicyError(`${file}:${line}: ${reason}`);
 }
 
+// `Object.keys` preserves declaration order, so the listed legal values come
+// from the policy itself rather than a hard-coded string.
+function declaredNames(map) {
+  const names = Object.keys(map);
+  return names.length ? `declared: ${names.join(", ")}` : "declared: nothing";
+}
+
 function refuseChars(raw, file, line) {
   for (const ch of REFUSED) {
     if (raw.includes(ch)) {
@@ -180,10 +187,10 @@ export function validatePolicy(policy, file) {
   const checks = policy.checks && typeof policy.checks === "object" ? policy.checks : {};
 
   if (policy.tier !== undefined && !Object.prototype.hasOwnProperty.call(tiers, policy.tier)) {
-    throw new PolicyError(`${file}: tier "${policy.tier}" is not declared under tiers`);
+    throw new PolicyError(`${file}: tier "${policy.tier}" is not declared under tiers; ${declaredNames(tiers)}`);
   }
   if (policy.profile !== undefined && !Object.prototype.hasOwnProperty.call(profiles, policy.profile)) {
-    throw new PolicyError(`${file}: profile "${policy.profile}" is not declared under profiles`);
+    throw new PolicyError(`${file}: profile "${policy.profile}" is not declared under profiles; ${declaredNames(profiles)}`);
   }
 
   for (const [tier, def] of Object.entries(tiers)) {
@@ -231,7 +238,14 @@ export function loadPolicy(root, override) {
     }
     file = override;
   }
-  const text = readFileSync(file, "utf8");
+  let text;
+  try {
+    text = readFileSync(file, "utf8");
+  } catch (e) {
+    // No override and no file: the M0 behaviour applies, signalled by null.
+    if (!override && e && e.code === "ENOENT") return null;
+    throw new PolicyError(`${file}: cannot read the policy file (${(e && e.code) || "unknown error"})`);
+  }
   return validatePolicy(parseYamlSubset(text, file), file);
 }
 
@@ -243,10 +257,10 @@ export function effectiveChecks(policy, meta) {
   const profiles = (policy && policy.profiles) || {};
 
   if (!Object.prototype.hasOwnProperty.call(tiers, tier)) {
-    throw new PolicyError(`<bead metadata>: tier "${tier}" is not declared under tiers`);
+    throw new PolicyError(`<bead metadata>: tier "${tier}" is not declared under tiers; ${declaredNames(tiers)}`);
   }
   if (!Object.prototype.hasOwnProperty.call(profiles, profile)) {
-    throw new PolicyError(`<bead metadata>: profile "${profile}" is not declared under profiles`);
+    throw new PolicyError(`<bead metadata>: profile "${profile}" is not declared under profiles; ${declaredNames(profiles)}`);
   }
 
   const list = [];
