@@ -156,6 +156,7 @@ merge_config() {
         dry "write temp snippet: bundle snippet + plugins += [$pin]"
         if [ -f "$user_cfg" ]; then dry "user config: $user_cfg (read-only; purely additive merge)"
         else dry "echo '{}' > \"$user_cfg\"   (no existing config)"; fi
+        if [ -f "$user_cfg" ]; then dry "backup $user_cfg -> $user_cfg.bak-<timestamp> (the merge keeps the last five)"; fi
         dry "node \"$bundle/scripts/merge-config.mjs\" --snippet <resolved-snippet> --user \"$user_cfg\" --out \"$user_cfg\""
         return
     fi
