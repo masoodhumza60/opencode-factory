@@ -49,7 +49,7 @@ the phase 8 close that today records nothing.
 |---|---|---|
 | Tier | bead metadata + `factory.policy.yaml` | new field, read at every gate |
 | Profile | bead metadata + `.factory/product.yaml` | new field; selects the check list |
-| Surfaces + impact | `.factory/product.yaml`, `factory-phase.mjs` | compute `declared ∪ consumers(shared paths)` at G2; refuse omissions |
+| Surfaces + impact | `.factory/product.yaml`, `factory-phase.mjs` | The affected set is `computed ∪ declared-extra`: the import graph plus a `generates:` edge, with a declaration able to add a surface but never to omit one. |
 | Evidence manifest | new `scripts/factory-attest.mjs` | writes and verifies `.factory/<bead>/manifest.json`; `complete` calls it |
 | `--ran` | `factory-phase.mjs` | replaces `--booted`; requires command, observed result, timestamp, artifact path that exists |
 | Gate reasons | `factory-phase.mjs` `cmdGate` | require `close_reason`; reject raw `bd gate resolve` as unresolved |

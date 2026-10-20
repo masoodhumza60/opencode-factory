@@ -971,6 +971,30 @@ console.log("\na gate resolved outside the machine is not an approval");
   check("once the factory approves, the phase opens", opened.code === 0, opened.out.slice(0, 240));
 }
 
+console.log("\na bead with no Gate C record cannot complete ship");
+{
+  // The shape a legacy bead can be in: phase 7 reached on code that warned and
+  // returned success when the gate id could not be recorded.
+  const b = newBead("legacy ship without gate c");
+  const p1 = bd(["set-state", b, "phase=7"]);
+  const p2 = bd(["set-state", b, "phase_done=6"]);
+  if (p1.code !== 0 || p2.code !== 0) throw new Error(`setup failed: ${p1.out} ${p2.out}`);
+
+  const refused = phase(["complete", b, "7", "--evidence", "deployed and smoke-tested; 200 on /health", "--quiet"]);
+  check(
+    "complete 7 REFUSES when no Gate C id was ever recorded",
+    refused.code === 1 && has(refused.out, "GATE C has no recorded gate id"),
+    `${refused.code} ${refused.out.slice(0, 220)}`
+  );
+
+  // The refusal must not be vacuous in the other direction either: once the
+  // record exists and the gate is approved, the same bead ships.
+  const gate = phase(["gate", b, "C", "--evidence", "reviewed the release: artifact hashes match, smoke test returned 200", "--quiet"]);
+  check("the factory can backfill and approve Gate C on that bead", gate.code === 0, gate.out.slice(0, 220));
+  const shipped = phase(["complete", b, "7", "--evidence", "deployed and smoke-tested; 200 on /health", "--quiet"]);
+  check("the same bead completes 7 once Gate C is recorded and approved", shipped.code === 0, shipped.out.slice(0, 220));
+}
+
 // ---------------------------------------------------------------- report
 console.log(`\n${pass}/${pass + fail} phase-machine tests passed.`);
 if (fail) { console.log("\nFailures:"); failures.forEach((f) => console.log("  - " + f)); }

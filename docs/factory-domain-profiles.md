@@ -71,6 +71,8 @@ Every profile declares exactly these fields:
 
 `experimental: reduced checks` means the profile may be selected, but its G3 verdict must say `not-verified` for every check the factory cannot execute. A profile is promoted to `enforced` only when a named tool produces its evidence and a testapp exercises it.
 
+The matrix summarises fields 1–7. Fields 8 (compatibility and deprecation) and 9 (evidence command and threshold) are not yet filled in for any profile; they are M2 work.
+
 ## What is *not* universal
 
 - **WCAG applies only to human interfaces.** For `api`, `cli`, `library` and

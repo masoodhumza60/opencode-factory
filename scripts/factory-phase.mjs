@@ -39,6 +39,11 @@ const PHASES = [
 ];
 const byId = new Map(PHASES.map((p) => [p.id, p]));
 const GATE_KEY = { A: "gate_a", B: "gate_b", C: "gate_c" };
+// Which phase raises which gate, straight from the table above so the two can
+// never drift apart. cmdGate's backfill only conjures a gate for a bead that is
+// actually sitting in the phase that encodes it - a gate for any other phase
+// cannot be created out of thin air.
+const GATE_RAISE = Object.fromEntries(PHASES.filter((p) => p.gate).map((p) => [p.gate, p.id]));
 // Which phase was last COMPLETED, as distinct from which phase is CURRENT.
 // These were the same fact until 7b ran a real phase and found `complete`
 // persisted nothing: it printed the evidence and threw it away, so
@@ -352,6 +357,20 @@ function gatePending(bead, meta, key) {
   return factoryApproved(g) ? null : id;
 }
 
+// A gate id is recorded in the bead's metadata by the phase that raised it
+// (2 -> GATE A, 3 -> GATE B, 7 -> GATE C). A missing record is not "no gate":
+// gatePending() would return null and the transition would sail through with a
+// gate nobody can evaluate. Refuse and name the repair.
+function requireGateRecord(bead, meta, letter) {
+  const key = GATE_KEY[letter];
+  if (meta?.[key]) return;
+  throw new Illegal(
+    `GATE ${letter} has no recorded gate id for this bead, so it cannot be shown pending or approved. ` +
+      `Run \`bd gate create --type=human --blocks ${bead} --reason "GATE ${letter} backfill"\`, then ` +
+      `\`bd update ${bead} --set-metadata ${key}=<id>\`, and retry.`
+  );
+}
+
 // The one detour in the pipeline, derived from the table rather than hardcoded,
 // so changing the table cannot silently leave a magic "4p" behind.
 const REPAIR = PHASES.find((p) => p.detour);
@@ -607,38 +626,17 @@ function cmdEnter(bead, target, reason) {
   // So the record is demanded BEFORE the pending check: refuse to enter rather
   // than guess whether an unrecorded gate is open.
   if (target === "3") {
-    const requiredKey = GATE_KEY.A;
-    if (!meta?.[requiredKey]) {
-      throw new Illegal(
-        `GATE A has no recorded gate id for this bead, so it cannot be shown pending or approved. ` +
-          `Run \`bd gate create --type=human --blocks ${bead} --reason "GATE A backfill"\`, then ` +
-          `\`bd update ${bead} --set-metadata ${requiredKey}=<id>\`, and retry.`
-      );
-    }
+    requireGateRecord(bead, meta, "A");
     if (gatePending(bead, meta, "gate_a"))
       throw new Blocked("GATE A is pending - the human has not approved the spec");
   }
   if (target === "4") {
-    const requiredKey = GATE_KEY.B;
-    if (!meta?.[requiredKey]) {
-      throw new Illegal(
-        `GATE B has no recorded gate id for this bead, so it cannot be shown pending or approved. ` +
-          `Run \`bd gate create --type=human --blocks ${bead} --reason "GATE B backfill"\`, then ` +
-          `\`bd update ${bead} --set-metadata ${requiredKey}=<id>\`, and retry.`
-      );
-    }
+    requireGateRecord(bead, meta, "B");
     if (gatePending(bead, meta, "gate_b"))
       throw new Blocked("GATE B is pending - the human has not approved the plan");
   }
   if (target === "8") {
-    const requiredKey = GATE_KEY.C;
-    if (!meta?.[requiredKey]) {
-      throw new Illegal(
-        `GATE C has no recorded gate id for this bead, so it cannot be shown pending or approved. ` +
-          `Run \`bd gate create --type=human --blocks ${bead} --reason "GATE C backfill"\`, then ` +
-          `\`bd update ${bead} --set-metadata ${requiredKey}=<id>\`, and retry.`
-      );
-    }
+    requireGateRecord(bead, meta, "C");
     if (gatePending(bead, meta, "gate_c"))
       throw new Blocked("GATE C is pending - the human has not approved the ship");
   }
@@ -817,14 +815,35 @@ function cmdGate(bead, which, evidence) {
   if (thin) throw new Illegal(`--evidence is not informative: ${thin}. Say what you decided and why - e.g. "shipping this; the empty state is the page, so there is nothing to dismiss"`);
 
   const meta = readMeta(bead);
-  const id = gatePending(bead, meta, key);
-  if (!id) {
+  let id = gatePending(bead, meta, key);
+  const letter = String(which || "").toUpperCase();
+  if (!id && !meta?.[key] && readPhase(bead) === GATE_RAISE[letter]) {
+    // Legacy repair, the same remedy requireGateRecord names: a bead that
+    // reached this phase on old code has no recorded gate id, so there is
+    // nothing pending to resolve - cmdGate used to bail with "nothing to
+    // resolve" here and the bead was stuck, refused by `complete` and refused
+    // by the gate command. Raise the gate now, record its id, and let the
+    // approval below land on a gate whose id the bead actually points at.
+    const created = bd(["gate", "create", "--type=human", "--blocks", bead,
+      "--reason", `GATE ${letter} backfill: the bead has no recorded gate id for this gate`]);
+    const raised = (created || "").match(/Created gate\s+(\S+)/)?.[1];
+    if (!raised) {
+      throw new Illegal(
+        `could not backfill GATE ${letter}: bd did not report a new gate id. ` +
+          `Run \`bd gate list ${bead} --all --json\` to see what exists, then retry.`
+      );
+    }
+    bd(["update", bead, "--set-metadata", `${key}=${raised}`]);
+    // The block below re-reads the gate row through this id, so the approval
+    // must be evaluated against the gate we just raised, never the missing one.
+    id = raised;
+  } else if (!id) {
     const phase = readPhase(bead);
     throw new Illegal(
-      `no ${String(which).toUpperCase()} gate is pending on ${bead}` +
+      `no ${letter} gate is pending on ${bead}` +
         (phase ? ` (phase ${phase} ${byId.get(phase)?.name ?? ""})` : "") +
         ". There is nothing to resolve - a gate that does not exist cannot be approved, and approving one by id alone would let anyone past a gate the machine never raised. " +
-        `Run factory-phase.mjs gate <bead> ${String(which).toUpperCase()} --evidence "..." while the gate is open, or status <bead> to see which gates exist.`
+        `Run factory-phase.mjs gate <bead> ${letter} --evidence "..." while the gate is open, or status <bead> to see which gates exist.`
     );
   }
   // Probed bd 1.3.0: a gate resolved with no --reason stays in the `--all`
@@ -896,6 +915,10 @@ function cmdComplete(bead, target, evidence, ranArg, artifactArg) {
   // the gate before any evidence predicate, so a pending ship gate is reported
   // as blocked (exit 2), never as bad evidence (exit 1).
   if (target === "7") {
+    // The same demand cmdEnter makes for targets 3/4/8. Without it, a bead that
+    // reached phase 7 on the old code - which warned and returned success when
+    // the gate id could not be parsed - completes ship with Gate C unknown.
+    requireGateRecord(bead, readMeta(bead), "C");
     const pending = gatePending(bead, readMeta(bead), GATE_KEY.C);
     if (pending) {
       throw new Blocked(

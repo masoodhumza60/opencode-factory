@@ -40,8 +40,8 @@ Everything else in this roadmap is a consequence of that sentence.
 
 The evidence layer currently accepts `" "` as proof. Nothing else matters until that is false.
 
-1. Reject whitespace-only and content-free evidence; require either an existing path or
-   `command -> observed result`.
+1. Reject whitespace-only and content-free evidence. Phase 5 additionally requires `--ran` in the shape
+   `command -> observed result at <ISO-8601 time>` plus `--artifact` naming a file that exists.
 2. `--ran` must name a launch command, an observed result, a timestamp, and an evidence path that exists. `--booted` remains an accepted alias for one release and prints a deprecation line.
 3. Gate resolution requires a recorded `close_reason`; a gate resolved through raw `bd gate resolve`
    is treated as unresolved by every gate-dependent transition.
