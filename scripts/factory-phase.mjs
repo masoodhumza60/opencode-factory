@@ -11,6 +11,7 @@
 //   node scripts/factory-phase.mjs enter    <bead> <phase> --reason "..."
 //   node scripts/factory-phase.mjs complete <bead> <phase> --evidence "..."
 //   node scripts/factory-phase.mjs handoff  <bead> --next "<action>"
+//   node scripts/factory-phase.mjs gate     <bead> <A|B|C> --evidence "..."
 //
 // Exit: 0 ok | 1 illegal or error | 2 blocked (a human gate is still pending)
 //
@@ -498,6 +499,93 @@ function cmdEnter(bead, target, reason) {
   }
 }
 
+// The human's own transition is the only write in this machine that used to be
+// permitted to carry no content. Every machine transition demands one (--reason
+// on enter, --evidence on complete, --next on handoff), and a gate was resolved by
+// raw `bd gate resolve <id>` with no argument at all - so "ok" was not laziness, it
+// was the only shape the interface accepted. This command is that shape.
+//
+// bd already has the field: `bd gate resolve <gate-id> --reason`. No event bead,
+// no parallel store. The reason goes where bd keeps reasons.
+//
+// A stoplist is a floor, not a proof. It refuses the words that carry no
+// information; it cannot tell you whether the sentence after them is true. That
+// is why --booted, --evidence and --reason all still exist: the human's job is to
+// add something only a human knows.
+const GATE_WORDS = [
+  "ok", "okay", "k", "yes", "y", "yeah", "yep", "go", "go ahead", "continue", "next",
+  "approve", "approved", "lgtm", "looks good", "look good", "fine", "good", "done",
+  "ship it", "yes please", "sure", "whatev", "yeah sure", "do it", "proceed", "confirmed",
+];
+const GATE_MAX = 600;
+function uninformative(evidence) {
+  const norm = evidence.toLowerCase().replace(/[^a-z ]/g, " ").replace(/\s+/g, " ").trim();
+  if (norm.length < 12) return "it is too short to carry a reason";
+  // An unconditional floor measured in words, not just characters. "go ahead looks
+  // fine to me" is six words of approval and names nothing that was checked, yet it
+  // used to slip past the stoplist: the stop-word check only fired while fewer than
+  // 4 words followed the stop word, and this sentence has exactly 4. The existing
+  // checks below are kept; this floor applies first, to every reason.
+  const words = norm.split(" ").length;
+  if (words < 8)
+    return `it is only ${words} words: a reason that thin names nothing that was checked`;
+  for (const w of GATE_WORDS) {
+    if (norm === w) return `"${evidence}" is a decision, not a reason`;
+    if (norm.startsWith(w + " ") && norm.slice(w.length + 1).trim().split(" ").length < 4)
+      return `"${evidence}" opens with "${w}" and then adds almost nothing`;
+  }
+  return null;
+}
+
+function cmdGate(bead, which, evidence) {
+  const key = GATE_KEY[String(which || "").toUpperCase()];
+  if (!key) throw new Illegal(`unknown gate "${which}" - expected A, B or C`);
+  if (!evidence) throw new Illegal("--evidence is required: a gate is the one transition a human makes, so it is the one that cannot be a bare yes");
+  const v = String(evidence).trim();
+  if (v.includes('"'))
+    throw new Illegal(
+      "--evidence cannot contain a double quote: bd's argument parser splits on it, so the reason would be recorded broken. " +
+        "Say the same thing without quotes."
+    );
+  if (v.length > GATE_MAX)
+    throw new Illegal(`--evidence is ${v.length} characters, over the ${GATE_MAX} limit: keep it to the decision and the reason, not a transcript`);
+  const thin = uninformative(v);
+  if (thin) throw new Illegal(`--evidence is not informative: ${thin}. Say what you decided and why - e.g. "shipping this; the empty state is the page, so there is nothing to dismiss"`);
+
+  const meta = readMeta(bead);
+  const id = gatePending(bead, meta, key);
+  if (!id) {
+    const phase = readPhase(bead);
+    throw new Illegal(
+      `no ${String(which).toUpperCase()} gate is pending on ${bead}` +
+        (phase ? ` (phase ${phase} ${byId.get(phase)?.name ?? ""})` : "") +
+        ". There is nothing to resolve - a gate that does not exist cannot be approved, and approving one by id alone would let anyone past a gate the machine never raised."
+    );
+  }
+  bd(["gate", "resolve", id, "--reason", v]);
+
+  // Fail closed: re-read rather than trust the write. bd returning 0 is a claim,
+  // the same class of claim as an installer that printed success.
+  const after = gatePending(bead, readMeta(bead), key);
+  if (after)
+    throw new Error(`bd reported resolving gate ${id} but ${key} is still pending (${after})`);
+  out({
+    ok: true,
+    gate: String(which).toUpperCase(),
+    gate_id: id,
+    bead,
+    resolved: true,
+    reason_recorded: true,
+    // out() prints `text` in human mode. A command that omits it prints the
+    // string "undefined" and then its own success line on the next line, which
+    // is how this command read in the wild. Every other command here carries its
+    // human-readable form in this field. `say` used to do this job, but it is
+    // suppressed by --quiet while out() is not, so the message could vanish on
+    // the one call where a human most wants to see it recorded.
+    text: [`gate ${String(which).toUpperCase()} resolved on ${bead} (${id}) - reason recorded in bd`],
+  });
+}
+
 function cmdComplete(bead, target, evidence, bootedArg) {
   if (!byId.has(target)) throw new Illegal(`unknown phase "${target}"`);
   if (!evidence) throw new Illegal("--evidence is required: completion must be checkable, not asserted");
@@ -563,7 +651,7 @@ function cmdHandoff(bead, next) {
 
 try {
   if (!cmd) {
-    console.error("usage: factory-phase.mjs <status|next|enter|complete|handoff> ...");
+    console.error("usage: factory-phase.mjs <status|next|enter|complete|handoff|gate> ...");
     process.exit(1);
   }
   const bead = args[1];
@@ -580,7 +668,7 @@ try {
   // positional slot is deliberately NOT diagnosed separately: there was no
   // reachable case for it, and a branch nobody can reach is a branch nobody has
   // tested. One real diagnosis beats two with one fictional.
-  const takesPhase = cmd === "enter" || cmd === "complete";
+  const takesPhase = cmd === "enter" || cmd === "complete" || cmd === "gate";
   const maxPositional = takesPhase ? 2 : 1;
   const given = args.slice(1);
   const shape = `factory-phase.mjs ${cmd} <bead>${takesPhase ? " <phase>" : ""} --reason "..."`;
@@ -599,6 +687,7 @@ try {
   else if (cmd === "enter") cmdEnter(bead, args[2], flag("reason"));
   else if (cmd === "complete") cmdComplete(bead, args[2], flag("evidence"), flag("booted"));
   else if (cmd === "handoff") cmdHandoff(bead, flag("next"));
+else if (cmd === "gate") cmdGate(bead, args[2], flag("evidence"));
   else throw new Illegal(`unknown command "${cmd}"`);
 } catch (e) {
   const blocked = e instanceof Blocked;

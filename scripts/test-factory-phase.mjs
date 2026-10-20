@@ -612,6 +612,93 @@ if (badBead) {
   check("could create a second bead for the fail-closed test", false, bad.out.slice(0, 120));
 }
 
+  // `bd gate resolve` already accepts --reason, which means every gate in this
+  // machine could until now be resolved by anyone typing a yes. `gate` exists so
+  // a resolution has to carry a reason. Two halves have to be proven and one
+  // assertion cannot cover both: a command that refuses everything passes every
+  // refusal test, so the accept side needs its own.
+  console.log("\ngate command: a bare yes is not a decision");
+  {
+    const bead = newBead("gate-command");
+    check("could create a bead for the gate-command test", !!bead, "");
+
+    // Entering phase 2 requires phase 1 to be completed first, so this setup has
+    // to walk the same path a run does. It used to call `enter 2` on a virgin
+    // bead, which was refused; no gate was ever created, and every refusal
+    // assertion below still passed because they are argument validation that
+    // runs before the "is any gate pending" check. Only the accept side failed.
+    // That asymmetry is the reason both halves exist, so the setup now asserts
+    // it worked rather than leaving the next reader to infer it.
+    phase(["enter", bead, "1", "--reason", "gate command test", "--quiet"]);
+    phase(["complete", bead, "1", "--evidence", "the gate-command test's own setup", "--quiet"]);
+
+    const entered = phase(["enter", bead, "2", "--reason", "gate command test", "--quiet"]);
+    const gateRows = JSON.parse(bd(["gate", "list", "--all", "--json"]).out);
+    const gateList = Array.isArray(gateRows) ? gateRows : (gateRows.gates || []);
+    check("the setup reached phase 2 with a gate pending, so the refusals below mean something",
+      entered.code === 0 && gateList.some((g) => ["open", "pending"].includes(String(g.status || g.state || "open"))),
+      entered.out.slice(0, 200));
+
+    // Phase 3 needs phase 2 completed before it can even be considered, so that
+    // the only thing standing between phase 3 and this run is the gate itself.
+    phase(["complete", bead, "2", "--evidence", "the spec the gate is guarding", "--quiet"]);
+
+    let r = phase(["gate", bead, "D", "--evidence", "a genuine reason with plenty of detail"]);
+    check("an unknown gate letter is REFUSED", r.code !== 0 && has(r.out, "unknown gate"), r.out.slice(0, 140));
+
+    r = phase(["gate", bead, "A"]);
+    check("a gate with no evidence is REFUSED", r.code !== 0 && has(r.out, "--evidence is required"), r.out.slice(0, 140));
+
+    r = phase(["gate", bead, "A", "--evidence", "ok"]);
+    check("a bare ok is REFUSED as uninformative", r.code !== 0 && has(r.out, "not informative"), r.out.slice(0, 140));
+
+    r = phase(["gate", bead, "A", "--evidence", "go ahead looks fine to me"]);
+    check("a stopword opening is REFUSED", r.code !== 0 && has(r.out, "not informative"), r.out.slice(0, 140));
+
+    // The refuse side is the point of the stoplist: an approval-shaped sentence
+    // that carries no checked fact. Asserting the exact exit code keeps a
+    // "blocked" exit (2) from masquerading as a refusal.
+    r = phase(["gate", bead, "A", "--evidence", "go ahead looks fine to me"]);
+    check("the same reason is REFUSED with exit 1", r.code === 1 && has(r.out, "not informative"), r.out.slice(0, 140));
+
+    r = phase(["gate", bead, "A", "--evidence", "x".repeat(5000)]);
+    check("an over-long evidence is REFUSED", r.code !== 0 && has(r.out, "over the"), r.out.slice(0, 140));
+
+    // run() hands execFileSync an ARRAY, so the quote reaches the script intact.
+    // Asserting this through a PowerShell literal would prove nothing: PowerShell
+    // strips inner quotes from a native command before node ever sees them, which
+    // is why an earlier attempt at this test measured its own shell, not the code.
+    r = phase(["gate", bead, "A", "--evidence", 'the CSV header is fixed as "id,total"']);
+    check("a double quote is REFUSED before bd ever sees it", r.code !== 0 && has(r.out, "double quote"), r.out.slice(0, 170));
+
+    // The claim the last assertion makes - "which only a resolved GATE A
+    // allows" - is only actually tested by attempting it while the gate is
+    // still pending. Phase 2 is completed by now, so the gate is the only thing
+    // standing in the way, and without this the final assertion proves nothing
+    // about gates at all.
+    r = phase(["enter", bead, "3", "--reason", "trying to skip the gate", "--quiet"]);
+    check("phase 3 is REFUSED while GATE A is still pending", r.code !== 0, r.out.slice(0, 200));
+
+    r = phase(["gate", bead, "A", "--evidence", "the CSV contract is settled: six columns, CRLF separators, no BOM"]);
+    check("a real reason RESOLVES the gate", r.code === 0 && has(r.out, "resolved"), r.out.slice(0, 170));
+
+    // Proof it really resolved, taken from the product's own message rather than
+    // from bd's JSON shape - guessing a field name is how an assertion passes for
+    // the wrong reason.
+    r = phase(["gate", bead, "A", "--evidence", "trying twice, with a genuinely detailed reason this time"]);
+    check("resolving it again is REFUSED as not pending", r.code !== 0 && has(r.out, "no A gate is pending"), r.out.slice(0, 170));
+
+    r = phase(["enter", bead, "3", "--reason", "gate A resolved for real", "--quiet"]);
+    check("and phase 3 now opens, which only a resolved GATE A allows", r.code === 0, r.out.slice(0, 140));
+
+    // Entering 3 raised GATE B on the same walk, and it is still pending here, so
+    // the accept side can be proved without disturbing the resolve chain above.
+    // The reason must clear the same floor the refusals enforced: it would be no
+    // test if the machine accepted evidence it refuses elsewhere.
+    r = phase(["gate", bead, "B", "--evidence", "the spec is settled: six columns, CRLF, no BOM"]);
+    check("a factual reason that clears the floor is ACCEPTED", r.code === 0 && has(r.out, "resolved"), r.out.slice(0, 170));
+  }
+
 // ---------------------------------------------------------------- report
 console.log(`\n${pass}/${pass + fail} phase-machine tests passed.`);
 if (fail) { console.log("\nFailures:"); failures.forEach((f) => console.log("  - " + f)); }
