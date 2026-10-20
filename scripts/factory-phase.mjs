@@ -532,22 +532,34 @@ function gatesFor(bead) {
 function rollbackGate(bead, g, beforeIds, phaseBefore) {
   // Resolve any gate that appeared during the failed creation, then put the
   // phase back. A gate we cannot name is a gate nobody can resolve, so leaving
-  // it behind is what made the bead permanently stuck. Returns true only when
-  // the list was read and the resolution could be carried out; false when the
-  // read failed, so the caller cannot honestly claim the orphan was resolved.
+  // it behind is what made the bead permanently stuck. Returns the outcome the
+  // caller may report, never the intent:
+  //   "unreadable" - the gate list could not be read; nothing was resolved;
+  //   "resolved"   - the list was read and at least one `bd gate resolve`
+  //                  actually succeeded;
+  //   "none"       - the list was read and no resolution was performed, so the
+  //                  caller must not claim an orphan was resolved.
   const seen = gatesFor(bead);
-  if (seen.ok) {
+  let outcome;
+  if (!seen.ok) {
+    outcome = "unreadable";
+  } else {
+    let resolvedCount = 0;
     for (const gt of seen.list) {
       if (beforeIds.has(String(gt.id))) continue;
       const state = String(gt.status || gt.state || "open").toLowerCase();
       if (state !== "open" && state !== "pending") continue;
-      bd(["gate", "resolve", String(gt.id), "--reason",
+      // Count a resolution only when the resolve call succeeded. allowFail
+      // returns null on failure, and a failed resolve is not a resolution.
+      const done = bd(["gate", "resolve", String(gt.id), "--reason",
         `factory: rollback, GATE ${g} id could not be recorded`], { allowFail: true });
+      if (done !== null) resolvedCount++;
     }
+    outcome = resolvedCount > 0 ? "resolved" : "none";
   }
   bd(["set-state", bead, `phase=${phaseBefore ?? "0"}`,
     "--reason", "factory: rollback after an unrecorded gate"], { allowFail: true });
-  return seen.ok;
+  return outcome;
 }
 
 function cmdEnter(bead, target, reason) {
@@ -623,15 +635,16 @@ function cmdEnter(bead, target, reason) {
     );
   }
 
-  bd(["set-state", bead, `phase=${target}`, "--reason", reason]);
-
   // Phases that end at a human gate create it now, so bd withholds the next
   // phase from `bd ready` instead of us having to remember to ask.
   const g = byId.get(target).gate;
+  // The rollback can only tell the gates it created apart from gates already
+  // open if it has a snapshot of what was there before, and a refusal must
+  // never leave a half state. So the snapshot is read BEFORE the phase is
+  // written: a failed read refuses with the bead exactly where it was, and
+  // "then retry" is a legal re-enter, not an illegal one.
+  let gatesBefore = null;
   if (g) {
-    // The rollback must be able to tell the gates it created apart from gates
-    // that were already open, so a snapshot that cannot be read stops the enter
-    // here - refusing with nothing orphaned beats resolving a stranger's gate.
     const snapshot = gatesFor(bead);
     if (!snapshot.ok) {
       throw new Illegal(
@@ -640,8 +653,13 @@ function cmdEnter(bead, target, reason) {
           `Run the command by hand to see what bd said, then retry.`
       );
     }
+    gatesBefore = new Set(snapshot.list.map((x) => String(x.id)));
+  }
+
+  bd(["set-state", bead, `phase=${target}`, "--reason", reason]);
+
+  if (g) {
     const phaseBefore = phase;
-    const gatesBefore = new Set(snapshot.list.map((x) => String(x.id)));
     // A test seam, not production behaviour: it can only make the id
     // unparseable, which now refuses instead of succeeding. Never a bypass.
     const noise = process.env.BD_GATE_CREATE_NOISE ? "noise: " : "";
@@ -654,14 +672,17 @@ function cmdEnter(bead, target, reason) {
     // is the parse failure this block must recover from.
     const id = noise ? null : (res || "").match(/Created gate\s+(\S+)/)?.[1];
     if (!id) {
-      const rolledBack = rollbackGate(bead, g, gatesBefore, phaseBefore);
+      const outcome = rollbackGate(bead, g, gatesBefore, phaseBefore);
+      const orphanClause = outcome === "resolved"
+        ? `Phase rolled back to ${phaseBefore ?? "(none)"} and the orphan gate was resolved. ` +
+          `Run \`bd gate list ${bead} --all --json\` to confirm, then retry.`
+        : outcome === "none"
+          ? `Phase rolled back to ${phaseBefore ?? "(none)"}; no orphan gate was found to resolve. ` +
+            `Run \`bd gate list ${bead} --all --json\` to check, then retry.`
+          : `Phase rolled back to ${phaseBefore ?? "(none)"}; the gate list could not be read, so an orphan gate may still be open; ` +
+            `run \`bd gate list ${bead} --all --json\` to check.`;
       throw new Illegal(
-        `could not record GATE ${g}: bd created a gate but its id was not in the output. ` +
-          (rolledBack
-            ? `Phase rolled back to ${phaseBefore ?? "(none)"} and the orphan gate was resolved. ` +
-              `Run \`bd gate list ${bead} --all --json\` to confirm, then retry.`
-            : `Phase rolled back to ${phaseBefore ?? "(none)"}; the gate list could not be read, so the orphan gate may still be open. ` +
-              `Run \`bd gate list ${bead} --all --json\`, resolve any open gate by id, then retry.`)
+        `could not record GATE ${g}: bd created a gate but its id was not in the output. ${orphanClause}`
       );
     }
     // --set-metadata merges. --metadata replaces, and would wipe the other gate ids.
