@@ -55,7 +55,7 @@ check("a wrong version is refused", must(() => loadManifest(root, "b1"), /versio
 check("non-array artifacts are refused", must(() => {
   saveManifest(root, "b1", { version: 1, bead: "b1", artifacts: "nope" });
   loadManifest(root, "b1");
-}, /artifacts/));
+}, /"artifacts" at .* is not an array/));
 
 check("a missing artifact field is refused and named", must(() => {
   const bad = { version: 1, bead: "b1", artifacts: [{ id: "x", path: "p" }] };
