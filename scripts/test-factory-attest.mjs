@@ -575,8 +575,6 @@ function phaseRun(sb, argv) {
   }
 }
 const phaseCmd = (sb, argv) => phaseRun(sb, argv);
-const bdCmd = (sb, args) =>
-  execFileSync("bd", args, { cwd: sb.sandbox, env: { ...sb.env, BEADS_NO_DOLT: "1" }, encoding: "utf8" });
 
 // The claim phase 5's own --ran gate demands. Copied verbatim from the phase
 // suite so the two suites assert the same contract.
@@ -598,11 +596,11 @@ function walkToAttest(sb, title, target) {
     const entered = phaseCmd(sb, ["enter", bead, p, "--reason", `walk to phase ${p}`, "--quiet"]);
     if (entered.status !== 0) throw new Error(`walkToAttest: enter ${p} failed: ${entered.stdout}${entered.stderr}`);
     if (p === "2") {
-      const g = approveGate(sb, bead, "A");
+      const g = approveGate(sb, bead, GATE_LETTER[p]);
       if (g.status !== 0) throw new Error(`walkToAttest: gate A failed: ${g.stdout}${g.stderr}`);
     }
     if (p === "3") {
-      const g = approveGate(sb, bead, "B");
+      const g = approveGate(sb, bead, GATE_LETTER[p]);
       if (g.status !== 0) throw new Error(`walkToAttest: gate B failed: ${g.stdout}${g.stderr}`);
     }
     const done = phaseCmd(sb, ["complete", bead, p, "--evidence", `phase ${p} ran its checks and they passed`, "--quiet"]);
