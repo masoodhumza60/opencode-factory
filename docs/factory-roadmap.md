@@ -60,7 +60,7 @@ Prove the exit criterion with:
 
 ```bash
 node scripts/test-factory-phase.mjs
-node scripts/test-fake-ship.mjs
+node scripts/test-fake-ship.mjs       # 6/6 fake-ship paths refused.
 ```
 
 ### M1a — mechanical attestation (4–5 days)

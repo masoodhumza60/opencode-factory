@@ -3,17 +3,23 @@
 // proves every step is refused.
 //
 // This is the M0 exit criterion: one command that answers "can a run fake a
-// ship?" with no. The four cheapest paths, cheapest first:
+// ship?" with no. The six cheapest paths, cheapest first:
 //
 //   1. whitespace evidence         -> complete 0 --evidence "   "
 //   2. repeated-letter gate reason -> gate A --evidence "aaaaaaaaaaaa"
 //   3. a bare bd gate resolve      -> close the gate by hand, then try enter 3
 //   4. no beads workspace at all   -> status from an empty directory
+//   5. a stale artifact            -> attested at one commit, then the work moved on
+//   6. an edited artifact          -> attested, then one byte changed
 //
 //   node scripts/test-fake-ship.mjs
 //
-// Exit 0 = all four refused ("4/4 fake-ship paths refused."). Anything else is
+// Exit 0 = all six refused ("6/6 fake-ship paths refused."). Anything else is
 // a defect in the machine it drives, not an excuse to weaken a case here.
+//
+// Cases 5 and 6 are the M1a half: they need a git repo, a policy and a bead
+// that has walked to phase 5, all created AFTER the M0 cases so those four
+// still run policy-free.
 //
 // Every probe drives the REAL `bd` CLI and the REAL machine against a throwaway
 // sandbox it creates and deletes itself, so the repo does not need a .beads of
@@ -25,7 +31,7 @@
 // normal run, so it cannot weaken anything.
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, appendFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -176,6 +182,120 @@ try { rmSync(empty, { recursive: true, force: true }); } catch { /* locked */ }
 check("case 4: a run outside a beads workspace is REFUSED, not reported gate-free",
   escaped.code === 1 && has(escaped.out, "no beads workspace"),
   `code ${escaped.code} ${escaped.out.slice(0, 200)}`);
+
+// ---------------------------------------------------------------- setup for 5 and 6
+// M1a cases: completion against a manifest needs a git repo (the manifest records
+// a commit), a policy (without one, `complete` is M0 and there is nothing to
+// attest), and a bead that has legally walked to phase 5. All three are created
+// here, after the M0 cases, so those four still run policy-free.
+//
+// A fresh `git init` on a tree with no tracked files has nothing to `git add`,
+// but the commit is only there so HEAD exists - so the base commit is allowed to
+// be empty and the add step is skipped when it would fail on an empty index.
+must("git init", run("git", ["init", "-q"]));
+const addBase = run("git", ["add", "-A"]);
+if (addBase.code !== 0) {
+  // Nothing tracked yet: fine, the commit below is --allow-empty for exactly this.
+}
+must("git base commit", run("git", ["-c", "user.email=fake@ship", "-c", "user.name=fake ship", "commit", "-q", "--allow-empty", "-m", "sandbox base"]));
+
+mkdirSync(join(SANDBOX, "config"), { recursive: true });
+writeFileSync(join(SANDBOX, "config", "factory.policy.yaml"), [
+  "version: 1",
+  "tier: prototype",
+  "profile: web",
+  "",
+  "tiers:",
+  "  prototype:",
+  "    checks: [run]",
+  "",
+  "profiles:",
+  "  web:",
+  "    checks: []",
+  "",
+  "checks:",
+  "  run:",
+  "    phase: 5",
+  "    kind: transcript",
+  "    command: npm run dev",
+  "",
+].join("\n"));
+
+// Phase 5's `--artifact` must name a file that exists; the walk below writes it.
+const BOOT_LOG = join(SANDBOX, "boot.log");
+writeFileSync(BOOT_LOG, "200 OK\n");
+
+// The sanctioned walk, copied from scripts/test-factory-phase.mjs (never
+// imported - that file runs a 20-minute suite on import). Each step carries
+// real-looking evidence so only the fake parts under test get refused.
+const RAN_CLAIM = "npm run dev -> 200 OK on GET /health at 2026-10-20T10:00:00Z";
+const GATE_LETTER = { "2": "A", "3": "B" };
+
+function newBead(title) {
+  const res = bd(["create", "--title", title, "--json"]);
+  try {
+    const j = JSON.parse(res.out);
+    return Array.isArray(j) ? (j[0] && j[0].id) : (j && j.id) || null;
+  } catch {
+    console.error(`could not parse bead id for "${title}":\n${res.out}`);
+    return null;
+  }
+}
+const approveGate = (b, letter, why) => phase(["gate", b, letter, "--evidence", why, "--quiet"]);
+
+// Walk a fresh bead to `target`, clearing exactly the gates that stand in the
+// way: Gate A before completing phase 2, Gate B before completing phase 3. Every
+// step's failure is a broken setup and is reported as one - a broken setup is not
+// a refusal, so these throw rather than count a pass.
+function walkTo(b, target) {
+  if (!b) throw new Error("walkTo: no bead to walk");
+  for (const p of ["0", "1", "2", "3", "4"]) {
+    if (Number(p) >= Number(target)) break;
+    const entered = phase(["enter", b, p, "--reason", `walk to phase ${p}`, "--quiet"]);
+    if (entered.code !== 0) throw new Error(`walkTo: enter ${p} failed: ${entered.out.slice(0, 300)}`);
+    const letter = GATE_LETTER[p];
+    if (letter) {
+      const g = approveGate(b, letter, `the ${letter} gate evidence is on disk and the checklist passed`);
+      if (g.code !== 0) throw new Error(`walkTo: gate ${letter} failed: ${g.out.slice(0, 300)}`);
+    }
+    const done = p === "5"
+      ? phase(["complete", b, p, "--evidence", `phase ${p} ran its checks and they passed`, "--ran", RAN_CLAIM, "--artifact", BOOT_LOG, "--quiet"])
+      : phase(["complete", b, p, "--evidence", `phase ${p} ran its checks and they passed`, "--quiet"]);
+    if (done.code !== 0) throw new Error(`walkTo: complete ${p} failed: ${done.out.slice(0, 300)}`);
+  }
+  const target_ = phase(["enter", b, String(target), "--reason", `walk to phase ${target}`, "--quiet"]);
+  if (target_.code !== 0) throw new Error(`walkTo: enter ${target} failed: ${target_.out.slice(0, 300)}`);
+  return b;
+}
+
+const ATTEST = join(HERE, "factory-attest.mjs");
+const attest = (beadId, path, id) =>
+  run(process.execPath, [ATTEST, "attest", beadId, path, "--id", id, "--kind", "transcript"], { BEADS_DIR: BEADS });
+const gitCommit = (msg) =>
+  run("git", ["-c", "user.email=fake@ship", "-c", "user.name=fake ship", "commit", "-q", "--allow-empty", "-m", msg]);
+
+// ---------------------------------------------------------------- case 5
+// Attested, then the repository moved on. The bytes are unchanged, so a
+// hash-only check would pass - freshness is the check that catches this.
+const b5 = walkTo(newBead("fake-ship stale"), "5");
+r = attest(b5, "boot.log", "run");
+must("case 5 setup: the artifact attests", r, "attested");
+must("case 5 setup: the work moved on", gitCommit("the work moved on"));
+r = phase(["complete", b5, "5", "--evidence", "ran the app locally and the health endpoint answered", "--ran", RAN_CLAIM, "--artifact", "boot.log", "--quiet"]);
+check("case 5: a stale artifact is REFUSED", r.code === 1 && has(r.out, "STALE") && has(r.out, "factory-attest attest"),
+  `code ${r.code} ${r.out.slice(0, 300)}`);
+
+// ---------------------------------------------------------------- case 6
+// Attested, then one byte changed. Freshness holds (no new commit), so the hash
+// is the check that catches this one.
+const b6 = walkTo(newBead("fake-ship edited"), "5");
+writeFileSync(join(SANDBOX, "run2.txt"), "npm run dev -> 200 OK\n");
+r = attest(b6, "run2.txt", "run");
+must("case 6 setup: the artifact attests", r, "attested");
+appendFileSync(join(SANDBOX, "run2.txt"), "x");
+r = phase(["complete", b6, "5", "--evidence", "ran the app locally and the health endpoint answered", "--ran", RAN_CLAIM, "--artifact", "boot.log", "--quiet"]);
+check("case 6: an edited artifact is REFUSED", r.code === 1 && has(r.out, "HASH run") && has(r.out, "factory-attest attest"),
+  `code ${r.code} ${r.out.slice(0, 300)}`);
 
 // ---------------------------------------------------------------- report
 if (fail) { console.log("\nFailures:"); failures.forEach((f) => console.log("  - " + f)); }
