@@ -544,6 +544,182 @@ mr = attest2(vs, [vbead, "out/tests.txt", "--id", "tests", "--kind", "check-outp
 check("15 cleanup: tests is re-attested and verifies", mr.status === 0 && verify(vs, [vbead]).status === 0,
   `status=${mr.status}`);
 
+// ---- trail at the call sites ------------------------------------------------
+//
+// `complete` used to write ONE `complete` event whether it passed or failed, so
+// the log could not tell "we shipped" from "we tried and were refused". This
+// block pins the split: a refusal appends a `refusal` event and no `complete`,
+// the accepted run appends the `complete` and leaves the refusal's bytes alone.
+//
+// The gate choreography is copied from test-factory-phase.mjs rather than
+// imported - a test suite is not a library, and importing the phase suite would
+// run its 143 assertions twice inside this sandbox. Only the phase CLI and bd
+// are imported, but as code: the four helpers below are adapted to this file's
+// own `sandbox`/`env` shape.
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+// The absolute path matters: run()/execFileSync pin cwd to a temp sandbox, so a
+// relative `scripts/factory-phase.mjs` resolves INSIDE the sandbox and dies with
+// MODULE_NOT_FOUND.
+const PHASE_SCRIPT = join(HERE, "factory-phase.mjs");
+
+// A phase-CLI runner alongside this suite's `run` (which always prepends
+// "attest"). Same { status, stdout, stderr } normalisation so refusals read as
+// data.
+function phaseRun(sb, argv) {
+  try {
+    const stdout = execFileSync("node", [PHASE_SCRIPT, ...argv], { cwd: sb.sandbox, env: sb.env, encoding: "utf8" });
+    return { status: 0, stdout, stderr: "" };
+  } catch (e) {
+    return { status: e.status == null ? -1 : e.status, stdout: String(e.stdout || ""), stderr: String(e.stderr || "") };
+  }
+}
+const phaseCmd = (sb, argv) => phaseRun(sb, argv);
+const bdCmd = (sb, args) =>
+  execFileSync("bd", args, { cwd: sb.sandbox, env: { ...sb.env, BEADS_NO_DOLT: "1" }, encoding: "utf8" });
+
+// The claim phase 5's own --ran gate demands. Copied verbatim from the phase
+// suite so the two suites assert the same contract.
+const RAN_CLAIM = "npm run dev -> 200 OK on GET /health at 2026-10-20T10:00:00Z";
+// Gate A is raised by enter 2 and must be approved before complete 2; Gate B
+// likewise for 3. Approved through the machine, never a raw resolve.
+const GATE_LETTER = { "2": "A", "3": "B" };
+const approveGate = (sb, bead, letter) =>
+  phaseCmd(sb, ["gate", bead, letter, "--evidence", `the ${letter} gate evidence is on disk and the checklist passed`, "--quiet"]);
+
+// Walk a fresh bead to `target`, resolving exactly the gates that stand in the
+// way. Mirrors walkTo in the phase suite; throws rather than silently leaving a
+// half-built bead, so a setup problem reads as a setup problem.
+function walkToAttest(sb, title, target) {
+  const bead = makeBead(sb, title);
+  if (!bead) throw new Error(`walkToAttest: could not create bead for "${title}"`);
+  for (const p of ["0", "1", "2", "3", "4", "5", "6"]) {
+    if (Number(p) >= Number(target)) break;
+    const entered = phaseCmd(sb, ["enter", bead, p, "--reason", `walk to phase ${p}`, "--quiet"]);
+    if (entered.status !== 0) throw new Error(`walkToAttest: enter ${p} failed: ${entered.stdout}${entered.stderr}`);
+    if (p === "2") {
+      const g = approveGate(sb, bead, "A");
+      if (g.status !== 0) throw new Error(`walkToAttest: gate A failed: ${g.stdout}${g.stderr}`);
+    }
+    if (p === "3") {
+      const g = approveGate(sb, bead, "B");
+      if (g.status !== 0) throw new Error(`walkToAttest: gate B failed: ${g.stdout}${g.stderr}`);
+    }
+    const done = phaseCmd(sb, ["complete", bead, p, "--evidence", `phase ${p} ran its checks and they passed`, "--quiet"]);
+    if (done.status !== 0) throw new Error(`walkToAttest: complete ${p} failed: ${done.stdout}${done.stderr}`);
+  }
+  const landed = phaseCmd(sb, ["enter", bead, String(target), "--reason", `walk to phase ${target}`, "--quiet"]);
+  if (landed.status !== 0) throw new Error(`walkToAttest: enter ${target} failed: ${landed.stdout}${landed.stderr}`);
+  return bead;
+}
+
+console.log("\ntrail at the call sites");
+// A sandbox whose phase 5 requires an artifact named `run` produced by npm test.
+const ts = makeSandbox();
+// enter 2 requires a brainstorm from phase 1 to exist, so plant one before the
+// walk - copied from the phase suite's ensureBrainstorm, which hits the same
+// precondition.
+mkdirSync(join(ts.sandbox, "docs", "superpowers", "brainstorms"), { recursive: true });
+writeFileSync(join(ts.sandbox, "docs", "superpowers", "brainstorms", "0000-00-00-trail-brainstorm.md"), "# trail brainstorm\n");
+mkdirSync(join(ts.sandbox, "config"));
+mkdirSync(join(ts.sandbox, "out"));
+writeFileSync(join(ts.sandbox, "config", "factory.policy.yaml"),
+  "version: 1\ntier: prototype\nprofile: web\n" +
+  "\ntiers:\n" +
+  "  prototype:\n    checks: [run]\n" +
+  "  internal:\n    checks: []\n" +
+  "  public:\n    checks: []\n" +
+  "  regulated:\n    checks: []\n" +
+  "\nprofiles:\n" +
+  "  web:\n    checks: []\n" +
+  "\nchecks:\n" +
+  "  run:\n" +
+  "    phase: 5\n" +
+  "    kind: check-output\n" +
+  "    command: npm test\n");
+// makeSandbox's git init + empty commit gives HEAD, which attest records.
+const tbead = walkToAttest({ sandbox: ts.sandbox, env: ts.env }, "trail target", "5");
+const trailFile = join(ts.sandbox, ".factory", tbead, "trail.jsonl");
+const readTrailRaw = () => readFileSync(trailFile, "utf8");
+// The artifact phase 5's own --ran gate demands; the policy check `run` is a
+// DIFFERENT file this suite attests later, so the two barriers stay distinct.
+const bootLog = join(ts.sandbox, "out", "boot.log");
+writeFileSync(bootLog, "200 OK\n");
+
+// The refused completion, before anything is attested.
+const completesBeforeRefusal = readTrail(ts.sandbox, tbead).filter((e) => e.event === "complete").length;
+const trailLenBeforeRefusal = readTrail(ts.sandbox, tbead).length;
+let tr = phaseCmd({ sandbox: ts.sandbox, env: ts.env },
+  ["complete", tbead, "5", "--evidence", "the artifact is supposedly verified and on disk",
+   "--ran", RAN_CLAIM, "--artifact", bootLog, "--quiet"]);
+const refusedTrail = readTrail(ts.sandbox, tbead);
+const lastRefused = refusedTrail[refusedTrail.length - 1];
+check("T1 the refused completion appends a refusal event naming the failed run check",
+  tr.status === 1 && lastRefused !== undefined &&
+  lastRefused.event === "refusal" && lastRefused.command === "complete" && lastRefused.phase === "5" &&
+  Array.isArray(lastRefused.problems) && lastRefused.problems.some((p) => typeof p === "string" && p.startsWith("run: ")),
+  `status=${tr.status} last=${JSON.stringify(lastRefused)}`);
+// The refusal adds exactly one line and it is NOT a completion: the walk's own
+// complete 0..4 events are expected, but this refused `complete 5` must not add
+// a sixth. (Worded against the delta, not "no complete anywhere" - the trail is
+// append-only and legitimately already holds the walk's completions.)
+check("T2 the refused completion appends no complete event",
+  refusedTrail.length === trailLenBeforeRefusal + 1 &&
+  refusedTrail.filter((e) => e.event === "complete").length === completesBeforeRefusal,
+  `${trailLenBeforeRefusal} -> ${refusedTrail.length}; completes ${completesBeforeRefusal} -> ${refusedTrail.filter((e) => e.event === "complete").length}`);
+
+// The trail records the attempt from the very first refusal - it is not a log of
+// successes only. Asserting the presence of the refusal, not just a non-empty
+// file, because the walk's earlier completions would make "non-empty" true even
+// if the refusal write were deleted.
+const firstTrailBytes = readTrailRaw();
+check("T3 the trail file exists and is non-empty after the first refusal",
+  statSync(trailFile).size > 0 && firstTrailBytes.trim() !== "" &&
+  firstTrailBytes.split("\n").some((l) => l.includes('"refusal"')),
+  `${statSync(trailFile).size} bytes`);
+
+// The accepted completion. The policy's `run` check needs an attested `run`
+// artifact; attest it, then complete 5 again.
+const policyRunTxt = join(ts.sandbox, "out", "run.txt");
+writeFileSync(policyRunTxt, "npm test -> 7 passed\n");
+const trAttest = run2({ sandbox: ts.sandbox, env: ts.env }, ["attest", tbead, "out/run.txt", "--id", "run", "--kind", "check-output"]);
+const beforeSuccess = readTrailRaw();
+tr = phaseCmd({ sandbox: ts.sandbox, env: ts.env },
+  ["complete", tbead, "5", "--evidence", "the run transcript is attested and its hash matches HEAD",
+   "--ran", RAN_CLAIM, "--artifact", bootLog, "--quiet"]);
+const afterSuccess = readTrailRaw();
+const afterEntries = readTrail(ts.sandbox, tbead);
+const lastSuccess = afterEntries[afterEntries.length - 1];
+check("T4 the success appends complete and the earlier refusal line is byte-identical",
+  trAttest.status === 0 && tr.status === 0 &&
+  lastSuccess !== undefined && lastSuccess.event === "complete" && lastSuccess.command === "complete" &&
+  lastSuccess.phase === "5" && lastSuccess.ok === true &&
+  afterSuccess.startsWith(beforeSuccess) &&
+  afterSuccess.slice(beforeSuccess.length).split("\n").filter((l) => l !== "").length === 1,
+  `status=${tr.status} last=${JSON.stringify(lastSuccess)} added=${JSON.stringify(afterSuccess.slice(beforeSuccess.length))} attest=${trAttest.status}`);
+
+// verify appends exactly one event per run - not two on the first.
+const verifyCountBefore = readTrail(ts.sandbox, tbead).filter((e) => e.event === "verify").length;
+const vFirst = verify({ sandbox: ts.sandbox, env: ts.env }, [tbead]);
+const verifyCountAfterOne = readTrail(ts.sandbox, tbead).filter((e) => e.event === "verify").length;
+const vSecond = verify({ sandbox: ts.sandbox, env: ts.env }, [tbead]);
+const verifyCountAfterTwo = readTrail(ts.sandbox, tbead).filter((e) => e.event === "verify").length;
+check("T5 two verify runs append exactly one verify event each",
+  verifyCountAfterOne === verifyCountBefore + 1 && verifyCountAfterTwo === verifyCountBefore + 2,
+  `${verifyCountBefore} -> ${verifyCountAfterOne} -> ${verifyCountAfterTwo} (status ${vFirst.status}, ${vSecond.status})`);
+
+// Every line is a well-formed event: JSON object with at (ISO), a known event
+// name, and the bead it belongs to.
+const EVENT_NAMES = ["attest", "verify", "refusal", "complete"];
+const allEntries = readTrail(ts.sandbox, tbead);
+check("T6 every trail line is a well-formed event with at, event and bead",
+  allEntries.length > 0 && allEntries.every((e) =>
+    typeof e.at === "string" && !Number.isNaN(Date.parse(e.at)) && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(e.at) &&
+    EVENT_NAMES.includes(e.event) && e.bead === tbead),
+  JSON.stringify(allEntries));
+
+rmSandbox(ts.sandbox);
+
 rmSandbox(sandbox);
 rmSandbox(pb.sandbox);
 rmSandbox(ngEn);

@@ -1001,15 +1001,18 @@ function cmdComplete(bead, target, evidence, ranArg, artifactArg) {
   if (policy) {
     const verdict = verifyChecks(policyRoot, bead, target, policy);
     const failed = verdict.checks.filter((r) => r.result !== "ok" && r.result !== "not-applicable");
-    // The trail records the attempt whether it passes or fails - but only when
-    // there is a policy, because without one there was no verdict to record.
-    appendTrail(policyRoot, bead, {
-      event: "complete",
-      phase: String(target),
-      ok: failed.length === 0,
-      problems: failed.map((r) => `${r.id}: ${r.result}`),
-    });
+    // Two mutually exclusive events, because a trail that records a refusal as a
+    // completion is a log that lies. The refusal is written HERE, immediately
+    // before the throw, so the trail still says "we tried" without saying "we
+    // shipped" - and it is written only when there is a policy, because without
+    // one there was no verdict to record.
     if (failed.length) {
+      appendTrail(policyRoot, bead, {
+        event: "refusal",
+        command: "complete",
+        phase: String(target),
+        problems: failed.map((r) => `${r.id}: ${r.result}`),
+      });
       throw new Illegal(
         `phase ${target} needs ${verdict.counts.total} verified artifact(s) from ` +
         `.factory/${bead}/manifest.json; ${failed.length} failed:\n` +
@@ -1020,6 +1023,16 @@ function cmdComplete(bead, target, evidence, ranArg, artifactArg) {
     }
   }
   bd(["set-state", bead, `${dim}=${target}`, "--reason", `completed ${target} (${byId.get(target).name}): ${evidence}`]);
+  // The success event lands only AFTER bd set-state returned: the trail must not
+  // claim a completion that did not reach the state layer.
+  if (policy) {
+    appendTrail(policyRoot, bead, {
+      event: "complete",
+      command: "complete",
+      phase: String(target),
+      ok: true,
+    });
+  }
   const n = legalNext(bead);
   say(`completed ${target} (${byId.get(target).name}) - recorded as ${dim}=${target}`);
   say(`evidence: ${evidence}`);
