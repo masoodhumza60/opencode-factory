@@ -718,6 +718,92 @@ check("T6 every trail line is a well-formed event with at, event and bead",
 
 rmSandbox(ts.sandbox);
 
+// ---- tier arithmetic at verify time -----------------------------------------
+//
+// The exit criterion, enforced against the real CLI: the policy file's tier
+// arithmetic (prototype 3, regulated 20) is what `verify` demands of a bead.
+// The brief says the two policies live in separate temp directories, so each
+// case gets its own sandbox: the regulated sandbox carries all twenty ids at
+// phase 5, the prototype sandbox the same three ids at phase 5. Every check
+// is check-output so one phase can be verified end to end on both tiers.
+console.log("\ntier arithmetic: twenty missing, three attested");
+const TIER20 = [
+  "tests", "run", "review", "lint", "types", "contract", "a11y", "perf",
+  "security", "migration", "rollback", "observability", "privacy", "audit",
+  "retention", "incident", "dr", "segregation", "training", "attestation",
+];
+const checksAt5 = (ids) => ids.map((id) =>
+  `  ${id}:\n    phase: 5\n    kind: check-output\n    command: npm test\n`).join("");
+const regulatedPolicyText =
+  "version: 1\ntier: prototype\nprofile: web\n" +
+  "\ntiers:\n" +
+  "  prototype:\n    checks: [tests, run, review]\n" +
+  "  internal:\n    checks: []\n" +
+  "  public:\n    checks: []\n" +
+  `  regulated:\n    checks: [${TIER20.join(", ")}]\n` +
+  "\nprofiles:\n" +
+  "  web:\n    checks: []\n" +
+  "\nchecks:\n" +
+  checksAt5(TIER20);
+const prototypePolicyText =
+  "version: 1\ntier: prototype\nprofile: web\n" +
+  "\ntiers:\n" +
+  "  prototype:\n    checks: [tests, run, review]\n" +
+  "  internal:\n    checks: []\n" +
+  "  public:\n    checks: []\n" +
+  "  regulated:\n    checks: []\n" +
+  "\nprofiles:\n" +
+  "  web:\n    checks: []\n" +
+  "\nchecks:\n" +
+  checksAt5(["tests", "run", "review"]);
+
+const tierSb = makeSandbox();
+const tierVerify = (() => {
+  mkdirSync(join(tierSb.sandbox, "config"));
+  writeFileSync(join(tierSb.sandbox, "config", "factory.policy.yaml"), regulatedPolicyText);
+  const regBead = makeBead(tierSb, "regulated target");
+  // bd 1.3.0: `bd update <id> --metadata <json>` sets custom metadata, which
+  // loadBeadMeta reads back as the bead's tier override.
+  execFileSync("bd", ["update", regBead, "--metadata", JSON.stringify({ tier: "regulated" })],
+    { cwd: tierSb.sandbox, env: tierSb.env, stdio: "ignore" });
+  const vr = verify(tierSb, [regBead, "--phase", "5", "--json"]);
+  let parsed = null;
+  try { parsed = JSON.parse(vr.stdout); } catch { /* asserted below */ }
+  return { vr, parsed };
+})();
+check("tier 1 a regulated bead is refused until all twenty are attested",
+  tierVerify.vr.status === 1 && tierVerify.parsed !== null &&
+  tierVerify.parsed.counts.total === 20 && tierVerify.parsed.counts.failed === 20 &&
+  tierVerify.parsed.checks.every((c) => c.result === "missing"),
+  `status=${tierVerify.vr.status} counts=${JSON.stringify(tierVerify.parsed && tierVerify.parsed.counts)}`);
+
+const protoSb = makeSandbox();
+const protoVerify = (() => {
+  mkdirSync(join(protoSb.sandbox, "config"));
+  mkdirSync(join(protoSb.sandbox, "out"));
+  writeFileSync(join(protoSb.sandbox, "config", "factory.policy.yaml"), prototypePolicyText);
+  const bead = makeBead(protoSb, "prototype target");
+  // No metadata is set: the bead inherits tier prototype from the policy's
+  // own default, which is the second of the brief's two admitted shapes.
+  for (const id of ["tests", "run", "review"]) {
+    writeFileSync(join(protoSb.sandbox, "out", `${id}.txt`), `${id} -> produced\n`);
+    const ar = attest2(protoSb, [bead, `out/${id}.txt`, "--id", id, "--kind", "check-output"]);
+    if (ar.status !== 0) throw new Error(`attest ${id} failed: ${ar.stdout}${ar.stderr}`);
+  }
+  const vr = verify(protoSb, [bead, "--phase", "5", "--json"]);
+  let parsed = null;
+  try { parsed = JSON.parse(vr.stdout); } catch { /* asserted below */ }
+  return { vr, parsed };
+})();
+check("tier 2 a prototype bead completes after three",
+  protoVerify.vr.status === 0 && protoVerify.parsed !== null &&
+  protoVerify.parsed.ok === true && protoVerify.parsed.counts.total === 3 &&
+  protoVerify.parsed.counts.ok === 3,
+  `status=${protoVerify.vr.status} counts=${JSON.stringify(protoVerify.parsed && protoVerify.parsed.counts)}`);
+
+rmSandbox(tierSb.sandbox);
+rmSandbox(protoSb.sandbox);
+
 rmSandbox(sandbox);
 rmSandbox(pb.sandbox);
 rmSandbox(ngEn);

@@ -228,6 +228,161 @@ check("a malformed file throws and a fixed file recovers", (() => {
 check("an empty block at EOF is an empty map",
   JSON.stringify(parseYamlSubset("a:\n", "f")) === JSON.stringify({ a: {} }));
 
+// The milestone's exit criterion is arithmetic: ONE policy file, and
+// `prototype` requires exactly 3 checks while `regulated` requires exactly
+// 20. These assertions pin both numbers against a single parsed object.
+console.log("\ntier arithmetic: one policy file, prototype 3, regulated 20");
+const ARITHMETIC = `version: 1
+tier: prototype
+profile: web
+
+tiers:
+  prototype:
+    checks: [tests, run, review]
+  internal:
+    checks: [tests, run, review, lint, types, contract]
+  public:
+    checks: [tests, run, review, lint, types, contract, a11y, perf, security, migration, rollback, observability, privacy]
+  regulated:
+    checks: [tests, run, review, lint, types, contract, a11y, perf, security, migration, rollback, observability, privacy, audit, retention, incident, dr, segregation, training, attestation]
+
+profiles:
+  web:
+    checks: [a11y, perf]
+
+checks:
+  tests:
+    phase: 2
+    kind: check-output
+    command: npm test
+  run:
+    phase: 5
+    kind: transcript
+    command: npm run dev
+  review:
+    phase: 7
+    kind: prr
+    command: null
+  lint:
+    phase: 2
+    kind: check-output
+    command: npm run lint
+  types:
+    phase: 2
+    kind: check-output
+    command: npm run typecheck
+  contract:
+    phase: 3
+    kind: contract
+    command: npm run contract
+  a11y:
+    phase: 6
+    kind: check-output
+    command: npm run a11y
+  perf:
+    phase: 6
+    kind: check-output
+    command: npm run perf
+  security:
+    phase: 6
+    kind: check-output
+    command: npm run security
+  migration:
+    phase: 4
+    kind: golden-file
+    command: npm run migration
+  rollback:
+    phase: 4
+    kind: golden-file
+    command: npm run rollback
+  observability:
+    phase: 5
+    kind: check-output
+    command: npm run observability
+  privacy:
+    phase: 7
+    kind: prr
+    command: null
+  audit:
+    phase: 7
+    kind: prr
+    command: null
+  retention:
+    phase: 7
+    kind: plan
+    command: null
+  incident:
+    phase: 8
+    kind: plan
+    command: null
+  dr:
+    phase: 8
+    kind: plan
+    command: null
+  segregation:
+    phase: 7
+    kind: plan
+    command: null
+  training:
+    phase: 8
+    kind: hil-log
+    command: null
+  attestation:
+    phase: 8
+    kind: check-output
+    command: npm run attestation
+`;
+const ARITH_IDS = [
+  "tests", "run", "review", "lint", "types", "contract", "a11y", "perf",
+  "security", "migration", "rollback", "observability", "privacy", "audit",
+  "retention", "incident", "dr", "segregation", "training", "attestation",
+];
+// One parse of the fixture is the object every assertion below reads.
+const arith = validatePolicy(parseYamlSubset(ARITHMETIC, "fixture"), "fixture");
+
+const arithPrototype = arith.tiers.prototype.checks;
+check("the prototype tier requires exactly three checks, ids in order",
+  arithPrototype.length === 3 && arithPrototype.join(",") === "tests,run,review",
+  JSON.stringify(arithPrototype));
+
+const arithRegulated = arith.tiers.regulated.checks;
+check("the regulated tier requires exactly twenty checks",
+  arithRegulated.length === 20 &&
+  JSON.stringify([...arithRegulated].sort()) === JSON.stringify([...ARITH_IDS].sort()),
+  JSON.stringify(arithRegulated));
+
+check("both numbers come from the same parsed file",
+  arith.tiers.prototype !== undefined && arith.tiers.regulated !== undefined &&
+  (() => { const again = parseYamlSubset(ARITHMETIC, "fixture");
+    return again.tiers.prototype.checks.length === arithPrototype.length &&
+      again.tiers.regulated.checks.length === arithRegulated.length; })(),
+  `${arithPrototype.length} and ${arithRegulated.length}`);
+
+// The profile union does not change the tier arithmetic: prototype+web is five
+// because the web profile adds a11y and perf to the tier's three. That way of
+// counting lives in effectiveChecks, which is exactly why the 3-vs-20 claim
+// above is made on policy.tiers, not on effectiveChecks.
+const arithProfiled = effectiveChecks(arith, { tier: "prototype", profile: "web" });
+check("the profile union does not change the tier arithmetic (3 tier + 2 profile dedupe to 5)",
+  arithProfiled.checks.length === 5 &&
+  arithProfiled.checks.join(",") === "tests,run,review,a11y,perf",
+  JSON.stringify(arithProfiled.checks));
+
+const arithMeta = effectiveChecks(arith, { tier: "regulated" });
+check("a bead's metadata overrides the file's tier (regulated via metadata, 20 unique ids)",
+  arithMeta.tier === "regulated" && arithMeta.checks.length === 20 &&
+  new Set(arithMeta.checks).size === 20,
+  JSON.stringify(arithMeta.checks));
+
+check("an unknown tier is refused naming the legal values", (() => {
+  try { effectiveChecks(arith, { tier: "payments" }); return false; }
+  catch (e) {
+    return e instanceof PolicyError && e.message.includes("payments") &&
+      e.message.includes("prototype, internal, public, regulated");
+  }
+})(), (() => { try { effectiveChecks(arith, { tier: "payments" }); return ""; }
+  catch (e) { return e.message; } })());
+
 rmSync(root, { recursive: true, force: true });
 rmSync(bare, { recursive: true, force: true });
 rmSync(bad, { recursive: true, force: true });
