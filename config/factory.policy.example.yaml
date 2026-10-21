@@ -1,0 +1,124 @@
+# factory.policy.example.yaml - an EXAMPLE policy, not an active one.
+#
+# This file does nothing where it sits. To make the factory enforce it, copy it
+# to config/factory.policy.yaml. THIS REPOSITORY SHIPS NO ACTIVE POLICY ON
+# PURPOSE: with no config/factory.policy.yaml, `complete` falls back to the M0
+# evidence predicate and an unconfigured repo behaves exactly as it did before
+# attestation existed. Copy this file only when the operator has decided which
+# tier the project itself runs at.
+#
+# The parser is a strict YAML subset: two-space indentation, inline [a, b]
+# lists, plain scalars, nested blocks for mappings. No tabs, no {}, no quotes,
+# no |, >, & or *. Anything outside the subset is refused with a file:line.
+
+version: 1
+
+# The default tier and profile for every bead. A bead may override either in
+# its own metadata (`tier`, `profile`); the bead wins over this file.
+tier: prototype
+profile: web
+
+# Four tiers, cheapest first. A prototype proves three things; a regulated
+# payment path proves twenty. Both lists come from this one file.
+tiers:
+  prototype:
+    checks: [tests, run, review]
+  internal:
+    checks: [tests, run, review, lint, types, contract]
+  public:
+    checks: [tests, run, review, lint, types, contract, a11y, perf, security, migration, rollback, observability, privacy]
+  regulated:
+    checks: [tests, run, review, lint, types, contract, a11y, perf, security, migration, rollback, observability, privacy, audit, retention, incident, dr, segregation, training, attestation]
+
+# A profile adds the checks a surface needs on top of its tier. Effective
+# checks are tiers[tier].checks union profiles[profile].checks. Add profiles
+# (api, cli, library, mobile, desktop, data-ml, infra, embedded, game) in the
+# same shape; each id they name must also be declared under checks below.
+profiles:
+  web:
+    checks: [a11y, perf]
+
+# Every check id above is declared here with the phase it gates, the artifact
+# kind the manifest must record, and the command that produces it. `command`
+# is optional: null means no single command produced the artifact.
+checks:
+  tests:
+    phase: 2
+    kind: check-output
+    command: npm test
+  run:
+    phase: 5
+    kind: transcript
+    command: npm run dev
+  review:
+    phase: 6
+    kind: prr
+    command: null
+  lint:
+    phase: 2
+    kind: check-output
+    command: npm run lint
+  types:
+    phase: 2
+    kind: check-output
+    command: npm run typecheck
+  contract:
+    phase: 6
+    kind: api-diff
+    command: npm run contract
+  a11y:
+    phase: 7
+    kind: check-output
+    command: npm run a11y
+  perf:
+    phase: 7
+    kind: check-output
+    command: npm run perf
+  security:
+    phase: 7
+    kind: check-output
+    command: npm run security
+  migration:
+    phase: 7
+    kind: plan
+    command: null
+  rollback:
+    phase: 7
+    kind: plan
+    command: null
+  observability:
+    phase: 7
+    kind: plan
+    command: null
+  privacy:
+    phase: 7
+    kind: plan
+    command: null
+  audit:
+    phase: 7
+    kind: plan
+    command: null
+  retention:
+    phase: 7
+    kind: plan
+    command: null
+  incident:
+    phase: 7
+    kind: plan
+    command: null
+  dr:
+    phase: 7
+    kind: plan
+    command: null
+  segregation:
+    phase: 7
+    kind: plan
+    command: null
+  training:
+    phase: 7
+    kind: plan
+    command: null
+  attestation:
+    phase: 7
+    kind: plan
+    command: null

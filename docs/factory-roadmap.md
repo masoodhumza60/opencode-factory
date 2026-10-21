@@ -59,24 +59,46 @@ and Linux.
 Prove the exit criterion with:
 
 ```bash
-node scripts/test-factory-phase.mjs
+node scripts/test-factory-phase.mjs   # 143/143 phase-machine tests passed.
 node scripts/test-fake-ship.mjs       # 6/6 fake-ship paths refused.
 ```
 
-### M1a — mechanical attestation (4–5 days)
+### M1a — mechanical attestation (4–5 days) — **shipped**
 
-1. `.factory/<bead>/manifest.json`: every artifact with path, sha256, producing command, producer
+1. [x] `.factory/<bead>/manifest.json`: every artifact with path, sha256, producing command, producer
    session, timestamp, and commit.
-2. `factory attest` records an artifact; `factory attest --verify` checks existence, hash, freshness
+2. [x] `node scripts/factory-attest.mjs attest <bead> <path> --id <check> --kind <kind>` records an
+   artifact; `… verify <bead> [--phase <n>] [--json]` checks existence, hash, freshness
    (commit == HEAD), completeness against policy, and independence.
-3. Policy-required manifest: when `config/factory.policy.yaml` exists, `complete <n>` refuses unless every check declared for that phase has an attested artifact whose hash, freshness and producer still match. With no policy file the M0 evidence predicate still applies, so an unconfigured repo behaves exactly as it does today.
-4. `factory.policy.yaml`: tier plus required roles/checks. Four tiers: `prototype`, `internal`,
-   `public`, `regulated`.
+3. [x] Policy-required manifest: when `config/factory.policy.yaml` exists, `complete <n>` refuses unless every check declared for that phase has an attested artifact whose hash, freshness and producer still match. With no policy file the M0 evidence predicate still applies, so an unconfigured repo behaves exactly as it does today.
+4. [x] `config/factory.policy.example.yaml`: tier plus required checks. Four tiers: `prototype` (3
+   checks), `internal` (6), `public` (13), `regulated` (20). Effective checks are
+   `tiers[tier].checks ∪ profiles[profile].checks`; a bead's `tier`/`profile` metadata overrides the
+   file. Shipped as an example only — this repo runs no active policy on purpose.
 
-- `trail.jsonl`: append-only, harness-written, one event per artifact, verdict, refusal, and decision.
+- [x] `trail.jsonl`: append-only, one event per line — `attest`, `verify`, `refusal`, `complete`.
 
 **Exit:** a phase cannot complete without its artifacts; a prototype needs three checks and a
 payments feature needs twenty, from the same policy file.
+
+**What M1a cannot prove:**
+
+- A hash proves the file did not change *after* attestation, not that the recorded `command`
+  produced it.
+- `producer_session` is self-declared until the reviewer session exists (M1b).
+- `FACTORY_SESSION` is not a secret; a builder can claim any session identity.
+- A hand-edited manifest that rewrites `sha256` and `commit` will verify — the manifest is
+  validated for shape, not authenticated.
+
+Prove the exit criterion with:
+
+```bash
+node scripts/test-factory-phase.mjs     # 143/143 phase-machine tests passed.
+node scripts/test-fake-ship.mjs         # 6/6 fake-ship paths refused.
+node scripts/test-factory-manifest.mjs  # 25/25 manifest tests passed.
+node scripts/test-factory-policy.mjs    # 59/59 policy tests passed.
+node scripts/test-factory-attest.mjs    # 82/82 attest tests passed.
+```
 
 ### M1b — review and independence (1–1.5 weeks)
 

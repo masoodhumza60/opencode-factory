@@ -4,6 +4,15 @@ Read this first (about 5 minutes) when a feature starts, then
 `docs/conductor.md` for the exact procedure. This document explains the shape
 of the factory; the conductor doc is the authoritative how-to.
 
+Two design documents sit alongside the shipped pipeline. `docs/factory-gap-analysis.md`
+is a **proposal, not current behaviour**: what the factory has, what it is
+missing, and the priority order. `docs/factory-v2-model.md` is now partly
+shipped — its evidence manifest, risk tiers and policy-as-data are real as of
+M1a (see "Mechanical attestation" below) — while its roles, four gates and
+review/independence machinery remain proposals until M1b. Read both when
+changing the factory itself, and treat only the parts that name a shipped
+command as installed.
+
 ## The factory in one sentence
 
 `factory <feature>` drives one feature through a fixed pipeline — brainstorm →
@@ -77,6 +86,109 @@ The factory deliberately does not try to become:
   *merges*, with the bundle winning only where it explicitly owns a value
   (DCP pin, enabled MCP servers).
 - **A multi-user team product** — v1 assumes a single operator.
+
+## Mechanical attestation
+
+A phase used to complete on a sentence. M1a makes it complete on a file whose
+bytes are hashed: the factory records what was produced, verifies it
+mechanically, and refuses completion when a required artifact is missing,
+edited, or stale. Everything lives beside the bead's `.beads` directory under
+`.factory/<bead>/`.
+
+**The manifest — `.factory/<bead>/manifest.json`.** One entry per attested
+artifact, with these fields:
+
+- `id` — the policy check id this artifact satisfies (`tests`, `review`, …).
+- `kind` — one of the sixteen artifact kinds (`screenshot`, `transcript`,
+  `contract`, `api-diff`, `plan`, `eval`, `hil-log`, `prr`, `exit-code-matrix`,
+  `golden-file`, `help-snapshot`, `tty-transcript`, `completion-script`,
+  `install-log`, `device-capture`, `check-output`).
+- `path` — the file, root-relative, with `/` separators.
+- `sha256` — the hash of the bytes at attestation time.
+- `bytes` — the file size.
+- `command` — the command whose run produced it, or `null` when none is named.
+- `producer_session` — the session that recorded it.
+- `produced_at` — the ISO timestamp.
+- `commit` — the git commit `HEAD` pointed at when it was recorded.
+
+Re-attesting the same `id` replaces the entry in place rather than stacking a
+second one.
+
+**The trail — `.factory/<bead>/trail.jsonl`.** Append-only, one JSON event per
+line, never rewritten: `attest` (an artifact was recorded), `verify` (a
+decision was reached), `refusal` (completion was refused with a policy in
+force), and `complete` (a phase advanced). The manifest is the current state;
+the trail is the history. A `refusal` is written immediately before the throw,
+so a log never records a refusal as a completion.
+
+**The CLI.** The commands are scripts, not the `factory` wrapper:
+
+```
+node scripts/factory-attest.mjs attest <bead> <path> --id <check> --kind <kind> \
+  [--command "<cmd>"] [--policy <path>]
+node scripts/factory-attest.mjs verify <bead> [--phase <n>] [--json]
+```
+
+`attest` records one artifact; with no `--command` it takes the command from
+the policy check, and with no `--policy` it reads `config/factory.policy.yaml`.
+Without a policy any non-empty `--id` is accepted; with one, the `id` must be a
+check that policy declares.
+
+**The four tiers.** A policy declares `tier`, `profile`, `tiers`, `profiles`
+and `checks`. The tiers are cumulative floors: `prototype` (3 checks),
+`internal` (6), `public` (13), `regulated` (20). The effective set for a bead
+is a union, not the tier alone:
+
+```
+effective = tiers[tier].checks ∪ profiles[profile].checks
+```
+
+A bead may override both in its own metadata (`tier`, `profile`); the bead's
+values win over the file's. Duplicates collapse, and a check id that is not
+declared under `checks:` is a policy error refused before anything runs.
+`config/factory.policy.example.yaml` is the full four-tier example; it must be
+copied to `config/factory.policy.yaml` to take effect.
+
+**No policy file means M0 behaviour.** This is the rule that matters most: when
+`config/factory.policy.yaml` is absent, `complete` uses the existing M0
+evidence predicate and nothing else changes. An unconfigured repo behaves
+exactly as it did before attestation existed. Verification runs **only** on the
+branch where a policy was loaded.
+
+**What `complete` does when a policy exists.** Before advancing a phase, it
+resolves the checks that policy declares for that phase and verifies each one
+against the manifest and disk. One failing rung is enough to refuse: the file
+is gone (`MISSING`/`ABSENT`), is not a regular file (`NOT-A-FILE`), its `sha256`
+changed on disk (`HASH`), it was recorded at an older commit than `HEAD`
+(`STALE`), it has no producer session (`PRODUCER`), or it was recorded by the
+same session that is verifying it (`INDEPENDENCE`). Every check must be `ok` or
+`not-applicable` (a check with no verdict independence to test, because
+`FACTORY_SESSION` is unset). On refusal it prints each failing artifact and the
+exact command that would fix it, e.g.:
+
+```
+node scripts/factory-attest.mjs attest <bead> <path> --id <check> --kind <kind> --command "<cmd>"
+```
+
+and writes **nothing** to the phase state — the bead stays exactly where it
+was.
+
+### What this does not prove
+
+A hash is evidence that the bytes did not change **after** attestation, and
+nothing more:
+
+- It does **not** prove the `command` recorded in the manifest produced the
+  artifact. The `command` is a label the producer wrote down; M1a never runs it
+  or checks its output against the file.
+- `producer_session` is **self-declared**. Until the reviewer session exists
+  (M1b), nothing stops a builder from attesting its own artifact, and the
+  `INDEPENDENCE` rung only compares the verifier's session to the one recorded.
+- `FACTORY_SESSION` is **not a secret**. It is an environment variable the
+  builder sets, so anyone willing to set it can claim any session identity.
+- A hand-edited manifest that rewrites both `sha256` and `commit` to match an
+  edited file **will verify**. The manifest is validated for shape, not
+  authenticated; M1a assumes a single operator who is not attacking themselves.
 
 ## Troubleshooting
 
