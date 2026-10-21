@@ -31,7 +31,7 @@
 // normal run, so it cannot weaken anything.
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, appendFileSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, appendFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -193,10 +193,8 @@ check("case 4: a run outside a beads workspace is REFUSED, not reported gate-fre
 // but the commit is only there so HEAD exists - so the base commit is allowed to
 // be empty and the add step is skipped when it would fail on an empty index.
 must("git init", run("git", ["init", "-q"]));
-const addBase = run("git", ["add", "-A"]);
-if (addBase.code !== 0) {
-  // Nothing tracked yet: fine, the commit below is --allow-empty for exactly this.
-}
+// Nothing tracked yet is fine: the commit below is `--allow-empty` for exactly this.
+run("git", ["add", "-A"]);
 must("git base commit", run("git", ["-c", "user.email=fake@ship", "-c", "user.name=fake ship", "commit", "-q", "--allow-empty", "-m", "sandbox base"]));
 
 mkdirSync(join(SANDBOX, "config"), { recursive: true });
@@ -258,9 +256,7 @@ function walkTo(b, target) {
       const g = approveGate(b, letter, `the ${letter} gate evidence is on disk and the checklist passed`);
       if (g.code !== 0) throw new Error(`walkTo: gate ${letter} failed: ${g.out.slice(0, 300)}`);
     }
-    const done = p === "5"
-      ? phase(["complete", b, p, "--evidence", `phase ${p} ran its checks and they passed`, "--ran", RAN_CLAIM, "--artifact", BOOT_LOG, "--quiet"])
-      : phase(["complete", b, p, "--evidence", `phase ${p} ran its checks and they passed`, "--quiet"]);
+    const done = phase(["complete", b, p, "--evidence", `phase ${p} ran its checks and they passed`, "--quiet"]);
     if (done.code !== 0) throw new Error(`walkTo: complete ${p} failed: ${done.out.slice(0, 300)}`);
   }
   const target_ = phase(["enter", b, String(target), "--reason", `walk to phase ${target}`, "--quiet"]);
