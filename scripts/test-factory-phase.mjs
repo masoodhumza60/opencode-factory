@@ -10,7 +10,7 @@
 // Exit 0 = every case behaved as specified.
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, appendFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -993,6 +993,105 @@ console.log("\na bead with no Gate C record cannot complete ship");
   check("the factory can backfill and approve Gate C on that bead", gate.code === 0, gate.out.slice(0, 220));
   const shipped = phase(["complete", b, "7", "--evidence", "deployed and smoke-tested; 200 on /health", "--quiet"]);
   check("the same bead completes 7 once Gate C is recorded and approved", shipped.code === 0, shipped.out.slice(0, 220));
+}
+
+// ---- policy-driven completion ------------------------------------------------
+// A repo with a policy says which artifacts each phase needs; with one, `complete`
+// reads the bead's manifest and refuses on anything the attest ladder does not
+// call `ok`. This block is LAST and it is the only place a policy file appears:
+// everything above it runs policy-free (loadPolicy returns null with no
+// config/factory.policy.yaml), which is what keeps the M0 behaviour above
+// unchanged. This is the 139th, 140th and 141st check() call; the block is also
+// the only one that puts a git repo in the sandbox, because attest refuses to
+// record outside one.
+console.log("\npolicy-driven completion");
+const policyDir = join(SANDBOX, "config");
+const policyRun = join(SANDBOX, "run.txt");
+const policyHashRun = join(SANDBOX, "run2.txt");
+const policyArtifact = join(SANDBOX, "boot.log");
+// The artifact phase 5's own --ran gate demands. That gate is evaluated BEFORE
+// the policy (see cmdComplete), so every complete 5 below has to clear it or the
+// refusal under test would be a --ran refusal instead.
+writeFileSync(policyArtifact, "200 OK\n");
+{
+  execFileSync("git", ["init"], { cwd: SANDBOX, stdio: "ignore" });
+  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-m", "base"], { cwd: SANDBOX, stdio: "ignore" });
+  mkdirSync(policyDir, { recursive: true });
+  writeFileSync(join(policyDir, "factory.policy.yaml"), [
+    "version: 1",
+    "tier: prototype",
+    "profile: web",
+    "tiers:",
+    "  prototype:",
+    "    checks: [run]",
+    "profiles:",
+    "  web:",
+    "    checks: []",
+    "checks:",
+    "  run:",
+    "    phase: 5",
+    "    kind: transcript",
+    "    command: npm test",
+    "",
+  ].join("\n"));
+
+  const p1 = walkTo("policy-missing", "5");
+  const missing = phase(["complete", p1, "5", "--evidence", "the artifact is supposedly verified and on disk",
+    "--ran", RAN_CLAIM, "--artifact", policyArtifact, "--quiet"]);
+  check(
+    "a policy that requires an unattested artifact REFUSES completion",
+    missing.code === 1 && has(missing.out, "factory-attest attest") && has(missing.out, "MISSING run"),
+    `${missing.code} ${missing.out.slice(0, 300)}`
+  );
+
+  writeFileSync(policyRun, "ok\n");
+  // The absolute path matters: run() pins cwd to SANDBOX, where scripts/ does not exist.
+  const attested = run("node", [join(HERE, "factory-attest.mjs"), "attest", p1, "run.txt", "--id", "run", "--kind", "transcript"], { BEADS_DIR: BEADS });
+  check("the artifact the policy requires can be attested", attested.code === 0, attested.out.slice(0, 200));
+
+  const accepted = phase(["complete", p1, "5", "--evidence", "the run transcript is attested and its hash matches HEAD",
+    "--ran", RAN_CLAIM, "--artifact", policyArtifact, "--quiet"]);
+  const p1done = bd(["state", p1, "phase_done"]);
+  check(
+    "the same bead completes once the required artifact is attested",
+    accepted.code === 0 && has(p1done.out, "5"),
+    `${accepted.code} ${accepted.out.slice(0, 200)} ${p1done.out.slice(0, 120)}`
+  );
+
+  const p2 = walkTo("policy-hash", "5");
+  writeFileSync(policyHashRun, "ok\n");
+  const attested2 = run("node", [join(HERE, "factory-attest.mjs"), "attest", p2, "run2.txt", "--id", "run", "--kind", "transcript"], { BEADS_DIR: BEADS });
+  if (attested2.code === 0) appendFileSync(policyHashRun, "one more byte the hash does not know about\n");
+  const tampered = phase(["complete", p2, "5", "--evidence", "the run transcript is attested and its hash matches HEAD",
+    "--ran", RAN_CLAIM, "--artifact", policyArtifact, "--quiet"]);
+  check(
+    "an attested artifact whose bytes changed REFUSES completion",
+    tampered.code === 1 && has(tampered.out, "HASH run"),
+    `${tampered.code} ${tampered.out.slice(0, 300)}`
+  );
+
+  // The project root is the directory holding .beads, not the cwd. If complete
+  // resolved the policy from the cwd instead, running it from a subdirectory
+  // would find no policy and pass without verifying anything - a false pass.
+  // run() pins cwd to SANDBOX, so this one calls the script directly.
+  const policySub = join(SANDBOX, "sub");
+  mkdirSync(policySub, { recursive: true });
+  const p3 = walkTo("policy-subdir", "5");
+  let subCode = 0, subOut = "";
+  try {
+    subOut = execFileSync(process.execPath, [SCRIPT, "complete", p3, "5",
+      "--evidence", "the artifact is supposedly verified and on disk",
+      "--ran", RAN_CLAIM, "--artifact", policyArtifact, "--quiet"],
+      { encoding: "utf8", cwd: policySub, env: { ...process.env, BEADS_DIR: BEADS }, stdio: ["ignore", "pipe", "pipe"] });
+  } catch (e) {
+    subCode = e.status ?? 1;
+    subOut = `${e.stdout || ""}${e.stderr || ""}`;
+  }
+  check(
+    "the same policy REFUSES completion from a subdirectory",
+    subCode === 1 && has(subOut, "MISSING run"),
+    `${subCode} ${subOut.slice(0, 300)}`
+  );
 }
 
 // ---------------------------------------------------------------- report

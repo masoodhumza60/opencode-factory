@@ -24,6 +24,12 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
+// The mechanical half of completion. factory-manifest and factory-policy import
+// nothing from this file, so there is no cycle: the phase machine is free to
+// read the evidence store and the policy that says which evidence is required.
+import { appendTrail } from "./factory-manifest.mjs";
+import { loadPolicy } from "./factory-policy.mjs";
+import { verifyChecks } from "./factory-attest.mjs";
 
 const PHASES = [
   { id: "0", name: "onboard", gate: null },
@@ -973,6 +979,45 @@ function cmdComplete(bead, target, evidence, ranArg, artifactArg) {
   if (ran) {
     bd(["set-state", bead, `${RAN_DIM}=${ran}`, "--reason", `ran: ${ran} (artifact ${artifact})`]);
     say(`ran: ${ran} (artifact ${artifact})`);
+  }
+  // A policy turns "the evidence sentence is informative" into "the artifact the
+  // phase requires is on disk, unmodified, at this commit". The gate below is
+  // the last refusal that must win over it, and `bd set-state` is the first
+  // write that must not happen on a refusal, so this sits exactly between them:
+  // a refused completion leaves phase_done untouched, the same as the --ran gate
+  // above. With no config/factory.policy.yaml, loadPolicy returns null and
+  // nothing here runs - every repo without a policy behaves as it did before.
+  //
+  // Deliberately NOT wrapped in a try/catch: a malformed policy is a loud
+  // failure, never a quiet fall back to "no policy, no gate". loadPolicy's null
+  // is the only branch that skips verification.
+  // The project root is the directory holding .beads, not the cwd: findWorkspace
+  // returns the .beads directory itself, so running `complete` from a
+  // subdirectory must still find config/factory.policy.yaml. Using the raw cwd
+  // here would silently skip the policy and pass - the exact false pass this
+  // milestone exists to make impossible.
+  const policyRoot = dirname(findWorkspace());
+  const policy = loadPolicy(policyRoot);
+  if (policy) {
+    const verdict = verifyChecks(policyRoot, bead, target, policy);
+    const failed = verdict.checks.filter((r) => r.result !== "ok" && r.result !== "not-applicable");
+    // The trail records the attempt whether it passes or fails - but only when
+    // there is a policy, because without one there was no verdict to record.
+    appendTrail(policyRoot, bead, {
+      event: "complete",
+      phase: String(target),
+      ok: failed.length === 0,
+      problems: failed.map((r) => `${r.id}: ${r.result}`),
+    });
+    if (failed.length) {
+      throw new Illegal(
+        `phase ${target} needs ${verdict.counts.total} verified artifact(s) from ` +
+        `.factory/${bead}/manifest.json; ${failed.length} failed:\n` +
+        failed.map((r) => `  ${r.result.toUpperCase()} ${r.id} - ${r.detail || "see factory-attest verify"}`).join("\n") +
+        `\nRecord them with:\n` +
+        failed.map((r) => `  ${r.fix}`).join("\n")
+      );
+    }
   }
   bd(["set-state", bead, `${dim}=${target}`, "--reason", `completed ${target} (${byId.get(target).name}): ${evidence}`]);
   const n = legalNext(bead);
