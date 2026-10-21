@@ -23,8 +23,24 @@ import { dirname, join, resolve } from "node:path";
 // up from wherever we were launched (often a subdirectory, or a temp sandbox)
 // keeps `bead` subcommands working from anywhere inside the project without
 // every script re-deriving the root by hand.
+//
+// `BEADS_DIR` wins when it is set, because that is the workspace `bd` itself
+// will talk to. Without this, `attest` (which resolves from the cwd) and
+// `complete` (which asks `bd` where its workspace is) can anchor on different
+// directories, and every artifact written by one is `MISSING` to the other.
 
 export function projectRoot(start = process.cwd()) {
+  const declared = (process.env.BEADS_DIR || "").trim();
+  if (declared) {
+    const beads = resolve(declared);
+    if (!existsSync(beads) || !statSync(beads).isDirectory()) {
+      throw new Error(
+        `BEADS_DIR points at ${beads}, which is not a directory; ` +
+        `point it at the .beads directory or unset it`,
+      );
+    }
+    return dirname(beads);
+  }
   let dir = resolve(start);
   for (;;) {
     const marker = join(dir, ".beads");

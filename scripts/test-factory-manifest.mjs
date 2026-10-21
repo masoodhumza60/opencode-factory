@@ -28,6 +28,15 @@ writeFileSync(file, "npm run dev -> 200 OK\n");
 console.log("\nproject root");
 check("walks up to the .beads directory", projectRoot(join(root)) === root, projectRoot(join(root)));
 check("walks up also from a deeper subdirectory", projectRoot(join(root, "a", "b")) === root);
+const elsewhere = join(root, "elsewhere", ".beads");
+mkdirSync(elsewhere, { recursive: true });
+process.env.BEADS_DIR = elsewhere;
+check("honours BEADS_DIR over the cwd", projectRoot(join(root, "a")) === join(root, "elsewhere"));
+process.env.BEADS_DIR = join(root, "no-such-beads");
+check("a BEADS_DIR that is not a directory is refused",
+  must(() => projectRoot(root), /BEADS_DIR/) && must(() => projectRoot(root), /not a directory/));
+delete process.env.BEADS_DIR;
+check("clearing BEADS_DIR returns to walking up", projectRoot(join(root, "a", "b")) === root);
 
 console.log("\ngit");
 check("gitHead is 40 lowercase hex characters", /^[0-9a-f]{40}$/.test(head), head);
