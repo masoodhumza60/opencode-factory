@@ -378,7 +378,7 @@ check("an unknown tier is refused naming the legal values", (() => {
   try { effectiveChecks(arith, { tier: "payments" }); return false; }
   catch (e) {
     return e instanceof PolicyError && e.message.includes("payments") &&
-      e.message.includes("prototype, internal, public, regulated");
+      e.message.includes("is not declared under tiers; declared: prototype, internal, public, regulated");
   }
 })(), (() => { try { effectiveChecks(arith, { tier: "payments" }); return ""; }
   catch (e) { return e.message; } })());
