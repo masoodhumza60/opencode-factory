@@ -126,7 +126,7 @@ so a log never records a refusal as a completion.
 ```
 node scripts/factory-attest.mjs attest <bead> <path> --id <check> --kind <kind> \
   [--command "<cmd>"] [--policy <path>]
-node scripts/factory-attest.mjs verify <bead> [--phase <n>] [--json]
+node scripts/factory-attest.mjs verify <bead> [--phase <n>] [--policy <path>] [--json]
 ```
 
 `attest` records one artifact; with no `--command` it takes the command from
@@ -170,8 +170,10 @@ exact command that would fix it, e.g.:
 node scripts/factory-attest.mjs attest <bead> <path> --id <check> --kind <kind> --command "<cmd>"
 ```
 
-and writes **nothing** to the phase state — the bead stays exactly where it
-was.
+and leaves `phase` and `phase_done` untouched — the bead stays where it was.
+One exception: a phase-5 run writes its `booted` record before the manifest
+check can refuse, so a refused phase-5 run keeps the `booted` record it wrote
+first.
 
 ### What this does not prove
 

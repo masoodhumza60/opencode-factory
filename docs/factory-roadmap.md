@@ -89,6 +89,7 @@ payments feature needs twenty, from the same policy file.
 - `FACTORY_SESSION` is not a secret; a builder can claim any session identity.
 - A hand-edited manifest that rewrites `sha256` and `commit` will verify — the manifest is
   validated for shape, not authenticated.
+- `attest` accepts any directory named `.beads` while `complete` requires a real beads database. A `.beads` with no database can make the two disagree about the project root; the result is a refusal, never a false pass. Aligning the two predicates is M1b work.
 
 Prove the exit criterion with:
 
@@ -240,7 +241,7 @@ Small, each independently testable, in this order:
 4. Gate `close_reason` enforcement and rejection of raw resolves.
 5. `complete 7` requires Gate C.
 6. Gate metadata fails closed; phase rollback on gate-create failure.
-7. Manifest schema and `factory attest`.
+7. Manifest schema and `scripts/factory-attest.mjs attest`.
 8. `complete` verifies the manifest.
 9. `factory.policy.yaml` plus tier defaults.
 10. Reviewer independence check (`reviewer_session != builder_session`).

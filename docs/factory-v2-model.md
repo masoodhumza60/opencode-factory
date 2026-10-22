@@ -370,7 +370,7 @@ just produces more elaborate theatre.
 
 ## Evidence manifest
 
-Every run writes `.factory/<bead>/manifest.json` at the project root (the directory holding `.beads`):
+`attest` writes `.factory/<bead>/manifest.json` at the project root (the directory holding `.beads`):
 
 ```json
 {
@@ -393,6 +393,8 @@ Every run writes `.factory/<bead>/manifest.json` at the project root (the direct
 ```
 
 `id` is the policy's check id, `path` is root-relative, and `sha256` is computed from the bytes on disk at attest time. Attesting the same id again replaces the entry and preserves any unknown fields.
+
+A model may name an artifact, but it cannot attest a hash for a file that does not exist — and the hash it writes is whatever the writer computed, not proof of what produced the bytes.
 
 `.factory/<bead>/trail.jsonl` is append-only. Each line is one event — `attest`, `verify`, `refusal`, or `complete` — with `at`, `event` and `bead`. Nothing rewrites or truncates it.
 
