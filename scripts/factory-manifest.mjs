@@ -11,8 +11,8 @@
 
 import { execFileSync } from "node:child_process";
 import {
-  appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync,
-  writeFileSync,
+  appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync,
+  statSync, writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
@@ -29,6 +29,38 @@ import { dirname, join, resolve } from "node:path";
 // `complete` (which asks `bd` where its workspace is) can anchor on different
 // directories, and every artifact written by one is `MISSING` to the other.
 
+// A `.beads` directory is a workspace only if it contains a database. Probed
+// against bd 1.3.0 on this host: `bd init` (both with and without
+// BEADS_NO_DOLT) stores the database in `.beads/embeddeddolt`, and
+// `bd where` reports that path as the database. But bd ALSO writes telemetry
+// into `~/.beads` (eventsData/ + machine-id) with no database in it - a
+// directory this code must NOT count as a workspace, because the bd that then
+// runs underneath rejects it with "no beads database found".
+// "Non-empty" is therefore not the test; presence of the database is.
+// Unknown shapes (an older or different bd backend) are refused here too -
+// fail closed - and the message says to set BEADS_DIR, where an explicit
+// pointer is trusted exactly as the user gave it.
+//
+// This lives here, not in factory-phase, because `attest` and `complete` must
+// agree on the project root. When each module had its own predicate, a `.beads`
+// directory with no database (an aborted `bd init`) made `attest` write its
+// manifest in one place while `complete` looked in another, and every artifact
+// was reported MISSING.
+export function isWorkspaceBeads(dir) {
+  let entries;
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return false;
+  }
+  if (!entries.length) return false;
+  return entries.some(
+    (e) =>
+      e === "embeddeddolt" || e === "issues.jsonl" ||
+      e.endsWith(".db") || e.endsWith(".sqlite")
+  );
+}
+
 export function projectRoot(start = process.cwd()) {
   const declared = (process.env.BEADS_DIR || "").trim();
   if (declared) {
@@ -44,7 +76,7 @@ export function projectRoot(start = process.cwd()) {
   let dir = resolve(start);
   for (;;) {
     const marker = join(dir, ".beads");
-    if (existsSync(marker) && statSync(marker).isDirectory()) return dir;
+    if (existsSync(marker) && isWorkspaceBeads(marker)) return dir;
     const parent = dirname(dir);
     if (parent === dir) {
       throw new Error(

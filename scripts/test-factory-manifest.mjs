@@ -17,7 +17,7 @@ function must(fn, pattern) {
 }
 
 const root = mkdtempSync(join(tmpdir(), "factory-manifest-"));
-mkdirSync(join(root, ".beads"));
+mkdirSync(join(root, ".beads", "embeddeddolt"), { recursive: true });
 execFileSync("git", ["init", "-q"], { cwd: root });
 execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "base"], { cwd: root });
 const head = gitHead(root);
@@ -28,6 +28,10 @@ writeFileSync(file, "npm run dev -> 200 OK\n");
 console.log("\nproject root");
 check("walks up to the .beads directory", projectRoot(join(root)) === root, projectRoot(join(root)));
 check("walks up also from a deeper subdirectory", projectRoot(join(root, "a", "b")) === root);
+const bogus = join(root, "bogus");
+mkdirSync(join(bogus, ".beads"), { recursive: true });
+check("a .beads with no database is walked past, not adopted",
+  projectRoot(bogus) === root, projectRoot(bogus));
 const elsewhere = join(root, "elsewhere", ".beads");
 mkdirSync(elsewhere, { recursive: true });
 process.env.BEADS_DIR = elsewhere;

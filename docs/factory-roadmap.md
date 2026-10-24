@@ -89,7 +89,12 @@ payments feature needs twenty, from the same policy file.
 - `FACTORY_SESSION` is not a secret; a builder can claim any session identity.
 - A hand-edited manifest that rewrites `sha256` and `commit` will verify — the manifest is
   validated for shape, not authenticated.
-- `attest` accepts any directory named `.beads` while `complete` requires a real beads database. A `.beads` with no database can make the two disagree about the project root; the result is a refusal, never a false pass. Aligning the two predicates is M1b work.
+
+**One root, two readers.** `attest` and `complete` share `isWorkspaceBeads`
+(`scripts/factory-manifest.mjs`): a `.beads` directory with no database is walked past by
+both, and an explicit `BEADS_DIR` is trusted by both exactly as given. They cannot anchor
+on different roots; pointing `BEADS_DIR` at a directory with no database is refused by
+`bd` itself, not silently redirected.
 
 Prove the exit criterion with:
 

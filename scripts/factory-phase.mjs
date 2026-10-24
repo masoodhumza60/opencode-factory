@@ -22,12 +22,12 @@
 // start implementing.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, readdirSync, statSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 // The mechanical half of completion. factory-manifest and factory-policy import
 // nothing from this file, so there is no cycle: the phase machine is free to
 // read the evidence store and the policy that says which evidence is required.
-import { appendTrail } from "./factory-manifest.mjs";
+import { appendTrail, isWorkspaceBeads } from "./factory-manifest.mjs";
 import { loadPolicy } from "./factory-policy.mjs";
 import { verifyChecks } from "./factory-attest.mjs";
 
@@ -141,41 +141,22 @@ function staleDays(bead) {
 
 // bd resolves its database from the working directory, or BEADS_DIR. A run
 // started one directory away finds no database; the old allGates() turned that
-// error into "there are no gates", which opened every gate at once.
-function readdirSafe(dir) {
-  try {
-    return readdirSync(dir);
-  } catch {
-    return [];
-  }
-}
-
-// A `.beads` directory is a workspace only if it contains a database. Probed
-// against bd 1.3.0 on this host: `bd init` (both with and without
-// BEADS_NO_DOLT) stores the database in `.beads/embeddeddolt`, and
-// `bd where` reports that path as the database. But bd ALSO writes
-// telemetry into `~/.beads` (eventsData/ + machine-id) with no database in
-// it - a directory this script must NOT count as a workspace, because the
-// bd that then runs underneath rejects it with "no beads database found"
-// and every gate lookup would be answered from a list that never loaded.
-// "Non-empty" is therefore not the test; presence of the database is.
-// Unknown shapes (an older or different bd backend) are refused here too -
-// fail closed - and the message says to set BEADS_DIR, where an explicit
-// pointer is trusted exactly as the user gave it.
-function isWorkspaceBeads(dir) {
-  const entries = readdirSafe(dir);
-  if (!entries.length) return false;
-  return entries.some(
-    (e) =>
-      e === "embeddeddolt" || e === "issues.jsonl" ||
-      e.endsWith(".db") || e.endsWith(".sqlite")
-  );
-}
+// error into "there are no gates", which opened every gate at once. Whether a
+// `.beads` directory counts as a workspace is decided by isWorkspaceBeads, in
+// factory-manifest, so `attest` and `complete` can never anchor on different
+// roots. An explicit BEADS_DIR is trusted exactly as the user gave it - it is
+// the escape hatch for backends whose on-disk shape this code does not know.
 
 function findWorkspace() {
-  if (process.env.BEADS_DIR) {
-    const dir = process.env.BEADS_DIR;
-    if (existsSync(dir) && readdirSafe(dir).length > 0) return dir;
+  const declared = (process.env.BEADS_DIR || "").trim();
+  if (declared) {
+    if (!existsSync(declared) || !statSync(declared).isDirectory()) {
+      throw new Illegal(
+        `BEADS_DIR points at ${declared}, which is not a directory; ` +
+          "point it at the .beads directory or unset it"
+      );
+    }
+    return resolve(declared);
   }
   let dir = process.cwd();
   for (;;) {
