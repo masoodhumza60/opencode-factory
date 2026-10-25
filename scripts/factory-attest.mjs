@@ -208,6 +208,15 @@ export function attest(argv) {
   // 5. The kind must be one of the sixteen.
   requireKind(args.kind);
 
+  // 5b. A verdict artifact must name who said so. The factory:<uuid> fallback
+  //     would hand every anonymous run a fresh identity, so a builder could
+  //     attest its own review and look independent of itself. Other kinds keep
+  //     the fallback: check-output has no second party to name.
+  if (args.kind === "prr" && (process.env.FACTORY_SESSION ?? "").trim() === "") {
+    throw new AttestError(
+      "a verdict must be named; set FACTORY_SESSION to a reviewer session distinct from the builder");
+  }
+
   // 6. With a policy on disk, the id must be one it declares. Without one,
   //    any non-empty id is accepted: no policy, no gate yet.
   const policy = loadChecksPolicy(root, args.policy);

@@ -20,7 +20,7 @@ import { pathToFileURL } from "node:url";
 
 import {
   projectRoot, gitHead, sha256File, loadManifest, saveManifest,
-  upsertArtifact, appendTrail, manifestPath,
+  upsertArtifact, appendTrail, manifestPath, readTrail,
 } from "./factory-manifest.mjs";
 import { loadPolicy, effectiveChecks, requiredForPhase } from "./factory-policy.mjs";
 import { readBeadPhase, loadBeadMeta } from "./factory-attest.mjs";
@@ -100,7 +100,10 @@ function firstCommit(root) {
 }
 
 function porcelain(root) {
-  return git(root, ["status", "--porcelain", "--untracked-files=all"])
+  // core.quotePath=false keeps non-ASCII bytes raw instead of C-quoted, so a
+  // bead id or file path that carries them matches by eye and by carve-out:
+  // the verdict-file comparison in record compares these very strings.
+  return git(root, ["-c", "core.quotePath=false", "status", "--porcelain", "--untracked-files=all"])
     .split("\n")
     .filter((line) => line.trim() !== "");
 }
@@ -109,12 +112,44 @@ function porcelain(root) {
 // workspace: this module appends to the one on every command and bd may write
 // the other at any moment between the snapshot and the verdict, so neither of
 // those looks like the reviewer's edits.
+function isProductPath(path) {
+  return (path !== ".factory" && !path.startsWith(".factory/") && !path.startsWith(".factory\\")) &&
+    (path !== ".beads" && !path.startsWith(".beads/") && !path.startsWith(".beads\\"));
+}
+
 function productChanges(lines) {
-  return lines.filter((line) => {
-    const path = line.slice(3).trim();
-    return (path !== ".factory" && !path.startsWith(".factory/") && !path.startsWith(".factory\\")) &&
-      (path !== ".beads" && !path.startsWith(".beads/") && !path.startsWith(".beads\\"));
-  });
+  return lines.filter((line) => isProductPath(line.slice(3).trim()));
+}
+
+// A rename spells as "from -> to"; both ends are real files to fingerprint.
+function porcelainPaths(lines) {
+  const out = [];
+  for (const line of lines) {
+    const field = line.slice(3);
+    for (const raw of field.includes(" -> ") ? field.split(" -> ") : [field]) {
+      const path = raw.trim();
+      if (path !== "" && isProductPath(path)) out.push(path);
+    }
+  }
+  return out;
+}
+
+// The content half of the scope snapshot: a porcelain line that does not change
+// does not mean the file did not change - a path already `M ` at start can be
+// edited again and the line set is identical afterwards. So the fingerprint
+// records every product file's sha256 at start, and `record` recomputes them.
+function scopeFiles(root, lines) {
+  const files = {};
+  for (const path of porcelainPaths(lines)) {
+    try {
+      const abs = join(root, path);
+      if (!statSync(abs).isFile()) continue;
+      files[path] = sha256File(abs);
+    } catch {
+      // Gone between snapshot and hash: the line-set check owns existence.
+    }
+  }
+  return files;
 }
 
 function reviewDir(root, bead) {
@@ -241,11 +276,16 @@ export function start(argv) {
     `- \`${a.id}\` (${a.kind ?? "?"}) ${a.path} — sha256 ${String(a.sha256).slice(0, 12)}…, ` +
     `commit ${String(a.commit).slice(0, 7)}…, producer ${a.producer_session ?? "(unrecorded)"}`);
 
+  // The plan is an artifact like any other: when one has been attested, the
+  // reviewer should know the work had a design to deviate from. Nothing is
+  // invented when there is none.
+  const plan = manifest.artifacts.find((a) => a.kind === "plan");
   const verdictFile = `.factory/${bead}/review.md`;
   const lines = [
     `# Review package — ${bead}`,
     "",
     `Bead: ${bead}`,
+    ...(plan ? [`Plan: ${plan.path}`] : []),
     `Base: ${base}`,
     `Head: ${head}`,
     `Phase: ${phase}`,
@@ -305,14 +345,18 @@ export function start(argv) {
   writeFileSync(packagePath, text);
 
   // The snapshot is taken now, before the reviewer starts, so `record` can tell
-  // the reviewer's one file from an edit to the product.
+  // the reviewer's one file from an edit to the product. Lines alone cannot:
+  // an already-dirty path that is edited again leaves the very same line - so
+  // every hashable product file is fingerprinted alongside the line set.
+  const status = porcelain(root);
   writeFileSync(scopePath(root, bead), JSON.stringify({
     version: 1,
     bead,
     base,
     head,
     started_at: new Date().toISOString(),
-    status: porcelain(root),
+    status,
+    files: scopeFiles(root, status),
   }, null, 2) + "\n");
 
   appendTrail(root, bead, {
@@ -334,7 +378,9 @@ export function start(argv) {
 const RECORD_FLAGS = { file: "", verdict: "" };
 const RECORD_USAGE = "accepted flags are --file <path>, --verdict pass|changes";
 
-const VERDICT_RE = /^Verdict:\s*(pass|changes)\s*$/m;
+// `g` because counting every verdict line needs matchAll (which refuses a
+// non-global pattern); `m` anchors each line, as before.
+const VERDICT_RE = /^Verdict:\s*(pass|changes)\s*$/gm;
 
 export function record(argv) {
   const { values, positional } = parseFlags(argv, RECORD_FLAGS, RECORD_USAGE);
@@ -387,19 +433,43 @@ export function record(argv) {
     throw new ReviewError(
       `a reviewer writes only its own verdict file, ${expected}review*.md; "${basename(abs)}" is not one`);
   }
+  // The package and the scope snapshot are the builder-authored evidence this
+  // module wrote at start - and the package's how-to-answer template carries a
+  // literal "Verdict: pass" line. A builder (or anyone) that records it as the
+  // verdict is recording the template, not a reviewer's findings.
+  if (rel === `.factory/${bead}/review-package.md` || rel === `.factory/${bead}/review-scope.json`) {
+    throw new ReviewError(
+      `the review package is evidence, not a verdict; write your findings to a separate review*.md file`);
+  }
   if (!existsSync(abs)) {
     throw new ReviewError(`the verdict file does not exist: ${rel}`);
   }
+  // The same evidence under another name is the same trick: copy
+  // review-package.md to review-copy.md and the bytes still say "Verdict: pass"
+  // because the template wrote them. The package's hash is on the trail, so a
+  // renamed copy is recognised by content, not by filename.
+  const started = readTrail(root, bead).filter((e) => e.event === "review_started");
+  const packageSha = started.length ? started[started.length - 1].package_sha256 : null;
+  if (typeof packageSha === "string" && packageSha !== "" && sha256File(abs) === packageSha) {
+    throw new ReviewError(
+      `the review package is evidence, not a verdict; write your findings to a separate review*.md file`);
+  }
 
   const text = readFileSync(abs, "utf8");
-  const stated = text.match(VERDICT_RE);
-  if (!stated) {
+  const verdicts = [...text.matchAll(VERDICT_RE)];
+  if (verdicts.length === 0) {
     throw new ReviewError(`the verdict file has no "Verdict: pass" or "Verdict: changes" line: ${rel}`);
   }
-  if (stated[1] !== values.verdict) {
+  // A file that hedges - "pass" up top, "changes" buried in the findings -
+  // would otherwise be read at the first line and get whichever verdict the
+  // flag wanted. The file must state exactly one, and it must be the flag's.
+  if (verdicts.length > 1) {
+    throw new ReviewError(`the verdict file states more than one verdict: ${rel}`);
+  }
+  if (verdicts[0][1] !== values.verdict) {
     throw new ReviewError(
       `the verdict flag does not match the file; the file is the record ` +
-      `(--verdict ${values.verdict}, the file says ${stated[1]})`);
+      `(--verdict ${values.verdict}, the file says ${verdicts[0][1]})`);
   }
 
   // The scope refusal is numbered ahead of staleness in the plan, so it is
@@ -411,10 +481,29 @@ export function record(argv) {
   const now = productChanges(porcelain(root));
   const outside = now.filter((line) => !before.has(line) && !line.endsWith(` ${rel}`));
   const vanished = [...before].filter((line) => !now.includes(line));
-  if (outside.length || vanished.length) {
+  // The line set cannot see an edit to a path that was already dirty at start:
+  // the line was ` M` then and is ` M` now. The start snapshot fingerprinted the
+  // bytes of every product file, so a content change - or a file gone missing -
+  // is caught here by hash, the same sentence as the line-set half.
+  const drifted = [];
+  for (const [path, sha] of Object.entries(scope.files ?? {})) {
+    let current = null;
+    try {
+      const absFile = join(root, path);
+      if (statSync(absFile).isFile()) current = sha256File(absFile);
+    } catch {
+      current = null;
+    }
+    if (current !== sha) drifted.push(path);
+  }
+  if (outside.length || vanished.length || drifted.length) {
     throw new ReviewError(
       "the reviewer changed files outside its verdict: " +
-      [...outside, ...vanished].join(" | "));
+      [
+        ...outside,
+        ...vanished,
+        ...drifted.map((p) => `${p} (content changed since review start)`),
+      ].join(" | "));
   }
 
   const head = gitHead(root);

@@ -238,6 +238,27 @@ check("14 without FACTORY_SESSION the session is factory:<uuid>",
   noSessionEntry.producer_session === noSessionTrail[0].producer_session,
   JSON.stringify(noSessionEntry && noSessionEntry.producer_session));
 
+// A verdict artifact is different: the anonymous fallback would hand the same
+// builder a fresh identity on every run, so a builder could attest its own
+// review and look independent of itself. attest refuses, and names the fix.
+r = run({ sandbox, env }, [bead, reviewPath, "--id", "review-anon", "--kind", "prr"]);
+check("14 attest --kind prr without FACTORY_SESSION is refused; a verdict must be named",
+  r.status === 1 && r.stderr.includes("a verdict must be named") &&
+  r.stderr.includes("set FACTORY_SESSION to a reviewer session distinct from the builder"),
+  `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
+check("14 the refused anonymous verdict wrote no artifact and no trail event",
+  manifestOf({ sandbox }, bead).artifacts.every((a) => a.id !== "review-anon") &&
+  readTrail(sandbox, bead).every((x) => x.id !== "review-anon"),
+  JSON.stringify(manifestOf({ sandbox }, bead).artifacts.map((a) => a.id)));
+// The same command with a non-verdict kind keeps the uuid fallback: only the
+// prr is a claim about who reviewed.
+r = run({ sandbox, env }, [bead, noSessionPath, "--id", "no-session-again", "--kind", "check-output"]);
+const againEntry = manifestOf({ sandbox }, bead).artifacts.find(x => x.id === "no-session-again");
+check("14 a non-verdict kind without FACTORY_SESSION still succeeds and still freezes a uuid",
+  r.status === 0 && againEntry !== undefined &&
+  /^factory:[0-9a-f-]{36}$/.test(againEntry.producer_session || ""),
+  JSON.stringify(againEntry && againEntry.producer_session));
+
 // ---- verify -----------------------------------------------------------------
 //
 // A second sandbox, same shape as the first: git repo, own beads workspace, one

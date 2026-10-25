@@ -236,6 +236,36 @@ check("8 --file outside .factory/<bead>/ is refused: the reviewer writes only it
   r.stderr.includes("out/log.txt"),
   `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
 
+// The package itself carries a literal "Verdict: pass" line inside its
+// how-to-answer template, so recording it as the verdict records the template,
+// not a review. The builder wrote those bytes; record must refuse them.
+const beforePackageRefusal = trailOf(sand, bead).filter((e) => e.event === "review").length;
+r = review(sand, ["record", bead, "--file", `.factory/${bead}/review-package.md`, "--verdict", "pass"],
+  { FACTORY_ROLE: "reviewer", FACTORY_SESSION: "review-P1" });
+check("8a the builder-authored package is refused as evidence, not a verdict",
+  r.status === 1 && r.stderr.includes("the review package is evidence, not a verdict") &&
+  r.stderr.includes("write your findings to a separate review*.md file"),
+  `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
+check("8a the refused package record wrote no review event and no artifact",
+  trailOf(sand, bead).filter((e) => e.event === "review").length === beforePackageRefusal &&
+  manifestOf(sand, bead).artifacts.every((a) => a.id !== "review"),
+  JSON.stringify(manifestOf(sand, bead).artifacts.map((a) => a.id)));
+
+// A renamed copy of the package is the same trick: the template's "Verdict:
+// pass" bytes are the package's bytes, so the refusing check is the content,
+// compared against the package sha256 the trail recorded at start.
+writeFileSync(join(sand.sandbox, ".factory", bead, "review-copy.md"), readFileSync(packagePath));
+r = review(sand, ["record", bead, "--file", `.factory/${bead}/review-copy.md`, "--verdict", "pass"],
+  { FACTORY_ROLE: "reviewer", FACTORY_SESSION: "review-P1" });
+check("8b a renamed copy of the package is refused by its content, not its name",
+  r.status === 1 && r.stderr.includes("the review package is evidence, not a verdict") &&
+  r.stderr.includes("write your findings to a separate review*.md file"),
+  `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
+check("8b the refused copy record wrote no review event either",
+  trailOf(sand, bead).filter((e) => e.event === "review").length === beforePackageRefusal &&
+  manifestOf(sand, bead).artifacts.every((a) => a.id !== "review"),
+  JSON.stringify(manifestOf(sand, bead).artifacts.map((a) => a.id)));
+
 // Now --file points at the verdict file, which says `Verdict: changes`, while
 // the flag says pass: the file is the record, so they must disagree loudly.
 writeFileSync(join(sand.sandbox, ".factory", bead, "review.md"), "Verdict: changes\n\nA finding.\n");
@@ -284,6 +314,19 @@ r = review(sand, ["record", bead, "--file", `.factory/${bead}/review.md`, "--ver
 check("12 a clean record exits 0",
   r.status === 0 && r.stdout.includes("recorded review"),
   `status=${r.status} stdout=${JSON.stringify(r.stdout)} stderr=${JSON.stringify(r.stderr)}`);
+// The whole point end to end: a normally recorded review is exactly what
+// `verify` accepts. The suite's policy requires `tests` and `review` at phase
+// 7; `tests` is intentionally stale by now (its artifact was attested at the
+// earlier head), so only the review row is claimed here, and the review row
+// must be `ok` against the frozen builder build-A.
+const verifyEndToEnd = runScript(sand, ATTEST_SCRIPT,
+  ["verify", bead, "--policy", "config/factory.policy.yaml", "--phase", "7", "--json"]);
+const verifyEndJson = (() => { try { return JSON.parse(verifyEndToEnd.stdout); } catch { return null; } })();
+const verifyReviewRow = verifyEndJson && Array.isArray(verifyEndJson.checks)
+  ? verifyEndJson.checks.find((c) => c.id === "review") : null;
+check("12 the recorded review itself verifies as an ok prr row",
+  verifyReviewRow !== null && verifyReviewRow.result === "ok" && verifyReviewRow.kind === "prr",
+  `status=${verifyEndToEnd.status} row=${JSON.stringify(verifyReviewRow)} raw=${verifyEndToEnd.stdout.slice(0, 400)}`);
 let artifactsNow = manifestOf(sand, bead).artifacts;
 const reviewArt = artifactsNow.find((a) => a.id === "review") ?? null;
 const verdictSha = sha256File(join(sand.sandbox, ".factory", bead, "review.md"));
@@ -316,6 +359,48 @@ check("12 a second record replaces the review artifact in place",
 revTrail = trailOf(sand, bead).filter((e) => e.event === "review");
 check("12 the second record appends its own review event",
   revTrail.length === 2 && revTrail[1].sha256 === rereadSha, JSON.stringify(revTrail.map((e) => e.sha256)));
+
+console.log("\nthe file is the record, the content is the scope");
+// A verdict file that hedges - pass on the first line, changes further down -
+// must not be read at its first line only: exactly one verdict is a record,
+// two are an argument. Exactly one must also match the flag.
+writeFileSync(join(sand.sandbox, ".factory", bead, "review-two.md"),
+  "Verdict: pass\n\nOn reflection, one finding outweighs the rest:\nVerdict: changes\n");
+r = review(sand, ["record", bead, "--file", `.factory/${bead}/review-two.md`, "--verdict", "pass"],
+  { FACTORY_ROLE: "reviewer", FACTORY_SESSION: "review-S1" });
+check("12b a verdict file with two verdict lines is refused however the flag is set",
+  r.status === 1 && r.stderr.includes("the verdict file states more than one verdict"),
+  `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
+
+// The line-set check is blind to content: an already-dirty tracked file that is
+// edited again still spells ` M out/log.txt` at record exactly as at start.
+// The start snapshot therefore fingerprints every product file, and record
+// refuses on the hash when the bytes moved.
+writeFileSync(join(sand.sandbox, "out", "log.txt"), "npm test -> 7 passed\nalready dirty when start ran\n");
+r = review(sand, ["start", bead, "--phase", "7"]);
+const dirtyStartScope = JSON.parse(readFileSync(scopePath, "utf8"));
+check("12c start fingerprints the product files it can hash, dirty ones included",
+  r.status === 0 && typeof dirtyStartScope.files === "object" &&
+  dirtyStartScope.files["out/log.txt"] === sha256File(join(sand.sandbox, "out", "log.txt")),
+  `status=${r.status} files=${JSON.stringify(dirtyStartScope.files)}`);
+writeFileSync(join(sand.sandbox, "out", "log.txt"), "npm test -> 7 passed\nedited again before record\n");
+r = review(sand, ["record", bead, "--file", `.factory/${bead}/review.md`, "--verdict", "pass"],
+  { FACTORY_ROLE: "reviewer", FACTORY_SESSION: "review-S1" });
+check("12c a file already dirty at start and edited again is refused on content",
+  r.status === 1 && r.stderr.includes("the reviewer changed files outside its verdict") &&
+  r.stderr.includes("out/log.txt (content changed since review start)"),
+  `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
+check("12c the refused content edit wrote no fourth review event",
+  trailOf(sand, bead).filter((e) => e.event === "review").length === 2,
+  JSON.stringify(trailOf(sand, bead).filter((e) => e.event === "review")));
+writeFileSync(join(sand.sandbox, "out", "log.txt"), "npm test -> 7 passed\nalready dirty when start ran\n");
+// The same snapshot, left untouched, records cleanly: content stirrings are the
+// only thing the fingerprint adds, not a new bar for an honest reviewer.
+r = review(sand, ["record", bead, "--file", `.factory/${bead}/review.md`, "--verdict", "pass"],
+  { FACTORY_ROLE: "reviewer", FACTORY_SESSION: "review-S1" });
+check("12c an untouched dirty file still records without refusal",
+  r.status === 0 && r.stdout.includes("recorded review"),
+  `status=${r.status} stdout=${JSON.stringify(r.stdout)} stderr=${JSON.stringify(r.stderr)}`);
 
 console.log("\nshow");
 r = review(sand, ["show", bead, "--json"]);
