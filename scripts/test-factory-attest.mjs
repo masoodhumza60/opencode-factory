@@ -310,20 +310,24 @@ const commitAll = () => execFileSync("git",
   ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-m", "next"],
   { cwd: vs.sandbox, env: vs.env, stdio: "ignore" });
 
-let vr = attest2(vs, [vbead, "out/tests.txt", "--id", "tests", "--kind", "check-output"]);
+let vr = attest2(vs, [vbead, "out/tests.txt", "--id", "tests", "--kind", "check-output"],
+  { FACTORY_SESSION: "build-A" });
 check("v0 attest tests exits 0", vr.status === 0, `status=${vr.status} stderr=${JSON.stringify(vr.stderr)}`);
-vr = attest2(vs, [vbead, "out/review.txt", "--id", "review", "--kind", "prr"]);
+check("v0 the first attestation freezes the builder session",
+  manifestOf(vs, vbead).builder_session === "build-A",
+  `builder_session=${JSON.stringify(manifestOf(vs, vbead).builder_session)}`);
+vr = attest2(vs, [vbead, "out/review.txt", "--id", "review", "--kind", "prr"], { FACTORY_SESSION: "review-R" });
 check("v0 attest review exits 0", vr.status === 0, `status=${vr.status} stderr=${JSON.stringify(vr.stderr)}`);
 
-console.log("\nverify 1: all current, no session");
+console.log("\nverify 1: all current, no session needed any more");
 vr = verify(vs, [vbead]);
 check("1 exits 0 with both checks current and no FACTORY_SESSION",
   vr.status === 0, `status=${vr.status} stdout=${JSON.stringify(vr.stdout)} stderr=${JSON.stringify(vr.stderr)}`);
-check("1 review is NOT-APPLICABLE and tests is ok",
-  /^  ok\s+tests\s/m.test(vr.stdout) && /^  NOT-APPLICABLE\s+review\s+.*FACTORY_SESSION is not set$/m.test(vr.stdout),
+check("1 tests is ok and review is ok against the frozen builder, with no FACTORY_SESSION",
+  /^  ok\s+tests\s/m.test(vr.stdout) && /^  ok\s+review\s/m.test(vr.stdout),
   vr.stdout);
-check("1 the summary counts 2 checks, 1 ok, 0 failed",
-  vr.stdout.includes("2 checks, 1 ok, 0 failed"), vr.stdout);
+check("1 the summary counts 2 checks, 2 ok, 0 failed",
+  vr.stdout.includes("2 checks, 2 ok, 0 failed"), vr.stdout);
 // verifyChecks reads bd through process.env, so point BEADS_DIR at the sandbox
 // for the in-process call and put it back afterwards.
 const withSandboxEnv = (sb, fn) => {
@@ -338,13 +342,14 @@ const v1Result = withSandboxEnv(vs, () => verifyChecks(vs.sandbox, vbead, "7", l
 check("1 verifyChecks says ok and gives the frozen shape",
   v1Result.ok === true && v1Result.checks.length === 2 &&
   v1Result.checks[0].id === "tests" && v1Result.checks[0].result === "ok" &&
-  v1Result.checks[1].result === "not-applicable" &&
+  v1Result.checks[1].result === "ok" &&
+  v1Result.checks[1].reviewer_session === undefined && v1Result.checks[1].builder_session === undefined &&
   ["id", "result", "path", "sha256", "commit", "head", "kind", "fix"].every((k) => k in v1Result.checks[0]),
   JSON.stringify(v1Result.checks));
 const vTrail = readTrail(vs.sandbox, vbead).filter((e) => e.event === "verify");
 check("1 the trail's last line is a verify event with ok: true",
   vTrail.length === 1 && vTrail[0].ok === true && vTrail[0].total === 2 &&
-  vTrail[0].passed === 1 && vTrail[0].failed === 0 && vTrail[0].phase === "7",
+  vTrail[0].passed === 2 && vTrail[0].failed === 0 && vTrail[0].phase === "7",
   JSON.stringify(vTrail));
 
 console.log("\nverify 2: missing");
@@ -416,22 +421,82 @@ check("7 an empty producer_session is PRODUCER, exit 1",
   vr.status === 1 && /^  PRODUCER\s+tests\s+.*no producer session recorded/m.test(vr.stdout),
   `status=${vr.status} ${vr.stdout}`);
 
-console.log("\nverify 8: independence");
-vr = attest2(vs, [vbead, "out/review.txt", "--id", "review", "--kind", "prr"], { FACTORY_SESSION: "ses_same" });
-check("8 re-attesting review as ses_same exits 0", vr.status === 0, `status=${vr.status}`);
+console.log("\nverify 8: the frozen builder cannot review its own bead");
+// The prr is re-attested BY the frozen builder session, and verify runs with a
+// fresh, unrelated FACTORY_SESSION - re-labelling the environment does not
+// launder the review, because the builder is read from the manifest.
+vr = attest2(vs, [vbead, "out/review.txt", "--id", "review", "--kind", "prr"], { FACTORY_SESSION: "build-A" });
+check("8 re-attesting the prr as the frozen builder build-A exits 0", vr.status === 0, `status=${vr.status}`);
 vr = attest2(vs, [vbead, "out/tests.txt", "--id", "tests", "--kind", "check-output"]);
 check("8 tests is current for the session cases", vr.status === 0, `status=${vr.status}`);
-vr = verify(vs, [vbead], { FACTORY_SESSION: "ses_same" });
-check("8 the same session verifying its own verdict is INDEPENDENCE, exit 1",
-  vr.status === 1 && /^  INDEPENDENCE\s+review\s+.*same session that is verifying it \(ses_same\)/m.test(vr.stdout),
+vr = verify(vs, [vbead], { FACTORY_SESSION: "build-B" });
+check("8 a builder-produced prr is INDEPENDENCE with FACTORY_SESSION=build-B, exit 1",
+  vr.status === 1 &&
+  /^  INDEPENDENCE\s+review\s+.*the reviewer session "build-A" is the builder session "build-A"/m.test(vr.stdout),
   `status=${vr.status} ${vr.stdout}`);
+// The same hold with the environment validating nothing extra (M1a's
+// "not-applicable" trigger): the frozen builder stands either way.
+vr = verify(vs, [vbead]);
+check("8 the same self-review fails with no FACTORY_SESSION too, exit 1",
+  vr.status === 1 && /^  INDEPENDENCE\s+review\s/m.test(vr.stdout), `status=${vr.status} ${vr.stdout}`);
+let v8Json = null;
+const freshJson = verify(vs, [vbead, "--json"], { FACTORY_SESSION: "verify-X" });
+try { v8Json = JSON.parse(freshJson.stdout); } catch { /* asserted below */ }
+check("8 --json names both colliding sessions on the row",
+  freshJson.status === 1 && v8Json !== null &&
+  (() => { const row = v8Json.checks.find((c) => c.id === "review");
+           return row.result === "independence" && row.reviewer_session === "build-A" && row.builder_session === "build-A"; })(),
+  JSON.stringify(freshJson.stdout));
 
-console.log("\nverify 9: different sessions");
-vr = attest2(vs, [vbead, "out/review.txt", "--id", "review", "--kind", "prr"], { FACTORY_SESSION: "ses_a" });
-check("9 re-attesting review as ses_a exits 0", vr.status === 0, `status=${vr.status}`);
-vr = verify(vs, [vbead], { FACTORY_SESSION: "ses_b" });
-check("9 a different session verifying is ok, exit 0",
+console.log("\nverify 9: a genuinely different prr producer is ok");
+vr = attest2(vs, [vbead, "out/review.txt", "--id", "review", "--kind", "prr"], { FACTORY_SESSION: "review-R" });
+check("9 re-attesting the prr by session review-R exits 0", vr.status === 0, `status=${vr.status}`);
+vr = verify(vs, [vbead], { FACTORY_SESSION: "build-B" });
+check("9 a prr whose producer is review-R is ok against the frozen builder, exit 0",
   vr.status === 0 && /^  ok\s+review\s/m.test(vr.stdout), `status=${vr.status} ${vr.stdout}`);
+
+console.log("\nverify 16: a manifest that predates the frozen builder");
+// A manifest written before M1b has no builder_session. With no
+// FACTORY_SESSION there is no second party: not-applicable, as in M1a - and
+// its message must say exactly what is missing. With a session set, the
+// environment remains the comparison point, also as in M1a: independence is
+// asked of the prr's producer against it.
+const legacyRaw = readManifestRaw();
+delete legacyRaw.builder_session;
+writeManifestRaw(legacyRaw);
+vr = verify(vs, [vbead]);
+check("16 no builder session and no FACTORY_SESSION is NOT-APPLICABLE, naming both absences",
+  vr.status === 0 &&
+  /^  NOT-APPLICABLE\s+review\s+.*no builder session recorded and FACTORY_SESSION is not set$/m.test(vr.stdout),
+  `status=${vr.status} ${vr.stdout}`);
+check("16 the not-applicable rung is not a failure",
+  vr.stdout.includes("2 checks, 1 ok, 0 failed"), vr.stdout);
+vr = verify(vs, [vbead], { FACTORY_SESSION: "review-Z" });
+check("16 with FACTORY_SESSION set, a pre-frost manifest still gets checked against it",
+  vr.status === 0 && /^  ok\s+review\s/m.test(vr.stdout), `status=${vr.status} ${vr.stdout}`);
+vr = verify(vs, [vbead], { FACTORY_SESSION: "review-R" });
+const legacyRow = vr.stdout.split("\n").find((l) => /^  INDEPENDENCE\s+review\s/.test(l)) || "";
+check("16 a pre-frost prr whose producer is the env session is still INDEPENDENCE",
+  vr.status === 1 &&
+  /the reviewer session "review-R" is the builder session "review-R"/.test(legacyRow),
+  `status=${vr.status} row=${JSON.stringify(legacyRow)}`);
+// Put the frozen builder back: with build-A on record the review (produced by
+// review-R) is genuinely independent again.
+legacyRaw.builder_session = "build-A";
+writeManifestRaw(legacyRaw);
+vr = verify(vs, [vbead]);
+check("16 restoring the builder session puts the review back at ok",
+  vr.status === 0 && /^  ok\s+review\s/m.test(vr.stdout), `status=${vr.status} ${vr.stdout}`);
+// Reading is validated, not trusted: the same empty builder_session a
+// hand-edit could leave behind must be a loud failure, never a silent default.
+const legacyEmpty = JSON.parse(JSON.stringify(legacyRaw));
+legacyEmpty.builder_session = "";
+writeManifestRaw(legacyEmpty);
+let legacyBad = null;
+try { manifestOf(vs, vbead); } catch (e) { legacyBad = e.message; }
+check("16 an empty builder_session hand-written into the manifest is a loud read",
+  legacyBad !== null && /builder_session/.test(legacyBad), `error=${JSON.stringify(legacyBad)}`);
+writeManifestRaw(legacyRaw);
 
 console.log("\nverify 10: --json");
 vr = verify(vs, [vbead, "--json"]);
@@ -800,6 +865,58 @@ check("tier 2 a prototype bead completes after three",
   protoVerify.parsed.ok === true && protoVerify.parsed.counts.total === 3 &&
   protoVerify.parsed.counts.ok === 3,
   `status=${protoVerify.vr.status} counts=${JSON.stringify(protoVerify.parsed && protoVerify.parsed.counts)}`);
+
+// ---- the builder session is frozen at first write ---------------------------
+
+const bs = makeSandbox();
+const bsBead = makeBead(bs, "frozen builder session");
+mkdirSync(join(bs.sandbox, "out"), { recursive: true });
+writeFileSync(join(bs.sandbox, "out", "a.txt"), "a -> produced\n");
+const firstAttest = attest2(bs, [bsBead, "out/a.txt", "--id", "a", "--kind", "check-output"],
+  { FACTORY_SESSION: "build-A" });
+check("the first attestation records the builder session",
+  firstAttest.status === 0 && manifestOf(bs, bsBead).builder_session === "build-A",
+  `status=${firstAttest.status} builder_session=${JSON.stringify(manifestOf(bs, bsBead).builder_session)}`);
+
+writeFileSync(join(bs.sandbox, "out", "b.txt"), "b -> produced\n");
+const secondAttest = attest2(bs, [bsBead, "out/b.txt", "--id", "b", "--kind", "check-output"],
+  { FACTORY_SESSION: "build-B" });
+check("a later session cannot rewrite the builder session",
+  secondAttest.status === 0 && manifestOf(bs, bsBead).builder_session === "build-A",
+  `status=${secondAttest.status} builder_session=${JSON.stringify(manifestOf(bs, bsBead).builder_session)}`);
+check("the artifact still records which session produced it",
+  secondAttest.status === 0 &&
+  manifestOf(bs, bsBead).artifacts.find((a) => a.id === "b").producer_session === "build-B",
+  `producer_session=${JSON.stringify((manifestOf(bs, bsBead).artifacts.find((a) => a.id === "b") || {}).producer_session)}`);
+
+// An unset FACTORY_SESSION must still freeze something real: the fallback uuid
+// is what the artifact and the manifest share, so "anonymous" is one identity,
+// not a hole.
+const anon = makeSandbox();
+const anonBead = makeBead(anon, "anonymous builder");
+mkdirSync(join(anon.sandbox, "out"), { recursive: true });
+writeFileSync(join(anon.sandbox, "out", "c.txt"), "c -> produced\n");
+const anonAttest = attest2(anon, [anonBead, "out/c.txt", "--id", "c", "--kind", "check-output"]);
+const anonSession = manifestOf(anon, anonBead).builder_session;
+check("an unset FACTORY_SESSION still freezes one real id",
+  anonAttest.status === 0 && /^factory:[0-9a-f-]{36}$/.test(anonSession || "") &&
+  manifestOf(anon, anonBead).artifacts.find((a) => a.id === "c").producer_session === anonSession,
+  `status=${anonAttest.status} builder_session=${JSON.stringify(anonSession)}`);
+
+// Reading is validated, not trusted: an empty builder_session would compare
+// unequal to every reviewer and make self-review look independent.
+const badManifestPath = join(anon.sandbox, ".factory", anonBead, "manifest.json");
+const goodManifest = readFileSync(badManifestPath, "utf8");
+writeFileSync(badManifestPath, JSON.stringify({ version: 1, bead: anonBead, artifacts: [], builder_session: "" }));
+let builderRefusal = null;
+try { manifestOf(anon, anonBead); } catch (e) { builderRefusal = e.message; }
+check("an empty builder_session is a loud read, not a silent default",
+  builderRefusal !== null && /builder_session/.test(builderRefusal),
+  `error=${JSON.stringify(builderRefusal)}`);
+writeFileSync(badManifestPath, goodManifest);
+
+rmSandbox(bs.sandbox);
+rmSandbox(anon.sandbox);
 
 rmSandbox(tierSb.sandbox);
 rmSandbox(protoSb.sandbox);

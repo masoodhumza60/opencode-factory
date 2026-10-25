@@ -149,6 +149,15 @@ export function loadManifest(root, bead) {
       }
     }
   }
+  // The one field that is not an artifact: the session that first touched the
+  // bead. Validated like everything else, because a manifest that says
+  // `builder_session: {}` would compare unequal to every reviewer session and
+  // silently make self-review look independent.
+  if (parsed.builder_session !== undefined &&
+      (typeof parsed.builder_session !== "string" || parsed.builder_session.trim() === "")) {
+    throw new Error(
+      `manifest field "builder_session" at ${path} is ${JSON.stringify(parsed.builder_session)}; expected a non-empty string`);
+  }
   return parsed;
 }
 
@@ -172,6 +181,17 @@ export function upsertArtifact(manifest, artifact) {
   if (i >= 0) manifest.artifacts[i] = artifact;
   else manifest.artifacts.push(artifact);
   return manifest;
+}
+
+// The session that first touched this bead, recorded once and never replaced.
+// Independence is the whole point: a builder that re-runs with a fresh
+// FACTORY_SESSION must not thereby become a different agent from the one that
+// produced the artifacts. Attest is the only writer of artifacts, so every bead
+// that can be graded has this field; verify compares against it, never against
+// whatever the caller's environment says now.
+export function ensureBuilderSession(manifest, session) {
+  if (!manifest.builder_session) manifest.builder_session = session;
+  return manifest.builder_session;
 }
 
 // ---- the append-only trail --------------------------------------------------

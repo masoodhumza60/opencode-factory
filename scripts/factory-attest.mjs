@@ -21,7 +21,7 @@ import { join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   projectRoot, gitHead, sha256File, loadManifest, saveManifest,
-  upsertArtifact, appendTrail,
+  upsertArtifact, appendTrail, ensureBuilderSession,
 } from "./factory-manifest.mjs";
 import { loadPolicy, effectiveChecks, requiredForPhase } from "./factory-policy.mjs";
 
@@ -220,6 +220,7 @@ export function attest(argv) {
   //    name).
   const command = args.command
     ?? (policy ? policy.checks[args.id]?.command ?? null : null);
+  const session = process.env.FACTORY_SESSION || `factory:${randomUUID()}`;
   const artifact = {
     id: args.id,
     kind: args.kind,
@@ -227,13 +228,17 @@ export function attest(argv) {
     sha256: sha256File(abs),
     bytes: stat.size,
     command,
-    producer_session: process.env.FACTORY_SESSION || `factory:${randomUUID()}`,
+    producer_session: session,
     produced_at: new Date().toISOString(),
     commit,
   };
 
   // 8. Upsert by id, so re-attesting replaces in place rather than stacking.
+  //    The builder session is recorded here, once: the same `session` value
+  //    feeds the artifact, so the fallback uuid cannot differ between the two
+  //    and make one run look like two agents.
   const manifest = loadManifest(root, args.bead);
+  ensureBuilderSession(manifest, session);
   upsertArtifact(manifest, artifact);
   saveManifest(root, args.bead, manifest);
 
@@ -320,7 +325,8 @@ function fixCommand(bead, id, check) {
   return cmd;
 }
 
-// One check's ladder: existence, type, hash, freshness, producer. The first
+// One check's ladder: existence, type, hash, freshness, producer, then -
+// for a prr only - independence against the frozen builder session. The first
 // rung that fails is the result - a re-hash says nothing when the file is gone.
 function decide(entry, abs, expectedSha, head) {
   if (!entry) return "missing";
@@ -347,7 +353,13 @@ export function verifyChecks(root, bead, phase, policy) {
   const ids = requiredForPhase(policy, meta, phase);
   const head = gitHead(root);
   const manifest = loadManifest(root, bead);
-  const session = process.env.FACTORY_SESSION;
+  // The builder is the session frozen at the manifest's first write, not
+  // whoever carries FACTORY_SESSION at verify time: a builder that re-runs
+  // verify with a fresh session id must not thereby become independent of
+  // itself. Only when the manifest predates the field and the caller has no
+  // FACTORY_SESSION is there no second party, which is the M1a
+  // not-applicable rung, not a licence.
+  const builder = manifest.builder_session || process.env.FACTORY_SESSION;
 
   const checks = ids.map((id) => {
     const entry = manifest.artifacts.find((a) => a.id === id) || null;
@@ -382,14 +394,24 @@ export function verifyChecks(root, bead, phase, policy) {
     }
 
     // Independence is only ever asked of a verdict artifact: a prr whose
-    // producer is the session now verifying it proves nothing about that
-    // session. No session set at all means there is no second party to
-    // compare against, which is not a failure - it is not applicable.
+    // reviewer is the session that built the bead proves nothing about that
+    // bead. The builder is frozen in the manifest, so the comparison holds
+    // whatever the caller's environment says now - re-labelling the session
+    // after the fact does not launder a self-review. When no builder session
+    // is on record anywhere (manifest predates the field, env unset), there
+    // is no second party: the rung stays not-applicable, exactly as in M1a.
     if (result === "ok" && def.kind === "prr") {
-      if (typeof session !== "string" || session === "") {
+      if (typeof builder !== "string" || builder === "") {
         row.result = "not-applicable";
-      } else if (entry.producer_session === session) {
-        row.result = "independence";
+      } else {
+        const reviewer = entry.reviewer_session ?? entry.producer_session;
+        if (reviewer === builder) {
+          row.result = "independence";
+          // Both names travel on the row so the report and --json can say who
+          // reviewed and who built, not merely that the two collide.
+          row.reviewer_session = reviewer;
+          row.builder_session = builder;
+        }
       }
     }
     return row;
@@ -426,7 +448,7 @@ function rowLine(row, details) {
     case "ok":
       return `${left}  sha256 ${short(row.sha256, 12)}…  commit ${short(row.commit, 7)}…`;
     case "not-applicable":
-      return `${left}  no verdict independence to check: FACTORY_SESSION is not set`;
+      return `${left}  no verdict independence to check: no builder session recorded and FACTORY_SESSION is not set`;
     case "missing":
       return `${left}  no artifact recorded; attest it with: ${row.fix}`;
     case "absent":
@@ -440,13 +462,14 @@ function rowLine(row, details) {
     case "producer":
       return `${left}  no producer session recorded`;
     case "independence":
-      return `${left}  recorded by the same session that is verifying it (${details.session})`;
+      return `${left}  the reviewer session "${short(row.reviewer_session, 40)}" ` +
+        `is the builder session "${short(row.builder_session, 40)}"; the builder cannot review its own bead`;
     default:
       return left;
   }
 }
 
-export function renderVerify(result, details = { onDisk: {}, session: null }) {
+export function renderVerify(result, details = { onDisk: {} }) {
   const where = `verify ${result.bead} phase ${result.phase} (tier ${result.tier}, profile ${result.profile})`;
   const rows = result.checks.map((row) => rowLine(row, details));
   const summary = `${result.counts.total} checks, ${result.counts.ok} ok, ${result.counts.failed} failed`;
@@ -564,11 +587,10 @@ export function runVerify(argv) {
 
   const result = verifyChecks(root, args.bead, phase, policy);
 
-  // The renderer needs two things the frozen shape deliberately does not
-  // carry: the hash currently on disk (to show both sides of a mismatch) and
-  // the session doing the verifying. Derive them here, once, rather than
-  // widening what Task 6 receives.
-  const details = { onDisk: {}, session: process.env.FACTORY_SESSION ?? null };
+  // The renderer needs the hash currently on disk, to show both sides of a
+  // mismatch. Derive it here, once, rather than widening what Task 6
+  // receives.
+  const details = { onDisk: {} };
   for (const row of result.checks) {
     if (row.result === "hash") details.onDisk[row.id] = sha256File(join(root, row.path));
   }
@@ -601,6 +623,8 @@ export function runVerify(argv) {
           sha256: c.sha256,
           commit: c.commit,
           ...(c.recorded_commit === undefined ? {} : { recorded_commit: c.recorded_commit }),
+          ...(c.reviewer_session === undefined ? {} : { reviewer_session: c.reviewer_session }),
+          ...(c.builder_session === undefined ? {} : { builder_session: c.builder_session }),
           head: c.head,
           kind: c.kind,
           fix: c.fix,
