@@ -665,8 +665,9 @@ const phaseCmd = (sb, argv) => phaseRun(sb, argv);
 // The claim phase 5's own --ran gate demands. Copied verbatim from the phase
 // suite so the two suites assert the same contract.
 const RAN_CLAIM = "npm run dev -> 200 OK on GET /health at 2026-10-20T10:00:00Z";
-// Gate A is raised by enter 2 and must be approved before complete 2; Gate B
-// likewise for 3. Approved through the machine, never a raw resolve.
+// G1 is raised by enter 1 and is required by complete 1 when a policy exists;
+// G2a is raised by enter 2 and must be approved before complete 2; G2b likewise
+// for 3. Approved through the machine, never a raw resolve.
 const GATE_LETTER = { "2": "A", "3": "B" };
 const approveGate = (sb, bead, letter) =>
   phaseCmd(sb, ["gate", bead, letter, "--evidence", `the ${letter} gate evidence is on disk and the checklist passed`, "--quiet"]);
@@ -681,6 +682,10 @@ function walkToAttest(sb, title, target) {
     if (Number(p) >= Number(target)) break;
     const entered = phaseCmd(sb, ["enter", bead, p, "--reason", `walk to phase ${p}`, "--quiet"]);
     if (entered.status !== 0) throw new Error(`walkToAttest: enter ${p} failed: ${entered.stdout}${entered.stderr}`);
+    if (p === "1") {
+      const g = approveGate(sb, bead, "G1");
+      if (g.status !== 0) throw new Error(`walkToAttest: gate G1 failed: ${g.stdout}${g.stderr}`);
+    }
     if (p === "2") {
       const g = approveGate(sb, bead, GATE_LETTER[p]);
       if (g.status !== 0) throw new Error(`walkToAttest: gate A failed: ${g.stdout}${g.stderr}`);

@@ -122,15 +122,18 @@ const must = (label, res, okSub) => {
 must("enter 0", phase(["enter", bead, "0", "--reason", "onboarding the walk", "--quiet"]));
 must("complete 0", phase(["complete", bead, "0", "--evidence", "ran bd init and bd ready: a fresh workspace came up with no blockers", "--quiet"]));
 must("enter 1", phase(["enter", bead, "1", "--reason", "walking the cheapest fake-ship path", "--quiet"]));
+// G1 is raised by enter 1. Approve it so the only gate left open below is the
+// spec gate this suite is testing; otherwise the open-gate counts would include it.
+must("approve G1", phase(["gate", bead, "G1", "--evidence", "worth building: one direction survived the cheapest-path probe", "--quiet"]));
 must("complete 1", phase(["complete", bead, "1", "--evidence", "brainstormed the design; 4 directions captured, 1 kept and 3 rejected", "--quiet"]));
 // enter 2 requires a brainstorm artifact on disk; make sure the refusal, when
 // the cases below get one, is about the fake content and not this file.
 const BRAINSTORM = join(SANDBOX, "docs", "superpowers", "brainstorms", "0000-00-00-fake-ship-probe.md");
 mkdirSync(dirname(BRAINSTORM), { recursive: true });
 writeFileSync(BRAINSTORM, "# fake-ship probe brainstorm\n");
-// No --quiet here: the GATE A chatter the assertion needs is suppressed by it
+// No --quiet here: the GATE G2a chatter the assertion needs is suppressed by it
 // (a lesson already paid for in the phase suite).
-must("enter 2 raises GATE A", phase(["enter", bead, "2", "--reason", "the spec is written"]), "GATE A");
+must("enter 2 raises GATE G2a", phase(["enter", bead, "2", "--reason", "the spec is written"]), "GATE G2a");
 
 // ---------------------------------------------------------------- case 2
 // A repeated-letter gate reason: twelve letters, one distinct character. Same
@@ -161,7 +164,7 @@ if (gateId) {
   refused3 = phase(["enter", bead, "3", "--reason", "the gate row says closed, let me into phase 3", "--quiet"]);
 }
 check("case 3: a bare resolve is not an approval - phase 3 stays BLOCKED",
-  !!gateId && resolveCode === 0 && refused3.code === 2 && has(refused3.out, "GATE A is pending"),
+  !!gateId && resolveCode === 0 && refused3.code === 2 && has(refused3.out, "GATE G2a is pending"),
   `gateId=${gateId} resolve=${resolveCode} enter=${refused3.code} ${refused3.out.slice(0, 200)}`);
 
 // ---------------------------------------------------------------- case 4
@@ -251,6 +254,10 @@ function walkTo(b, target) {
     if (Number(p) >= Number(target)) break;
     const entered = phase(["enter", b, p, "--reason", `walk to phase ${p}`, "--quiet"]);
     if (entered.code !== 0) throw new Error(`walkTo: enter ${p} failed: ${entered.out.slice(0, 300)}`);
+    if (p === "1") {
+      const g = approveGate(b, "G1", "worth building: one direction survived and three were rejected");
+      if (g.code !== 0) throw new Error(`walkTo: gate G1 failed: ${g.out.slice(0, 300)}`);
+    }
     const letter = GATE_LETTER[p];
     if (letter) {
       const g = approveGate(b, letter, `the ${letter} gate evidence is on disk and the checklist passed`);

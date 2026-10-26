@@ -91,8 +91,10 @@ function approveGate(bead, letter, why = `the ${letter} gate evidence is on disk
   return phase(["gate", bead, letter, "--evidence", why, "--quiet"]);
 }
 // The gate standing in the way at the end of phase p, as the phase table has
-// it: 2 -> GATE A, 3 -> GATE B. Entering 7 raises GATE C, which walkTo() and
-// the walk loops clear explicitly when they mean to.
+// it: 2 -> GATE G2a, 3 -> GATE G2b. These deliberately use the old letters, so
+// every walk here also exercises the alias path. G1 (phase 1) is approved only
+// where a policy makes it required; G3 is raised by entering 7, which walkTo()
+// and the walk loops clear explicitly when they mean to.
 const GATE_LETTER = { "2": "A", "3": "B" };
 const legalOf = (o) => (o.match(/legal next:.*/) || [""])[0];
 
@@ -162,6 +164,8 @@ r = phase(["complete", bead, "0", "--evidence", "bd init; graft build 9/9", "--q
 check("completing 0 succeeds", r.code === 0, r.out);
 r = phase(["enter", bead, "1", "--reason", "onboard complete", "--quiet"]);
 check("entering 1 is allowed once 0 is complete", r.code === 0, r.out);
+check("entering 1 creates the policy-gated G1", has(bd(["show", bead, "--json"]).out, "gate_g1"), "gate_g1 missing");
+approveGate(bead, "G1");
 r = phase(["complete", bead, "1", "--evidence", "ran the rollback walk; the state was cleared and re-entered clean", "--quiet"]);
 check("completing 1 returns the bead to a walkable state", r.code === 0, r.out);
 
@@ -207,21 +211,21 @@ if (u) {
   check("could create a bead for the unfinished-phase test", false, "newBead returned nothing");
 }
 
-console.log("\nphase 2 creates GATE A and blocks phase 3");
+console.log("\nphase 2 creates GATE G2a and blocks phase 3");
 // Phase 1 was entered AND completed above, so the successor is legal here.
 // No --quiet here: this test asserts on the gate being created and reported.
 r = phase(["enter", bead, "2", "--reason", "spec written"]);
-check("entering 2 succeeds and creates GATE A", r.code === 0 && has(r.out, "GATE A created"), r.out);
+check("entering 2 succeeds and creates GATE G2a", r.code === 0 && has(r.out, "GATE G2a created"), r.out);
 
 r = phase(["next", bead, "--quiet"]);
-check("next reports 3 blocked by GATE A", has(r.out, "3 (GATE A pending)"), r.out);
+check("next reports 3 blocked by GATE G2a", has(r.out, "3 (GATE G2a pending)"), r.out);
 check("blocked next exits 2", r.code === 2, `code ${r.code}`);
 
 r = phase(["enter", bead, "3", "--reason", "planning", "--quiet"]);
-check("entering 3 while GATE A pending is BLOCKED", r.code === 2 && has(r.out, "GATE A is pending"), r.out);
+check("entering 3 while GATE G2a pending is BLOCKED", r.code === 2 && has(r.out, "GATE G2a is pending"), r.out);
 
 r = phase(["status", bead, "--quiet"]);
-check("status shows GATE A pending", has(r.out, "A PENDING"), r.out);
+check("status shows GATE G2a pending", has(r.out, "G2a PENDING"), r.out);
 
 const gates = bd(["gate", "list", "--all", "--json"]);
 const gateId = (() => {
@@ -234,18 +238,18 @@ const gateId = (() => {
 check("gate id was recorded", !!gateId, gates.out.slice(0, 200));
 
 if (gateId) {
-  // GATE A was raised by enter 2; clearing it through the machine (approveGate,
+  // GATE G2a was raised by enter 2; clearing it through the machine (approveGate,
   // not a raw resolve) so the setup matches the semantics it is walking under.
   approveGate(bead, "A");
-  r = phase(["complete", bead, "2", "--evidence", "spec approved at GATE A", "--quiet"]);
-  check("completing 2 after GATE A resolves succeeds", r.code === 0, r.out);
-  r = phase(["enter", bead, "3", "--reason", "gate A approved", "--quiet"]);
-  check("after resolving GATE A, entering 3 succeeds", r.code === 0, r.out);
+  r = phase(["complete", bead, "2", "--evidence", "spec approved at GATE G2a", "--quiet"]);
+  check("completing 2 after GATE G2a resolves succeeds", r.code === 0, r.out);
+  r = phase(["enter", bead, "3", "--reason", "gate G2a approved", "--quiet"]);
+  check("after resolving GATE G2a, entering 3 succeeds", r.code === 0, r.out);
 }
 
-console.log("\nphase 3 creates GATE B and blocks implementation");
+console.log("\nphase 3 creates GATE G2b and blocks implementation");
 r = phase(["enter", bead, "4", "--reason", "writing code", "--quiet"]);
-check("entering 4 while GATE B pending is BLOCKED", r.code === 2 && has(r.out, "GATE B is pending"), r.out);
+check("entering 4 while GATE G2b pending is BLOCKED", r.code === 2 && has(r.out, "GATE G2b is pending"), r.out);
 
 const gates2 = bd(["gate", "list", "--all", "--json"]);
 const g2 = (() => {
@@ -261,8 +265,8 @@ const g2 = (() => {
 if (g2) approveGate(bead, "B");
 r = phase(["complete", bead, "3", "--evidence", "plan.md + plan.json applied", "--quiet"]);
 check("completing 3 succeeds", r.code === 0, r.out);
-r = phase(["enter", bead, "4", "--reason", "gate B approved", "--quiet"]);
-check("after resolving GATE B, entering 4 succeeds", r.code === 0, r.out);
+r = phase(["enter", bead, "4", "--reason", "gate G2b approved", "--quiet"]);
+check("after resolving GATE G2b, entering 4 succeeds", r.code === 0, r.out);
 
 console.log("\ncompletion is evidence-gated");
 r = phase(["complete", bead, "4", "--quiet"]);
@@ -507,11 +511,12 @@ function intoVerify(title) {
 }
 
 // Walk a fresh bead to `target`, resolving exactly the gates that stand in the
-// way: Gate A before completing phase 2, Gate B before completing phase 3.
-// Gate C is created by enter 7 and is deliberately left open.
+// way: G1 before completing phase 1 (only required when a policy exists, but
+// harmless otherwise), G2a before completing phase 2, G2b before completing
+// phase 3. G3 is created by enter 7 and is deliberately left open.
 // Resolve ONLY the named gate for the phase standing in the way (see
 // approveGate / GATE_LETTER above): a "first open gate anywhere in the
-// database" resolve would also clear Gate C before complete 7 ever runs.
+// database" resolve would also clear Gate G3 before complete 7 ever runs.
 function walkTo(title, target, prep) {
   const b = newBead(title);
   if (!b) throw new Error(`walkTo: could not create bead for "${title}"`);
@@ -519,6 +524,10 @@ function walkTo(title, target, prep) {
     if (Number(p) >= Number(target)) break;
     const entered = phase(["enter", b, p, "--reason", `walk to phase ${p}`, "--quiet"]);
     if (entered.code !== 0) throw new Error(`walkTo: enter ${p} failed: ${entered.out.slice(0, 300)}`);
+    if (p === "1") {
+      const g = phase(["gate", b, "G1", "--evidence", "worth building: one direction survived the brainstorm and three were rejected", "--quiet"]);
+      if (g.code !== 0) throw new Error(`walkTo: gate G1 failed: ${g.out.slice(0, 300)}`);
+    }
     if (p === "2") {
       const g = phase(["gate", b, "A", "--evidence", "the spec and the design direction are settled and written down", "--quiet"]);
       if (g.code !== 0) throw new Error(`walkTo: gate A failed: ${g.out.slice(0, 300)}`);
@@ -685,6 +694,7 @@ if (badBead) {
     // That asymmetry is the reason both halves exist, so the setup now asserts
     // it worked rather than leaving the next reader to infer it.
     phase(["enter", bead, "1", "--reason", "gate command test", "--quiet"]);
+    approveGate(bead, "G1");
     phase(["complete", bead, "1", "--evidence", "the gate-command test's own setup", "--quiet"]);
 
     const entered = phase(["enter", bead, "2", "--reason", "gate command test", "--quiet"]);
@@ -709,6 +719,11 @@ if (badBead) {
 
     let r = phase(["gate", bead, "D", "--evidence", "a genuine reason with plenty of detail"]);
     check("an unknown gate letter is REFUSED", r.code !== 0 && has(r.out, "unknown gate"), r.out.slice(0, 140));
+    check(
+      "the unknown-gate refusal names the canonical ids and the aliases",
+      has(r.out, 'unknown gate "D"; accepted: G1, G2a, G2b, G3 (A, B and C are aliases)'),
+      r.out.slice(0, 220)
+    );
 
     r = phase(["gate", bead, "A"]);
     check("a gate with no evidence is REFUSED", r.code !== 0 && has(r.out, "not informative"), r.out.slice(0, 140));
@@ -735,13 +750,13 @@ if (badBead) {
     r = phase(["gate", bead, "A", "--evidence", 'the CSV header is fixed as "id,total"']);
     check("a double quote is REFUSED before bd ever sees it", r.code !== 0 && has(r.out, "double quote"), r.out.slice(0, 170));
 
-    // The claim the last assertion makes - "which only a resolved GATE A
+    // The claim the last assertion makes - "which only a resolved GATE G2a
     // allows" - is only actually tested by attempting it while the gate is
     // still pending. Phase 2 is completed by now, so the gate is the only thing
     // standing in the way, and without this the final assertion proves nothing
     // about gates at all.
     r = phase(["enter", bead, "3", "--reason", "trying to skip the gate", "--quiet"]);
-    check("phase 3 is REFUSED while GATE A is still pending", r.code !== 0, r.out.slice(0, 200));
+    check("phase 3 is REFUSED while GATE G2a is still pending", r.code !== 0, r.out.slice(0, 200));
 
     r = phase(["gate", bead, "A", "--evidence", "the CSV contract is settled: six columns, CRLF separators, no BOM"]);
     check("a real reason RESOLVES the gate", r.code === 0 && has(r.out, "resolved"), r.out.slice(0, 170));
@@ -750,18 +765,90 @@ if (badBead) {
     // from bd's JSON shape - guessing a field name is how an assertion passes for
     // the wrong reason.
     r = phase(["gate", bead, "A", "--evidence", "trying twice, with a genuinely detailed reason this time"]);
-    check("resolving it again is REFUSED as not pending", r.code !== 0 && has(r.out, "no A gate is pending"), r.out.slice(0, 170));
+    check("resolving it again is REFUSED as not pending", r.code !== 0 && has(r.out, "no G2a gate is pending"), r.out.slice(0, 170));
 
-    r = phase(["enter", bead, "3", "--reason", "gate A resolved for real", "--quiet"]);
-    check("and phase 3 now opens, which only a resolved GATE A allows", r.code === 0, r.out.slice(0, 140));
+    r = phase(["enter", bead, "3", "--reason", "gate G2a resolved for real", "--quiet"]);
+    check("and phase 3 now opens, which only a resolved GATE G2a allows", r.code === 0, r.out.slice(0, 140));
 
-    // Entering 3 raised GATE B on the same walk, and it is still pending here, so
-    // the accept side can be proved without disturbing the resolve chain above.
+    // Entering 3 raised GATE G2b on the same walk, and it is still pending here,
+    // so the accept side can be proved without disturbing the resolve chain above.
     // The reason must clear the same floor the refusals enforced: it would be no
-    // test if the machine accepted evidence it refuses elsewhere.
-    r = phase(["gate", bead, "B", "--evidence", "the spec is settled: six columns, CRLF, no BOM"]);
+    // test if the machine accepted evidence it refuses elsewhere. The canonical
+    // spelling is used here so both spellings are exercised against real gates.
+    r = phase(["gate", bead, "G2b", "--evidence", "the spec is settled: six columns, CRLF, no BOM"]);
     check("a factual reason that clears the floor is ACCEPTED", r.code === 0 && has(r.out, "resolved"), r.out.slice(0, 170));
   }
+
+// The old letters and the canonical ids have to be two spellings of one gate,
+// not two gates. Both walks write the same gate_a dimension, and an approval
+// made with either spelling satisfies the check the machine actually enforces
+// (enter 3 requires G2a).
+console.log("\nold gate letters are aliases for the canonical ids");
+{
+  const metaOf = (b, key) => {
+    try {
+      const rows = JSON.parse(bd(["show", b, "--json"]).out);
+      const row = Array.isArray(rows) ? rows[0] : rows;
+      return (row && row.metadata && row.metadata[key]) || null;
+    } catch { return null; }
+  };
+  const viaLetter = newBead("gate alias via letter");
+  const viaCanonical = newBead("gate alias via canonical");
+  for (const b of [viaLetter, viaCanonical]) {
+    phase(["enter", b, "0", "--reason", "alias walk", "--quiet"]);
+    phase(["complete", b, "0", "--evidence", "onboarded the alias walk; bd ready came up clean", "--quiet"]);
+    phase(["enter", b, "1", "--reason", "alias walk", "--quiet"]);
+    approveGate(b, "G1");
+    phase(["complete", b, "1", "--evidence", "brainstormed the design; four directions, one kept", "--quiet"]);
+    phase(["enter", b, "2", "--reason", "alias walk", "--quiet"]);
+  }
+
+  const byLetter = approveGate(viaLetter, "A");
+  const byCanonical = approveGate(viaCanonical, "G2a");
+  check("gate A resolves the canonical G2a gate", byLetter.code === 0 && has(byLetter.out, "gate G2a resolved"), byLetter.out.slice(0, 200));
+  check("gate G2a resolves the same gate", byCanonical.code === 0 && has(byCanonical.out, "gate G2a resolved"), byCanonical.out.slice(0, 200));
+
+  const letterDim = metaOf(viaLetter, "gate_a");
+  const canonicalDim = metaOf(viaCanonical, "gate_a");
+  check("both spellings write the gate_a dimension", Boolean(letterDim) && Boolean(canonicalDim),
+    `gate_a via A=${letterDim} via G2a=${canonicalDim}`);
+  check("no separate G2a dimension was invented", !metaOf(viaLetter, "gate_G2a") && !metaOf(viaLetter, "gate_g2a"),
+    JSON.stringify([metaOf(viaLetter, "gate_G2a"), metaOf(viaLetter, "gate_g2a")]));
+
+  const satisfied = [viaLetter, viaCanonical].map((b) => {
+    phase(["complete", b, "2", "--evidence", "the spec is written; three sections and one open question", "--quiet"]);
+    return phase(["enter", b, "3", "--reason", "alias approval opened the phase", "--quiet"]);
+  });
+  check("an approval by either spelling satisfies the G2a check",
+    satisfied.every((s) => s.code === 0),
+    satisfied.map((s) => `${s.code}: ${s.out.slice(0, 140)}`).join(" | "));
+}
+
+console.log("\nthe gate listing shows four canonical gates, once each");
+{
+  const b = newBead("gate listing");
+  let created = 0;
+  for (const key of ["gate_g1", "gate_a", "gate_b", "gate_c"]) {
+    const res = bd(["gate", "create", "--type=human", "--blocks", b, "--reason", `listing probe: ${key}`]);
+    const id = (res.out.match(/Created gate\s+(\S+)/) || [])[1];
+    if (!id) continue;
+    bd(["update", b, "--set-metadata", `${key}=${id}`]);
+    created++;
+  }
+  check("all four gate records were created for the listing", created === 4, `created=${created}`);
+
+  const st = phase(["status", b, "--json"]);
+  let j = {};
+  try { j = JSON.parse(st.out); } catch { /* assertion below reports the raw output */ }
+  const pending = j.gates_pending || [];
+  check("status lists G1, G2a, G2b and G3 exactly once",
+    JSON.stringify(pending) === JSON.stringify(["G1", "G2a", "G2b", "G3"]), JSON.stringify(pending));
+
+  const text = phase(["status", b, "--quiet"]).out;
+  check("the human-readable listing has no duplicate gate",
+    ["G1", "G2a", "G2b", "G3"].every((g) => (text.split(`${g} PENDING`).length - 1) === 1),
+    text.slice(0, 300));
+}
 
 console.log("\nthe gate list cannot fail open");
 {
@@ -794,6 +881,7 @@ console.log("\na gate that cannot be recorded does not leave the bead stuck");
 {
   const b = newBead("gate record failure");
   phase(["enter", b, "1", "--reason", "setup the failure case", "--quiet"]);
+  approveGate(b, "G1");
   phase(["complete", b, "1", "--evidence", "setup complete and verified", "--quiet"]);
 
   const gatesOf = () => {
@@ -832,7 +920,7 @@ console.log("\na gate that cannot be recorded does not leave the bead stuck");
   const retry = phase(["enter", b, "2", "--reason", "the spec is written and settled"]);
   check(
     "the retry records a gate id and enters phase 2",
-    retry.code === 0 && has(retry.out, "GATE A created"),
+    retry.code === 0 && has(retry.out, "GATE G2a created"),
     retry.out.slice(0, 240)
   );
 }
@@ -866,14 +954,14 @@ console.log("\nship cannot complete while Gate C is open");
   const stJson = (() => { try { return JSON.parse(st.out); } catch { return {}; } })();
   check(
     "the walk really reached phase 7 with Gate C open, so the refusal below means something",
-    String(stJson.phase) === "7" && (stJson.gates_pending || []).includes("C"),
+    String(stJson.phase) === "7" && (stJson.gates_pending || []).includes("G3"),
     st.out.slice(0, 240)
   );
 
   const refused = phase(["complete", b, "7", "--evidence", "deployed and smoke-tested; 200 on /health", "--quiet"]);
   check(
     "complete 7 REFUSES while Gate C is pending",
-    refused.code === 2 && has(refused.out, "GATE C is pending"),
+    refused.code === 2 && has(refused.out, "GATE G3 is pending"),
     `${refused.code} ${refused.out.slice(0, 200)}`
   );
 
@@ -944,6 +1032,12 @@ console.log("\na gate resolved outside the machine is not an approval");
       ? phase([cmd, b, p, "--reason", ev, "--quiet"])
       : phase([cmd, b, p, "--evidence", ev, "--quiet"]);
     if (r.code !== 0) throw new Error(`setup failed at ${cmd} ${p}: ${r.out.slice(0, 300)}`);
+    // G1 is raised by enter 1. Approve it so the first open gate left below is
+    // G2a, which is the gate this block means to close by hand.
+    if (cmd === "enter" && p === "1") {
+      const g1 = approveGate(b, "G1");
+      if (g1.code !== 0) throw new Error(`setup failed approving G1: ${g1.out.slice(0, 300)}`);
+    }
   }
 
   const rows = JSON.parse(bd(["gate", "list", b, "--all", "--json"]).out);
@@ -961,7 +1055,7 @@ console.log("\na gate resolved outside the machine is not an approval");
   const refused = phase(["enter", b, "3", "--reason", "skipping the gate", "--quiet"]);
   check(
     "a gate resolved with no reason is still PENDING",
-    refused.code === 2 && has(refused.out, "GATE A is pending"),
+    refused.code === 2 && has(refused.out, "GATE G2a is pending"),
     `${refused.code} ${refused.out.slice(0, 200)}`
   );
 
@@ -984,7 +1078,7 @@ console.log("\na bead with no Gate C record cannot complete ship");
   const refused = phase(["complete", b, "7", "--evidence", "deployed and smoke-tested; 200 on /health", "--quiet"]);
   check(
     "complete 7 REFUSES when no Gate C id was ever recorded",
-    refused.code === 1 && has(refused.out, "GATE C has no recorded gate id"),
+    refused.code === 1 && has(refused.out, "GATE G3 has no recorded gate id"),
     `${refused.code} ${refused.out.slice(0, 220)}`
   );
 
@@ -994,6 +1088,17 @@ console.log("\na bead with no Gate C record cannot complete ship");
   check("the factory can backfill and approve Gate C on that bead", gate.code === 0, gate.out.slice(0, 220));
   const shipped = phase(["complete", b, "7", "--evidence", "deployed and smoke-tested; 200 on /health", "--quiet"]);
   check("the same bead completes 7 once Gate C is recorded and approved", shipped.code === 0, shipped.out.slice(0, 220));
+}
+
+// G1 is policy-gated: without config/factory.policy.yaml, phase 1 completes
+// exactly as it did in M0, even on a legacy bead that never recorded a gate id.
+console.log("\nphase 1 needs no G1 record without a policy");
+{
+  const b = newBead("phase 1 without policy");
+  const set = bd(["set-state", b, "phase=1"]);
+  check("could put a bead in phase 1 with no G1 record", set.code === 0, set.out.slice(0, 160));
+  const done = phase(["complete", b, "1", "--evidence", "brainstormed the design; four directions, one kept", "--quiet"]);
+  check("complete 1 passes with no policy and no G1 record", done.code === 0, done.out.slice(0, 200));
 }
 
 // ---- policy-driven completion ------------------------------------------------
@@ -1035,6 +1140,23 @@ writeFileSync(policyArtifact, "200 OK\n");
     "    command: npm test",
     "",
   ].join("\n"));
+
+  // With a policy present, G1 stops being advisory: the phase that asks "is
+  // this worth building" cannot be completed while the answer is still pending.
+  const g1bead = newBead("policy requires G1");
+  phase(["enter", g1bead, "0", "--reason", "walk to the G1 check", "--quiet"]);
+  phase(["complete", g1bead, "0", "--evidence", "onboarded the G1 check; bd ready came up clean", "--quiet"]);
+  phase(["enter", g1bead, "1", "--reason", "walk to the G1 check", "--quiet"]);
+  const noG1 = phase(["complete", g1bead, "1", "--evidence", "brainstorm written; four directions, one kept", "--quiet"]);
+  check(
+    "complete 1 under a policy REFUSES while G1 is pending",
+    noG1.code === 2 && has(noG1.out, "GATE G1 is pending") && has(noG1.out, `factory-phase gate ${g1bead} G1`),
+    `${noG1.code} ${noG1.out.slice(0, 260)}`
+  );
+  const approvedG1 = approveGate(g1bead, "G1");
+  check("approving G1 succeeds", approvedG1.code === 0, approvedG1.out.slice(0, 160));
+  const withG1 = phase(["complete", g1bead, "1", "--evidence", "brainstorm written; four directions, one kept", "--quiet"]);
+  check("the same bead completes 1 once G1 is approved", withG1.code === 0, withG1.out.slice(0, 200));
 
   const p1 = walkTo("policy-missing", "5");
   const missing = phase(["complete", p1, "5", "--evidence", "the artifact is supposedly verified and on disk",
