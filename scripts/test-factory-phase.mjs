@@ -512,7 +512,7 @@ function intoVerify(title) {
 // Resolve ONLY the named gate for the phase standing in the way (see
 // approveGate / GATE_LETTER above): a "first open gate anywhere in the
 // database" resolve would also clear Gate C before complete 7 ever runs.
-function walkTo(title, target) {
+function walkTo(title, target, prep) {
   const b = newBead(title);
   if (!b) throw new Error(`walkTo: could not create bead for "${title}"`);
   for (const p of ["0", "1", "2", "3", "4", "5", "6"]) {
@@ -527,6 +527,7 @@ function walkTo(title, target) {
       const g = phase(["gate", b, "B", "--evidence", "the plan names every file to change and every test that proves it", "--quiet"]);
       if (g.code !== 0) throw new Error(`walkTo: gate B failed: ${g.out.slice(0, 300)}`);
     }
+    if (p === "5" && prep) prep(b);
     const done = completePhase(b, p, `phase ${p} ran its checks and they passed`);
     if (done.code !== 0) throw new Error(`walkTo: complete ${p} failed: ${done.out.slice(0, 300)}`);
   }
@@ -1091,6 +1092,95 @@ writeFileSync(policyArtifact, "200 OK\n");
     "the same policy REFUSES completion from a subdirectory",
     subCode === 1 && has(subOut, "MISSING run"),
     `${subCode} ${subOut.slice(0, 300)}`
+  );
+}
+
+// ---- ship acceptance and the outcome record ---------------------------------
+// A passing review is not an acceptance, and completing a phase is not
+// accepting its output. These drive the real writers (factory-review record and
+// accept) rather than a hand-written fixture, so a drift in either shape fails
+// here too.
+console.log("\nship acceptance and the outcome record");
+
+const reviewCli = join(HERE, "factory-review.mjs");
+const review = (args, env = {}) => run(process.execPath, [reviewCli, ...args], { BEADS_DIR: BEADS, ...env });
+
+function shipBead(title, file) {
+  // The policy block installs a phase-5 `run` check before this block runs, so
+  // the walk must satisfy it or complete 5 refuses. run.txt already exists in
+  // the sandbox from that block; attest it for this bead, then let walkTo
+  // complete phase 5 normally.
+  const b = walkTo(title, "7", (bead) => {
+    const a = run(process.execPath,
+      [join(HERE, "factory-attest.mjs"), "attest", bead, "run.txt", "--id", "run", "--kind", "transcript", "--command", "npm test"],
+      { BEADS_DIR: BEADS, FACTORY_SESSION: "build:1" });
+    if (a.code !== 0) throw new Error(`attest run for ${bead} failed: ${a.out.slice(0, 300)}`);
+  });
+  approveGate(b, "C");
+  writeFileSync(join(SANDBOX, file), "ok\n");
+  // No second attestation here: the policy declares only the `run` check, and
+  // attest refuses an id the policy does not declare. The `run` attestation in
+  // the prep already froze the builder session, which is all the acceptance
+  // checks need. complete 7 has no policy checks of its own.
+  return b;
+}
+
+function acceptedReview(b, verdict = "pass") {
+  const started = review(["start", b]);
+  if (started.code !== 0) throw new Error(`review start for ${b} failed: ${started.out.slice(0, 300)}`);
+  writeFileSync(join(SANDBOX, ".factory", b, "review-1.md"), `# Review\n\nVerdict: ${verdict}\n`);
+  const rec = review(["record", b, "--file", `.factory/${b}/review-1.md`, "--verdict", verdict],
+    { FACTORY_ROLE: "reviewer", FACTORY_SESSION: "review:1" });
+  if (rec.code !== 0) throw new Error(`review record for ${b} failed: ${rec.out.slice(0, 300)}`);
+  return review(["accept", b, "--note", "read the diff and the run"],
+    { FACTORY_ROLE: "human", FACTORY_SESSION: "human:1" });
+}
+
+{
+  const p7 = shipBead("ship without acceptance", "ship.txt");
+  const noAcc = phase(["complete", p7, "7", "--evidence", "the build is done and the review passed", "--quiet"]);
+  check(
+    "shipping without a human acceptance REFUSES",
+    noAcc.code === 1 && has(noAcc.out, "acceptance.json") && has(noAcc.out, "factory-review.mjs accept"),
+    `${noAcc.code} ${noAcc.out.slice(0, 300)}`
+  );
+
+  const acc = acceptedReview(p7);
+  check(
+    "a separate reviewer and a human can accept the bead",
+    acc.code === 0 && existsSync(join(SANDBOX, ".factory", p7, "acceptance.json")),
+    `${acc.code} ${acc.out.slice(0, 200)}`
+  );
+
+  const shipped = phase(["complete", p7, "7", "--evidence", "the review passed and a human accepted it", "--quiet"]);
+  check("ship completes once a human has accepted", shipped.code === 0, `${shipped.code} ${shipped.out.slice(0, 300)}`);
+
+  const entered8 = phase(["enter", p7, "8", "--reason", "close the run", "--quiet"]);
+  check("the accepted bead can enter close", entered8.code === 0, entered8.out.slice(0, 200));
+  const noOutcome = phase(["complete", p7, "8", "--evidence", "the run is closed", "--quiet"]);
+  check(
+    "closing without an outcome record REFUSES",
+    noOutcome.code === 1 && has(noOutcome.out, "outcome.md"),
+    `${noOutcome.code} ${noOutcome.out.slice(0, 300)}`
+  );
+  writeFileSync(join(SANDBOX, ".factory", p7, "outcome.md"), [
+    "# Outcome", "", "## What changed", "", "The feature shipped.", "",
+    "## Measured before / after", "", "p95 420ms -> 210ms.", "",
+  ].join("\n"));
+  const closed = phase(["complete", p7, "8", "--evidence", "the outcome is written down", "--quiet"]);
+  check("closing succeeds once the outcome record exists", closed.code === 0, `${closed.code} ${closed.out.slice(0, 300)}`);
+}
+
+{
+  const p7b = shipBead("ship after a late edit", "ship2.txt");
+  const acc = acceptedReview(p7b);
+  if (acc.code !== 0) throw new Error(`accept for ${p7b} failed: ${acc.out.slice(0, 300)}`);
+  appendFileSync(join(SANDBOX, ".factory", p7b, "review-1.md"), "\nAdded after the human read it.\n");
+  const late = phase(["complete", p7b, "7", "--evidence", "the review was accepted before this edit", "--quiet"]);
+  check(
+    "a verdict edited after acceptance REFUSES ship",
+    late.code === 1 && has(late.out, "verdict file changed after review"),
+    `${late.code} ${late.out.slice(0, 300)}`
   );
 }
 

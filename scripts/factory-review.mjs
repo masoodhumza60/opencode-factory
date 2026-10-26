@@ -589,6 +589,68 @@ function saveAcceptance(root, bead, acceptance) {
   renameSync(tmp, path);
 }
 
+// The checks `accept` applies at write time, re-run at ship time. An acceptance
+// is a claim about a review, and the claim decays if the verdict file, the
+// manifest or the commit moved since. `complete` calls this instead of trusting
+// the file, so a hand-written acceptance.json is only a wrong claim.
+export function acceptanceProblems(root, bead) {
+  const path = acceptancePath(root, bead);
+  if (!existsSync(path)) {
+    return [`no acceptance recorded at .factory/${bead}/acceptance.json`];
+  }
+  let acc;
+  try {
+    acc = JSON.parse(readFileSync(path, "utf8"));
+  } catch (e) {
+    return [`acceptance.json is not valid JSON: ${e.message}`];
+  }
+  if (!acc || typeof acc !== "object" || Array.isArray(acc)) {
+    return ["acceptance.json is not an object"];
+  }
+
+  const problems = [];
+  if (acc.version !== 1) problems.push(`acceptance.json version is ${JSON.stringify(acc.version)}; expected 1`);
+  if (acc.bead !== bead) problems.push(`acceptance.json is for ${JSON.stringify(acc.bead)}, not "${bead}"`);
+  if (acc.role !== "human") problems.push(`acceptance.json was written by role ${JSON.stringify(acc.role)}; only a human may accept`);
+  if (acc.verdict !== "pass") problems.push(`acceptance.json records verdict ${JSON.stringify(acc.verdict)}; only a passing review can be accepted`);
+  if (typeof acc.accepted_by !== "string" || acc.accepted_by.trim() === "") {
+    problems.push("acceptance.json does not say who accepted it (accepted_by)");
+  }
+
+  const manifest = loadManifest(root, bead);
+  const artifact = (manifest.artifacts || []).find((a) => a.id === "review");
+  if (!artifact) {
+    problems.push("the manifest records no review artifact");
+    return problems;
+  }
+  if (artifact.kind !== "prr") problems.push(`the review artifact has kind ${JSON.stringify(artifact.kind)}; expected prr`);
+  if (artifact.verdict !== "pass") problems.push(`the review artifact records verdict ${JSON.stringify(artifact.verdict)}; expected pass`);
+  const reviewer = artifact.reviewer_session ?? artifact.producer_session;
+  const builder = manifest.builder_session;
+  if (typeof reviewer !== "string" || reviewer.trim() === "") {
+    problems.push("the review artifact names no reviewer session");
+  } else if (!builder) {
+    problems.push("the manifest records no builder_session; the reviewer cannot be proven independent");
+  } else if (reviewer === builder) {
+    problems.push(`the reviewer session "${reviewer}" is the builder session`);
+  }
+  if (acc.verdict_sha256 !== artifact.sha256) {
+    problems.push("acceptance.json names a different verdict file than the manifest's review artifact");
+  } else {
+    const file = artifact.path ? join(root, artifact.path) : null;
+    if (!file || !existsSync(file)) {
+      problems.push(`the verdict file ${artifact.path ?? "<no path>"} is gone; run factory-review record again`);
+    } else if (sha256File(file) !== artifact.sha256) {
+      problems.push("the verdict file changed after review; run factory-review record again");
+    }
+  }
+  const head = gitHead(root);
+  if (acc.commit !== head) {
+    problems.push(`the code moved after acceptance: accepted at ${acc.commit ?? "<no commit>"}, now ${head ?? "<no commit>"}`);
+  }
+  return problems;
+}
+
 export function accept(argv) {
   const { values, positional } = parseFlags(argv, ACCEPT_FLAGS, ACCEPT_USAGE);
   const bead = beadOf(positional);

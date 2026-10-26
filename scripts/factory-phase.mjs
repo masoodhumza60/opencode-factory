@@ -22,7 +22,7 @@
 // start implementing.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 // The mechanical half of completion. factory-manifest and factory-policy import
 // nothing from this file, so there is no cycle: the phase machine is free to
@@ -30,6 +30,9 @@ import { dirname, join, resolve } from "node:path";
 import { appendTrail, isWorkspaceBeads } from "./factory-manifest.mjs";
 import { loadPolicy } from "./factory-policy.mjs";
 import { verifyChecks } from "./factory-attest.mjs";
+// One definition of "is this acceptance still true", shared with the writer, so
+// the ship gate cannot drift from what `review accept` checked.
+import { acceptanceProblems } from "./factory-review.mjs";
 
 const PHASES = [
   { id: "0", name: "onboard", gate: null },
@@ -885,6 +888,31 @@ function cmdGate(bead, which, evidence) {
   });
 }
 
+// G4 asks one question and checks only that the answer exists: did it work, and
+// what changes next time. The content is judged by a human later; a missing
+// record is a refusal, not a warning.
+function outcomeProblems(root, bead) {
+  const rel = `.factory/${bead}/outcome.md`;
+  const path = join(root, rel);
+  if (!existsSync(path)) return [`no outcome record at ${rel}`];
+  let text;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch (e) {
+    return [`${rel} cannot be read: ${e.message}`];
+  }
+  const problems = [];
+  if (text.trim() === "") problems.push(`${rel} is empty`);
+  if (!/^##\s+What changed\s*$/im.test(text)) {
+    problems.push(`${rel} has no "## What changed" section`);
+  }
+  const measured = /^##\s+Measured before\s*\/\s*after\s*$/im.test(text) || /^Not measurable:/im.test(text);
+  if (!measured) {
+    problems.push(`${rel} has no "## Measured before / after" section and no "Not measurable: <why>" line`);
+  }
+  return problems;
+}
+
 function cmdComplete(bead, target, evidence, ranArg, artifactArg) {
   if (!byId.has(target)) throw new Illegal(`unknown phase "${target}"`);
   const thinEvidence = uninformativeEvidence(evidence);
@@ -1000,6 +1028,32 @@ function cmdComplete(bead, target, evidence, ranArg, artifactArg) {
         failed.map((r) => `  ${r.result.toUpperCase()} ${r.id} - ${r.detail || "see factory-attest verify"}`).join("\n") +
         `\nRecord them with:\n` +
         failed.map((r) => `  ${r.fix}`).join("\n")
+      );
+    }
+
+    // A green evidence set is not an acceptance, and closing is not shipping.
+    // Both records are checked here, after the artifacts and before the state
+    // write, so a refusal leaves phase_done untouched like every other refusal.
+    const problems = target === "7" ? acceptanceProblems(policyRoot, bead)
+      : target === "8" ? outcomeProblems(policyRoot, bead)
+      : [];
+    if (problems.length) {
+      appendTrail(policyRoot, bead, {
+        event: "refusal",
+        command: "complete",
+        phase: String(target),
+        problems,
+      });
+      throw new Illegal(
+        target === "7"
+          ? `phase 7 (ship) needs a human acceptance at .factory/${bead}/acceptance.json:\n` +
+            problems.map((p) => `  ${p}`).join("\n") +
+            `\nA passing review is not an acceptance. Record one with:\n` +
+            `  FACTORY_ROLE=reviewer FACTORY_SESSION=review:<you> node scripts/factory-review.mjs record ${bead} --file .factory/${bead}/review.md --verdict pass\n` +
+            `  FACTORY_ROLE=human FACTORY_SESSION=human:<you> node scripts/factory-review.mjs accept ${bead} --note "<what you read>"`
+          : `phase 8 (close) needs an outcome record at .factory/${bead}/outcome.md (G4):\n` +
+            problems.map((p) => `  ${p}`).join("\n") +
+            `\nWrite what changed and what it measured, before and after.`
       );
     }
   }
