@@ -4,16 +4,19 @@
 // being the builder twice. This module makes the second voice a named, separate
 // session with exactly one write: its verdict.
 //
-// Three commands:
-//   start  - turn the evidence into a package a reviewer can read in one sitting
-//   record - take the verdict, after checking the reviewer is not the builder
-//   show   - print what was recorded and whether it still holds
+// Five commands:
+//   start    - turn the evidence into a package a reviewer can read in one sitting
+//   record   - take the verdict, after checking the reviewer is not the builder
+//   show     - print what was recorded and whether it still holds
+//   accept   - a human records that this bead's pass was accepted, and signs it
+//   withdraw - the same human undoes it, naming why; the trail keeps both lines
 //
 // Nothing here judges the work. The reviewer does that in prose; the machine
 // only checks that the prose came from a different session and still describes
-// the bytes on disk.
+// the bytes on disk. Accept judges even less: it records a human's word - the
+// word is declared, like every identity in this milestone, not proven.
 
-import { existsSync, readFileSync, statSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import { join, relative, resolve, sep, basename, dirname } from "node:path";
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
@@ -541,6 +544,150 @@ export function record(argv) {
   return `recorded review -> ${rel} (verdict ${values.verdict}, reviewer ${session})`;
 }
 
+// ---- accept / withdraw -------------------------------------------------------
+//
+// `phase_done` says a gate passed; it says nothing about whether anyone with
+// skin in the game said "ship it". Accept and withdraw are where that human
+// word lives, deliberately outside the phase machine: a gate is recomputed
+// from evidence every time, while an acceptance is what one named human
+// decided and then could take back, in the open, on the trail.
+//
+// Accept's checks are the plan's list, refused in that order: the role, the
+// manifest's identity of the builder, the review's existence and verdict, that
+// the reviewer is not the builder, that the reviewed bytes still are the bytes
+// on disk, and only last that the actor signs the record. A refusal earlier in
+// the list is honest about nothing further being checkable.
+
+const ACCEPT_FLAGS = { note: "" };
+const ACCEPT_USAGE = 'accepted flag is --note "<text>"';
+const WITHDRAW_FLAGS = { note: "" };
+const WITHDRAW_USAGE = 'accepted flag is --note "<why>"';
+
+function acceptancePath(root, bead) {
+  return join(reviewDir(root, bead), "acceptance.json");
+}
+
+// `show` has to render a record it did not write, so a hand-mangled
+// acceptance.json is reported, not thrown: `show` never decides anything.
+function loadAcceptance(root, bead) {
+  const path = acceptancePath(root, bead);
+  if (!existsSync(path)) return { acceptance: null, unreadable: false };
+  try {
+    return { acceptance: JSON.parse(readFileSync(path, "utf8")), unreadable: false };
+  } catch {
+    return { acceptance: null, unreadable: true };
+  }
+}
+
+// Atomic like the manifest: temp file, rename over the real path, so a crash
+// mid-write leaves a .tmp behind and never a half-written acceptance.
+function saveAcceptance(root, bead, acceptance) {
+  mkdirSync(reviewDir(root, bead), { recursive: true });
+  const path = acceptancePath(root, bead);
+  const tmp = `${path}.tmp`;
+  writeFileSync(tmp, JSON.stringify(acceptance, null, 2) + "\n");
+  renameSync(tmp, path);
+}
+
+export function accept(argv) {
+  const { values, positional } = parseFlags(argv, ACCEPT_FLAGS, ACCEPT_USAGE);
+  const bead = beadOf(positional);
+
+  if (role() !== "human") {
+    throw new ReviewError("only a human may accept; set FACTORY_ROLE=human");
+  }
+  const root = rootOrRefusal();
+
+  if (!existsSync(manifestPath(root, bead))) {
+    throw new ReviewError(`no manifest for ${bead}; nothing has been attested`);
+  }
+  const manifest = loadManifest(root, bead);
+  if (typeof manifest.builder_session !== "string" || manifest.builder_session === "") {
+    throw new ReviewError(
+      "this manifest predates builder sessions; re-attest after upgrading " +
+      "so the builder's identity is on record and acceptance can be checked");
+  }
+
+  const entry = manifest.artifacts.find((a) => a.id === "review" && a.kind === "prr");
+  if (!entry) {
+    throw new ReviewError("no passing review; nothing to accept");
+  }
+  if (entry.verdict !== "pass") {
+    throw new ReviewError(`the review verdict is "${entry.verdict}"; nothing to accept`);
+  }
+  // The same independence sentence `record` applied: whatever session the
+  // crediting artifact names must not be the one that built the bead.
+  const reviewer = entry.reviewer_session ?? entry.producer_session ?? null;
+  if (reviewer === manifest.builder_session) {
+    throw new ReviewError("a bead cannot be accepted on the builder's own review");
+  }
+
+  const verdictAbs = join(root, entry.path);
+  // The review described particular bytes. If the verdict file has moved since
+  // `record` hashed it, what the human would be accepting now is prose nobody
+  // reviewed; the fix is the one the message names, recording again.
+  if (!existsSync(verdictAbs) || sha256File(verdictAbs) !== entry.sha256) {
+    throw new ReviewError("the verdict file changed after review; run review record again");
+  }
+
+  const heldBy = (process.env.FACTORY_SESSION ?? "").trim();
+  if (heldBy === "") {
+    // No anonymous fallback here, for the reason `record` refuses anonymity: an
+    // unsigned acceptance cannot be compared to anybody, so it is decoration.
+    throw new ReviewError("an acceptance must be signed; set FACTORY_SESSION");
+  }
+
+  const note = typeof values.note === "string" && values.note.trim() !== "" ? values.note : null;
+  const head = gitHead(root);
+  saveAcceptance(root, bead, {
+    version: 1,
+    bead,
+    accepted_by: heldBy,
+    role: "human",
+    verdict_sha256: entry.sha256,
+    verdict: entry.verdict,
+    commit: head,
+    at: new Date().toISOString(),
+    note,
+  });
+  appendTrail(root, bead, {
+    event: "accept",
+    accepted_by: heldBy,
+    verdict_sha256: entry.sha256,
+    commit: head,
+    note,
+  });
+
+  return `accepted ${bead} on the review by ${reviewer}, commit ${head.slice(0, 7)}`;
+}
+
+export function withdraw(argv) {
+  const { values, positional } = parseFlags(argv, WITHDRAW_FLAGS, WITHDRAW_USAGE);
+  const bead = beadOf(positional);
+
+  if (role() !== "human") {
+    throw new ReviewError("only a human may withdraw an acceptance; set FACTORY_ROLE=human");
+  }
+  const note = typeof values.note === "string" ? values.note.trim() : "";
+  if (note === "") {
+    // The reason is the price of the door: a withdrawal with no stated why is
+    // indistinguishable from an accident, and the trail would carry silence.
+    throw new ReviewError('withdraw needs a reason: --note "<why>"');
+  }
+  const root = rootOrRefusal();
+
+  const path = acceptancePath(root, bead);
+  if (!existsSync(path)) {
+    throw new ReviewError(`no acceptance recorded for ${bead}`);
+  }
+  // Delete, never truncate: an absent record is the exact state accept began
+  // from, and a truncated pickup-stick of JSON would parse to nothing.
+  rmSync(path);
+  appendTrail(root, bead, { event: "withdraw", note });
+
+  return `withdrew the acceptance of ${bead}: ${note}`;
+}
+
 // ---- show -------------------------------------------------------------------
 
 const SHOW_FLAGS = { json: null, policy: "" };
@@ -558,6 +705,10 @@ export function show(argv) {
   const builder = manifest.builder_session ?? null;
   const reviewer = entry ? entry.reviewer_session ?? entry.producer_session ?? null : null;
   const head = gitHead(root);
+  // The acceptance is a human act recorded beside the review, so `show` prints
+  // it beside the review - including one it cannot parse (reported, not a
+  // crash) or one that names nobody (rendered as not accepted).
+  const { acceptance, unreadable: acceptanceUnreadable } = loadAcceptance(root, bead);
 
   const result = {
     bead,
@@ -572,30 +723,38 @@ export function show(argv) {
     at_head: entry !== null && entry.commit === head,
     head,
     commit: entry ? entry.commit ?? null : null,
+    acceptance,
   };
 
   if (values.json) return JSON.stringify(result) + "\n";
 
   if (!entry) return `no review recorded for ${bead}`;
   const mark = (ok) => (ok ? "ok  " : "FAIL");
+  const acceptedLine =
+    acceptance && typeof acceptance === "object" && acceptance.accepted_by
+      ? `accepted: by ${acceptance.accepted_by} at commit ${String(acceptance.commit ?? "").slice(0, 7)}…`
+      : acceptanceUnreadable
+        ? "accepted: not accepted (unreadable acceptance.json)"
+        : "accepted: not accepted";
   return [
     `review ${bead}: verdict ${result.verdict ?? "(none)"} at ${result.path}`,
     `${mark(result.independence)}  independence: reviewer ${reviewer ?? "(none)"} vs builder ${builder ?? "(none)"}`,
     `${mark(result.hash_ok)}  hash: the verdict file still hashes to what was recorded`,
     `${mark(result.at_head)}  head: recorded at ${String(result.commit).slice(0, 7)}…, HEAD is ${head.slice(0, 7)}…`,
+    acceptedLine,
   ].join("\n");
 }
 
 // ---- the command ------------------------------------------------------------
 
-const COMMANDS = { start, record, show };
+const COMMANDS = { start, record, show, accept, withdraw };
 
 function main() {
   const argv = process.argv.slice(2);
   const name = argv[0];
   const run = COMMANDS[name];
   if (!run) {
-    throw new ReviewError(`unknown command "${name ?? ""}"; use start, record or show`);
+    throw new ReviewError(`unknown command "${name ?? ""}"; use start, record, show, accept or withdraw`);
   }
   return run(argv.slice(1));
 }

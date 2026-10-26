@@ -7,13 +7,13 @@
 // cases sweep the same way, checking exit code 1 and the message from stderr
 // (the status comes from the child's exit code, never from stdout parsing).
 
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 
-import { sha256File, loadManifest, readTrail } from "./factory-manifest.mjs";
+import { sha256File, loadManifest, saveManifest, readTrail } from "./factory-manifest.mjs";
 
 let pass = 0, fail = 0;
 function check(name, ok, detail = "") {
@@ -432,6 +432,218 @@ r = review(sand, ["record", bead, "--file", `.factory/${bead}/review.md`, "--ver
 check("14 an unknown FACTORY_ROLE is a refusal naming builder, reviewer, human - not a silent default",
   r.status === 1 && r.stderr.includes('unknown FACTORY_ROLE "admin"') &&
   r.stderr.includes("builder, reviewer or human"),
+  `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
+
+// Factories for the two files the accept/withdraw sections live and die by,
+// and the current HEAD (nothing below commits, so it holds throughout).
+const reviewMd = join(sand.sandbox, ".factory", bead, "review.md");
+const acceptanceJson = join(sand.sandbox, ".factory", bead, "acceptance.json");
+const headNow = () => git(["rev-parse", "HEAD"], sand.sandbox, sand.env);
+
+console.log("\naccept: the refusals, in the plan's order");
+// The show section above left the verdict file hand-edited, so the hash the
+// artifact recorded and the bytes on disk disagree. `record` is the fix that
+// refusal names; rerun it over the file as it stands for an honest baseline.
+r = review(sand, ["record", bead, "--file", `.factory/${bead}/review.md`, "--verdict", "pass"],
+  { FACTORY_ROLE: "reviewer", FACTORY_SESSION: "review-S1" });
+check("15 setup: the hand-edited verdict re-records so the hash matches again",
+  r.status === 0, `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
+
+r = review(sand, ["accept", bead]);
+check("15 accept with no FACTORY_ROLE is refused: only a human may accept",
+  r.status === 1 && r.stderr.includes("only a human may accept; set FACTORY_ROLE=human"),
+  `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
+r = review(sand, ["accept", bead], { FACTORY_ROLE: "reviewer", FACTORY_SESSION: "review-S1" });
+check("15 accept as FACTORY_ROLE=reviewer is refused the same way",
+  r.status === 1 && r.stderr.includes("only a human may accept"),
+  `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
+r = review(sand, ["accept", bead], { FACTORY_ROLE: "builder" });
+check("15 accept as FACTORY_ROLE=builder is refused too",
+  r.status === 1 && r.stderr.includes("only a human may accept"),
+  `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
+
+r = review(sand, ["accept", beadUnattested], { FACTORY_ROLE: "human" });
+check("15 accept on a bead with no manifest is refused, naming the bead",
+  r.status === 1 && r.stderr.includes(`no manifest for ${beadUnattested}; nothing has been attested`),
+  `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
+
+r = review(sand, ["accept", beadNoStart], { FACTORY_ROLE: "human", FACTORY_SESSION: "human-B" });
+check("15 accept with no review artifact is refused: nothing has been reviewed",
+  r.status === 1 && r.stderr.includes("no passing review; nothing to accept"),
+  `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
+
+writeFileSync(reviewMd, "Verdict: changes\n\nOne finding stands; the builder must fix it.\n");
+r = review(sand, ["record", bead, "--file", `.factory/${bead}/review.md`, "--verdict", "changes"],
+  { FACTORY_ROLE: "reviewer", FACTORY_SESSION: "review-S1" });
+check("15 setup: the changes verdict records",
+  r.status === 0, `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
+r = review(sand, ["accept", bead], { FACTORY_ROLE: "human", FACTORY_SESSION: "human-B" });
+check("15 accept after a changes verdict is refused, quoting the verdict",
+  r.status === 1 && r.stderr.includes('the review verdict is "changes"; nothing to accept'),
+  `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
+
+writeFileSync(reviewMd, "Verdict: pass\n\nChecked the package; the diff matches the artifacts.\n");
+r = review(sand, ["record", bead, "--file", `.factory/${bead}/review.md`, "--verdict", "pass"],
+  { FACTORY_ROLE: "reviewer", FACTORY_SESSION: "review-S1" });
+check("15 setup: the pass verdict records again",
+  r.status === 0, `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
+
+// `record` refuses a builder session outright, so the self-review refusal can
+// only be reached in the state the check exists for: a manifest whose review
+// names the builder. Forge exactly that state by hand, assert, then undo.
+const forged = loadManifest(sand.sandbox, bead);
+const reviewIndex = forged.artifacts.findIndex((a) => a.id === "review");
+const realReviewer = forged.artifacts[reviewIndex].reviewer_session;
+forged.artifacts[reviewIndex].reviewer_session = forged.builder_session;
+saveManifest(sand.sandbox, bead, forged);
+r = review(sand, ["accept", bead], { FACTORY_ROLE: "human", FACTORY_SESSION: "human-B" });
+check("15 a review by the builder's own session is refused as an acceptance",
+  r.status === 1 && r.stderr.includes("a bead cannot be accepted on the builder's own review"),
+  `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
+forged.artifacts[reviewIndex].reviewer_session = realReviewer;
+saveManifest(sand.sandbox, bead, forged);
+
+const passedContent = "Verdict: pass\n\nChecked the package; the diff matches the artifacts.\n";
+writeFileSync(reviewMd, passedContent + "graffiti scribbled after the record\n");
+r = review(sand, ["accept", bead], { FACTORY_ROLE: "human", FACTORY_SESSION: "human-B" });
+check("15 accept after the verdict file changed post-record is refused, pointing at re-record",
+  r.status === 1 && r.stderr.includes("the verdict file changed after review; run review record again"),
+  `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
+// The exact bytes whose hash the artifact carries, restored without a record.
+writeFileSync(reviewMd, passedContent);
+check("15 setup: the verdict file is restored to the recorded hash",
+  sha256File(reviewMd) === manifestOf(sand, bead).artifacts.find((a) => a.id === "review").sha256,
+  `actual=${sha256File(reviewMd)}`);
+
+r = review(sand, ["accept", bead, "--note", "looks fine"], { FACTORY_ROLE: "human" });
+check("15 an acceptance with no FACTORY_SESSION is refused: it must be signed",
+  r.status === 1 && r.stderr.includes("an acceptance must be signed; set FACTORY_SESSION"),
+  `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
+
+console.log("\naccept: the record it writes");
+const headForAccept = headNow();
+const acceptCountBefore = trailOf(sand, bead).filter((e) => e.event === "accept").length;
+r = review(sand, ["accept", bead, "--note", "read the diff; the findings were addressed"],
+  { FACTORY_ROLE: "human", FACTORY_SESSION: "human-B" });
+check("16 a human accept exits 0, naming the bead, the reviewer and the commit",
+  r.status === 0 && r.stdout.includes(`accepted ${bead}`) && r.stdout.includes("review-S1") &&
+  r.stdout.includes(headForAccept.slice(0, 7)),
+  `status=${r.status} stdout=${JSON.stringify(r.stdout)} stderr=${JSON.stringify(r.stderr)}`);
+const stored = JSON.parse(readFileSync(acceptanceJson, "utf8"));
+const reviewArtNow = manifestOf(sand, bead).artifacts.find((a) => a.id === "review");
+check("16 acceptance.json is version 1, by human-B, role human, head and note recorded",
+  stored.version === 1 && stored.bead === bead && stored.accepted_by === "human-B" &&
+  stored.role === "human" && stored.verdict === "pass" && stored.commit === headForAccept &&
+  typeof stored.at === "string" &&
+  stored.note === "read the diff; the findings were addressed",
+  JSON.stringify(stored));
+check("16 acceptance.json carries the verdict file's sha256",
+  stored.verdict_sha256 === reviewArtNow.sha256 &&
+  reviewArtNow.sha256 === sha256File(reviewMd),
+  `stored=${stored.verdict_sha256} artifact=${reviewArtNow.sha256}`);
+const acceptTrailOne = trailOf(sand, bead).filter((e) => e.event === "accept");
+check("16 the trail appends one accept event with signer, sha256, commit and note",
+  acceptTrailOne.length === acceptCountBefore + 1 &&
+  acceptTrailOne[acceptTrailOne.length - 1].accepted_by === "human-B" &&
+  acceptTrailOne[acceptTrailOne.length - 1].verdict_sha256 === reviewArtNow.sha256 &&
+  acceptTrailOne[acceptTrailOne.length - 1].commit === headForAccept &&
+  acceptTrailOne[acceptTrailOne.length - 1].note === "read the diff; the findings were addressed",
+  JSON.stringify(acceptTrailOne));
+r = review(sand, ["show", bead]);
+check("16 show reports the acceptance with its signer and commit",
+  r.status === 0 && r.stdout.includes(`accepted: by human-B at commit ${headForAccept.slice(0, 7)}`),
+  `status=${r.status} stdout=${JSON.stringify(r.stdout)}`);
+
+let shownJson = null;
+r = review(sand, ["show", bead, "--json"]);
+try { shownJson = JSON.parse(r.stdout); } catch { /* asserted below */ }
+check("16 show --json reports the acceptance as an object",
+  r.status === 0 && shownJson !== null && shownJson.acceptance !== null &&
+  shownJson.acceptance.accepted_by === "human-B" &&
+  shownJson.acceptance.verdict_sha256 === reviewArtNow.sha256,
+  `status=${r.status} stdout=${JSON.stringify(r.stdout)}`);
+
+// Accepting twice is allowed on purpose: the record is overwritten, the trail
+// keeps both lines. History stays honest even when the file cannot.
+r = review(sand, ["accept", bead], { FACTORY_ROLE: "human", FACTORY_SESSION: "human-C" });
+check("16 a second accept overwrites the record instead of refusing",
+  r.status === 0 && JSON.parse(readFileSync(acceptanceJson, "utf8")).accepted_by === "human-C" &&
+  JSON.parse(readFileSync(acceptanceJson, "utf8")).note === null,
+  `status=${r.status} stored=${JSON.stringify(stored)}`);
+check("16 the second accept appends its own trail event, and no note is invented",
+  trailOf(sand, bead).filter((e) => e.event === "accept").length === acceptTrailOne.length + 1 &&
+  trailOf(sand, bead).filter((e) => e.event === "accept")[1].note === null,
+  JSON.stringify(trailOf(sand, bead).filter((e) => e.event === "accept")));
+
+console.log("\nwithdraw: acceptance is not a one-way door");
+r = review(sand, ["withdraw", bead], { FACTORY_SESSION: "human-B" });
+check("17 withdraw with no FACTORY_ROLE is refused: only a human may withdraw",
+  r.status === 1 && r.stderr.includes("only a human may withdraw an acceptance; set FACTORY_ROLE=human"),
+  `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
+r = review(sand, ["withdraw", bead], { FACTORY_ROLE: "human" });
+check("17 withdraw without --note is refused: it needs a reason",
+  r.status === 1 && r.stderr.includes('withdraw needs a reason: --note "<why>"'),
+  `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
+r = review(sand, ["withdraw", bead, "--note", "   "], { FACTORY_ROLE: "human", FACTORY_SESSION: "human-B" });
+check("17 withdraw with a blank --note is refused the same way",
+  r.status === 1 && r.stderr.includes("withdraw needs a reason"),
+  `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
+r = review(sand, ["withdraw", beadUnattested, "--note", "tidy up"], { FACTORY_ROLE: "human", FACTORY_SESSION: "human-B" });
+check("17 withdraw where nothing was accepted is refused naming the bead, manifest or not",
+  r.status === 1 && r.stderr.includes(`no acceptance recorded for ${beadUnattested}`),
+  `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
+r = review(sand, ["withdraw", beadNoStart, "--note", "premature"], { FACTORY_ROLE: "human", FACTORY_SESSION: "human-B" });
+check("17 withdraw where nothing was accepted, but a manifest exists, is refused naming the bead",
+  r.status === 1 && r.stderr.includes(`no acceptance recorded for ${beadNoStart}`),
+  `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
+
+const withdrawCountBefore = trailOf(sand, bead).filter((e) => e.event === "withdraw").length;
+r = review(sand, ["withdraw", bead, "--note", "the reviewer's session id looked wrong"],
+  { FACTORY_ROLE: "human", FACTORY_SESSION: "human-B" });
+check("17 a human withdraws with a stated reason, in one line",
+  r.status === 0 && r.stdout.includes(`withdrew the acceptance of ${bead}`) &&
+  r.stdout.includes("session id looked wrong"),
+  `status=${r.status} stdout=${JSON.stringify(r.stdout)} stderr=${JSON.stringify(r.stderr)}`);
+check("17 the acceptance file is deleted by withdraw",
+  !existsSync(acceptanceJson), `acceptanceJson still present`);
+const withdrawTrail = trailOf(sand, bead).filter((e) => e.event === "withdraw");
+check("17 the trail appends one withdraw event with the note",
+  withdrawTrail.length === withdrawCountBefore + 1 &&
+  withdrawTrail[withdrawTrail.length - 1].note === "the reviewer's session id looked wrong",
+  JSON.stringify(withdrawTrail));
+r = review(sand, ["show", bead]);
+check("17 show reports the bead as not accepted after withdraw",
+  r.status === 0 && r.stdout.includes("accepted: not accepted"),
+  `status=${r.status} stdout=${JSON.stringify(r.stdout)}`);
+r = review(sand, ["show", bead, "--json"]);
+try { shownJson = JSON.parse(r.stdout); } catch { /* asserted below */ }
+check("17 show --json reports acceptance null after withdraw",
+  r.status === 0 && shownJson !== null && shownJson.acceptance === null,
+  `status=${r.status} stdout=${JSON.stringify(r.stdout)}`);
+
+r = review(sand, ["accept", bead, "--note", "re-checked; the id was right on re-read"],
+  { FACTORY_ROLE: "human", FACTORY_SESSION: "human-B" });
+check("17 after a withdraw, accept can be recorded again",
+  r.status === 0 && existsSync(acceptanceJson) &&
+  JSON.parse(readFileSync(acceptanceJson, "utf8")).note === "re-checked; the id was right on re-read",
+  `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
+
+console.log("\nshow survives a corrupt acceptance.json");
+// A record a human tampered with must degrade to a sentence, not take `show`
+// down with it: show renders, it never decides.
+writeFileSync(acceptanceJson, "{acceptance oops");
+r = review(sand, ["show", bead]);
+check("18 a corrupt acceptance.json does not crash show and is named unreadable",
+  r.status === 0 && r.stdout.includes("not accepted (unreadable acceptance.json)"),
+  `status=${r.status} stdout=${JSON.stringify(r.stdout)}`);
+r = review(sand, ["show", bead, "--json"]);
+try { shownJson = JSON.parse(r.stdout); } catch { /* asserted below */ }
+check("18 show --json survives the corrupt file with acceptance null",
+  r.status === 0 && shownJson !== null && shownJson.acceptance === null,
+  `status=${r.status} stdout=${JSON.stringify(r.stdout)}`);
+r = review(sand, ["accept", bead], { FACTORY_ROLE: "human", FACTORY_SESSION: "human-B" });
+check("18 re-accepting over a corrupt file restores a readable record",
+  r.status === 0 && JSON.parse(readFileSync(acceptanceJson, "utf8")).accepted_by === "human-B",
   `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
 
 rmSandbox(sand.sandbox);
