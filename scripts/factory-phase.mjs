@@ -29,7 +29,7 @@ import { dirname, join, resolve } from "node:path";
 // read the evidence store and the policy that says which evidence is required.
 import { appendTrail, isWorkspaceBeads } from "./factory-manifest.mjs";
 import { loadPolicy } from "./factory-policy.mjs";
-import { verifyChecks } from "./factory-attest.mjs";
+import { verifyChecks, protectedProblems, factoryHome } from "./factory-attest.mjs";
 // One definition of "is this acceptance still true", shared with the writer, so
 // the ship gate cannot drift from what `review accept` checked.
 import { acceptanceProblems } from "./factory-review.mjs";
@@ -1034,7 +1034,8 @@ function cmdComplete(bead, target, evidence, ranArg, artifactArg) {
     // A green evidence set is not an acceptance, and closing is not shipping.
     // Both records are checked here, after the artifacts and before the state
     // write, so a refusal leaves phase_done untouched like every other refusal.
-    const problems = target === "7" ? acceptanceProblems(policyRoot, bead)
+    const problems = target === "7"
+      ? [...protectedProblems(factoryHome()), ...acceptanceProblems(policyRoot, bead)]
       : target === "8" ? outcomeProblems(policyRoot, bead)
       : [];
     if (problems.length) {
@@ -1046,11 +1047,12 @@ function cmdComplete(bead, target, evidence, ranArg, artifactArg) {
       });
       throw new Illegal(
         target === "7"
-          ? `phase 7 (ship) needs a human acceptance at .factory/${bead}/acceptance.json:\n` +
+          ? `phase 7 (ship) is not ready to ship:\n` +
             problems.map((p) => `  ${p}`).join("\n") +
-            `\nA passing review is not an acceptance. Record one with:\n` +
+            `\nA passing review is not an acceptance, and an edited grading script is not a rule. Record one with:\n` +
             `  FACTORY_ROLE=reviewer FACTORY_SESSION=review:<you> node scripts/factory-review.mjs record ${bead} --file .factory/${bead}/review.md --verdict pass\n` +
-            `  FACTORY_ROLE=human FACTORY_SESSION=human:<you> node scripts/factory-review.mjs accept ${bead} --note "<what you read>"`
+            `  FACTORY_ROLE=human FACTORY_SESSION=human:<you> node scripts/factory-review.mjs accept ${bead} --note "<what you read>"\n` +
+            `  FACTORY_ROLE=human node scripts/factory-attest.mjs protect --write, then commit config/factory.protected.json`
           : `phase 8 (close) needs an outcome record at .factory/${bead}/outcome.md (G4):\n` +
             problems.map((p) => `  ${p}`).join("\n") +
             `\nWrite what changed and what it measured, before and after.`

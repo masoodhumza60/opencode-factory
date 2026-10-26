@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "files": {
+    "scripts/factory-attest.mjs": "269998723b0b8dbbe311b6e284eb50e245401cddf0ddfa12189e67deb400b940",
+    "scripts/factory-policy.mjs": "b99cf1723b30c217b6f6750bffcc3301eb4fe293ada3926617a52f103b194150",
+    "scripts/factory-manifest.mjs": "03e307eecec8de7d971fb39bb6d12f62e70522428ecbb9c33c15ddbd2b5de5c2",
+    "scripts/factory-phase.mjs": "23fae969a54a5066272f89921a969bb601834b3469064ebfa2febfd221a71803",
+    "scripts/factory-review.mjs": "656fda7a0dc9d47f578a34ade84bc678e9b9e64050d4f60614514627d593fbc0"
+  }
+}

@@ -15,10 +15,10 @@
 // missing policy.
 
 import { execFileSync } from "node:child_process";
-import { statSync } from "node:fs";
+import { statSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { join, relative, resolve, sep } from "node:path";
-import { pathToFileURL } from "node:url";
+import { join, relative, resolve, sep, dirname } from "node:path";
+import { pathToFileURL, fileURLToPath } from "node:url";
 import {
   projectRoot, gitHead, sha256File, loadManifest, saveManifest,
   upsertArtifact, appendTrail, ensureBuilderSession,
@@ -651,6 +651,117 @@ export function verify(argv) {
   return runVerify(argv).text;
 }
 
+// ---- protected files --------------------------------------------------------
+// The grading machinery is the set of scripts that decide what counts as
+// evidence. Pinning their hashes answers one question at ship time: are the
+// rules that graded this bead the rules a human baselined? A hash cannot stop
+// an edit; it makes one impossible to hide behind a green report.
+export const PROTECTED_FILES = [
+  "scripts/factory-attest.mjs",
+  "scripts/factory-policy.mjs",
+  "scripts/factory-manifest.mjs",
+  "scripts/factory-phase.mjs",
+  "scripts/factory-review.mjs",
+];
+export const PROTECTED_SET = "config/factory.protected.json";
+
+// The factory install, not the user's project: the scripts live here, and this
+// is the copy whose hashes are pinned. `fileURLToPath` because a URL pathname
+// on Windows is `/C:/...` and join() would keep the leading slash.
+export function factoryHome() {
+  return dirname(dirname(fileURLToPath(import.meta.url)));
+}
+
+function sameProtectedSet(a, b) {
+  if (!a || !b || a.version !== b.version) return false;
+  const ka = Object.keys(a.files || {}).sort();
+  const kb = Object.keys(b.files || {}).sort();
+  if (ka.join("\n") !== kb.join("\n")) return false;
+  return ka.every((k) => a.files[k] === b.files[k]);
+}
+
+// Every reason the pinned rules cannot be trusted, each naming the fix.
+export function protectedProblems(home = factoryHome()) {
+  const path = join(home, PROTECTED_SET);
+  if (!existsSync(path)) {
+    return [`no protected set at ${PROTECTED_SET}; run factory-attest protect --write as a human`];
+  }
+  let set = null;
+  try {
+    set = JSON.parse(readFileSync(path, "utf8"));
+  } catch (e) {
+    return [`${PROTECTED_SET} is not valid JSON: ${e.message}`];
+  }
+  if (!set || typeof set !== "object" || set.version !== 1 ||
+      !set.files || typeof set.files !== "object") {
+    return [`${PROTECTED_SET} is not a version 1 protected set`];
+  }
+  const problems = [];
+  for (const file of PROTECTED_FILES) {
+    const recorded = set.files[file];
+    if (typeof recorded !== "string" || recorded === "") {
+      problems.push(`${PROTECTED_SET} records no hash for ${file}`);
+      continue;
+    }
+    const abs = join(home, file);
+    if (!existsSync(abs)) {
+      problems.push(`the grading machinery is missing ${file}`);
+      continue;
+    }
+    if (sha256File(abs) !== recorded) problems.push(`the grading machinery changed: ${file}`);
+  }
+  // A baseline nobody committed is a baseline only its author can see. Compare
+  // parsed JSON, not bytes: git stores LF and a Windows checkout may be CRLF,
+  // which would make every run look uncommitted.
+  let head = null;
+  try {
+    head = JSON.parse(execFileSync("git", ["-C", home, "show", `HEAD:${PROTECTED_SET}`], {
+      encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+    }));
+  } catch {
+    head = null;
+  }
+  if (!head || !sameProtectedSet(set, head)) {
+    problems.push(`the protected set is not committed; commit ${PROTECTED_SET} before shipping`);
+  }
+  return problems;
+}
+
+// The writer. Never edits a script; records what the scripts are now. Only a
+// human may move the baseline, so an agent cannot bless its own edit.
+export function protect(argv, home = factoryHome()) {
+  const write = argv.includes("--write");
+  if (write && process.env.FACTORY_ROLE !== "human") {
+    throw new AttestError(
+      "only a human may re-baseline the grading machinery; set FACTORY_ROLE=human");
+  }
+  const path = join(home, PROTECTED_SET);
+  let previous = {};
+  if (existsSync(path)) {
+    try { previous = JSON.parse(readFileSync(path, "utf8")).files || {}; } catch { previous = {}; }
+  }
+  const files = {};
+  const rows = [];
+  for (const file of PROTECTED_FILES) {
+    const hash = sha256File(join(home, file));
+    files[file] = hash;
+    const before = previous[file];
+    rows.push(`${before === undefined ? "new    " : before === hash ? "ok     " : "changed"} ${file}`);
+  }
+  for (const file of Object.keys(previous)) {
+    if (!PROTECTED_FILES.includes(file)) rows.push(`removed ${file}`);
+  }
+  if (write) writeFileSync(path, JSON.stringify({ version: 1, files }, null, 2) + "\n");
+  return [
+    `${write ? "wrote" : "would write"} ${PROTECTED_SET}`,
+    ...rows,
+    "",
+    write
+      ? "commit it: the pinned set must be in HEAD before ship can pass"
+      : "re-run with --write and FACTORY_ROLE=human to record this baseline",
+  ].join("\n");
+}
+
 // ---- entry ------------------------------------------------------------------
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
@@ -658,8 +769,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     // The subcommand word is part of the command line, not the arguments:
     // `attest` is the default verb, `verify` the other.
     const argv = process.argv.slice(2);
-    const command = argv[0] === "verify" ? "verify" : "attest";
-    if (argv[0] === "attest" || argv[0] === "verify") argv.shift();
+    const command = ["verify", "protect"].includes(argv[0]) ? argv[0] : "attest";
+    if (["attest", "verify", "protect"].includes(argv[0])) argv.shift();
+    if (command === "protect") {
+      console.log(protect(argv));
+      process.exit(0);
+    }
     const run = command === "verify" ? runVerify(argv) : null;
     console.log(run ? run.text : attest(argv));
     // verify's exit code is its verdict; attest's is always success once it
