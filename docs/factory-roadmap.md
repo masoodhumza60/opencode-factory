@@ -99,28 +99,41 @@ on different roots; pointing `BEADS_DIR` at a directory with no database is refu
 Prove the exit criterion with:
 
 ```bash
-node scripts/test-factory-phase.mjs     # 143/143 phase-machine tests passed.
+node scripts/test-factory-phase.mjs     # 150/150 phase-machine tests passed.
 node scripts/test-fake-ship.mjs         # 6/6 fake-ship paths refused.
-node scripts/test-factory-manifest.mjs  # 25/25 manifest tests passed.
+node scripts/test-factory-manifest.mjs  # 26/26 manifest tests passed.
 node scripts/test-factory-policy.mjs    # 59/59 policy tests passed.
-node scripts/test-factory-attest.mjs    # 82/82 attest tests passed.
+node scripts/test-factory-attest.mjs    # 99/99 attest tests passed.
+node scripts/test-factory-review.mjs    # 77/77 review tests passed.
+node scripts/test-factory-protect.mjs   # 14/14 protect tests passed.
 ```
 
-### M1b — review and independence (1–1.5 weeks)
+### M1b — review and independence (shipped)
 
-- `protected_files`: the builder cannot edit the grading machinery (permission rule plus install-manifest hash).
-- Per-role write globs: the reviewer writes only its own verdict file.
-- `phase_ok` vs `accepted`: completing a phase is not accepting its output.
-- Human verdicts carry a channel the agent cannot write.
+- `protected_files` — `config/factory.protected.json` pins the five grading scripts by sha256;
+  `complete 7` refuses a changed script, and re-baselining needs `FACTORY_ROLE=human` plus a commit.
+- Per-role write scope — `factory-review start` snapshots `git status` (with a sha256 per dirty
+  path) and `record` refuses any change outside the reviewer's own verdict file.
+- `phase_ok` vs `accepted` — `complete 7` needs `.factory/<bead>/acceptance.json` written by
+  `factory-review accept` from a human session; `complete 8` needs an outcome record.
+- Independence — the builder session is frozen at the first manifest write, and `review record`
+  refuses a verdict recorded from it.
 
-1. `factory review` runs a reviewer in a separate session and preferably a different model family,
-   read-only, given the diff and artifacts rather than the builder's narrative. It writes
-   `review.md` with findings and a `could_not_verify` list.
-2. Gate refuses when `reviewer_session == builder_session`.
-3. Gate remap per `factory-v2-model.md`: Gate A becomes `G2a`, Gate B becomes `G2b`, Gate C becomes
-   `G3`, and `G1` / `G4` are new; old gate letters stay as accepted aliases.
+1. `scripts/factory-review.mjs start|record|show` — the reviewer reads
+   `.factory/<bead>/review-package.md` (commit range, diff, attested artifacts, policy checks; no
+   `.superpowers/` narrative) and writes one `review*.md` with a single `Verdict:` line.
+2. `accept|withdraw` — the human act, recorded beside the review rather than inside the phase state.
+3. The review is enforced as a G3 artifact at phase 7, which is what `factory-v2-model.md` already
+   describes. The gate **renaming** (G1 / G2a / G2b / G3 with A / B / C as aliases) is **M1c**, not
+   M1b: it changes names, not assurance, and shipping it untested would have bought nothing.
 
 **Exit:** self-review is refused; nothing is accepted on the builder's word alone.
+
+**What M1b cannot prove.** Identity is declared, not proven: `FACTORY_SESSION` and `FACTORY_ROLE`
+are environment variables, so an agent with shell access can claim to be a reviewer or a human.
+`acceptance.json` is a file, not a signature. The reviewer's write scope is checked after the fact
+and cannot see gitignored paths. The protected set detects an edited grading script and leaves a
+trail; it does not prevent the edit.
 
 ### M2 - The disciplines that make it real (2-3 weeks)
 

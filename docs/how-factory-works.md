@@ -127,7 +127,30 @@ so a log never records a refusal as a completion.
 node scripts/factory-attest.mjs attest <bead> <path> --id <check> --kind <kind> \
   [--command "<cmd>"] [--policy <path>]
 node scripts/factory-attest.mjs verify <bead> [--phase <n>] [--policy <path>] [--json]
+node scripts/factory-attest.mjs protect [--write]
+
+node scripts/factory-review.mjs start    <bead> [--phase <n>] [--base <rev>]
+node scripts/factory-review.mjs record   <bead> --file <path> --verdict pass|changes
+node scripts/factory-review.mjs show     <bead> [--json]
+node scripts/factory-review.mjs accept   <bead> [--note "<what you read>"]
+node scripts/factory-review.mjs withdraw <bead> --note "<why>"
 ```
+
+Two environment variables carry identity. `FACTORY_SESSION` names the session;
+`FACTORY_ROLE` is `builder` (the default), `reviewer` or `human`. An unknown
+role is a refusal, not a fallback. The builder session is frozen at the first
+manifest write: a later run with a different `FACTORY_SESSION` still counts as
+the same builder, because the artifacts already exist.
+
+`review start` writes `.factory/<bead>/review-package.md` — the commit range,
+the diff (excluding `.superpowers/`), the attested artifacts, and the policy's
+checks — plus a `git status` snapshot. A reviewer reads that, writes
+`.factory/<bead>/review*.md` with one `Verdict: pass` or `Verdict: changes`
+line, and `review record` binds it to the manifest. `record` refuses the
+builder's own session, any file outside `.factory/<bead>/`, any product file
+changed after `start`, and a package that has gone stale. `accept` is the human
+act: it copies nothing, it records that a named human accepted a specific
+verdict at a specific commit. `withdraw` deletes that record and says why.
 
 `attest` records one artifact; with no `--command` it takes the command from
 the policy check, and with no `--policy` it reads `config/factory.policy.yaml`.
@@ -175,6 +198,26 @@ One exception: a phase-5 run writes its `booted` record before the manifest
 check can refuse, so a refused phase-5 run keeps the `booted` record it wrote
 first.
 
+**Two phases need more than artifacts.** When a policy is in force:
+
+- **Phase 7 (ship)** needs a human acceptance. `factory-review.mjs accept` writes
+  `.factory/<bead>/acceptance.json` only when the caller declares
+  `FACTORY_ROLE=human`, the recorded review verdict is `pass`, the reviewer
+  session differs from the frozen builder session, the verdict file still hashes
+  to what the manifest recorded, and the accepted commit is still `HEAD`.
+  `complete 7` re-checks all of that, so editing the code after an acceptance
+  revokes it.
+- **Phase 8 (close)** needs `.factory/<bead>/outcome.md` with `## What changed`
+  and either `## Measured before / after` or a `Not measurable: <reason>` line.
+  Existence is the gate; whether the numbers are honest is a human judgement
+  made later.
+
+`complete 7` also verifies the pinned grading machinery. Every script listed in
+`config/factory.protected.json` must still hash to its recorded value, and that
+file must match the committed blob at `HEAD`. `factory-attest.mjs protect
+--write` refreshes the set, but only for a caller declaring `FACTORY_ROLE=human`,
+and the refreshed set must be committed before ship can pass.
+
 ### What this does not prove
 
 A hash is evidence that the bytes did not change **after** attestation, and
@@ -183,11 +226,24 @@ nothing more:
 - It does **not** prove the `command` recorded in the manifest produced the
   artifact. The `command` is a label the producer wrote down; M1a never runs it
   or checks its output against the file.
-- `producer_session` is **self-declared**. Until the reviewer session exists
-  (M1b), nothing stops a builder from attesting its own artifact, and the
-  `INDEPENDENCE` rung only compares the verifier's session to the one recorded.
+- `producer_session` is **self-declared**, and so is `FACTORY_ROLE`. M1b froze
+  the builder session at the first manifest write, so re-running with a new
+  `FACTORY_SESSION` no longer looks like a different agent, and `review record`
+  refuses a verdict from the builder's own session. An agent that can set the
+  environment can still claim to be a reviewer or a human.
 - `FACTORY_SESSION` is **not a secret**. It is an environment variable the
   builder sets, so anyone willing to set it can claim any session identity.
+- `acceptance.json` is a **file, not a signature**. It records that a session
+  declaring itself human accepted a specific verdict at a specific commit. The
+  trail and the git history are the witnesses; they are not proof.
+- The reviewer's write scope is checked **after the fact**: `record` compares
+  `git status` (with a sha256 per dirty path) against the snapshot `start`
+  took, and refuses changes outside the verdict file. It does not sandbox the
+  reviewer, and paths git ignores are invisible to it.
+- The protected set **detects, it does not prevent**. An edited grading script
+  is refused at ship, and re-baselining requires `FACTORY_ROLE=human` plus a
+  commit — but the role is declared, not proven, so the check is a tripwire
+  that leaves a trail rather than a lock.
 - A hand-edited manifest that rewrites both `sha256` and `commit` to match an
   edited file **will verify**. The manifest is validated for shape, not
   authenticated; M1a assumes a single operator who is not attacking themselves.
