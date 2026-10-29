@@ -135,6 +135,12 @@ becomes `G2a` and Gate B becomes `G2b`; Gate C becomes `G3`; phase 6's review
 is enforced as a required `G3` artifact rather than a second gate; phase 8
 close writes the `G4` record.
 
+As of M1c these are no longer only this document's ids: the code uses them
+too. Phase 1 raises `G1`, phase 2 `G2a`, phase 3 `G2b` and phase 7 `G3`, and
+the old letters `A`, `B` and `C` remain accepted aliases in every command,
+resolving to the same bead dimensions. `G4` is not a phase-raised gate record:
+`complete 8` enforces it on the existence of an outcome record.
+
 ## The evidence manifest
 
 One directory per bead. Nothing in it is prose about work; everything is a file

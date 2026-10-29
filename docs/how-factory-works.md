@@ -8,8 +8,9 @@ Two design documents sit alongside the shipped pipeline. `docs/factory-gap-analy
 is a **proposal, not current behaviour**: what the factory has, what it is
 missing, and the priority order. `docs/factory-v2-model.md` is now partly
 shipped — its evidence manifest, risk tiers and policy-as-data are real as of
-M1a (see "Mechanical attestation" below) — while its roles, four gates and
-review/independence machinery remain proposals until M1b. Read both when
+M1a (see "Mechanical attestation" below), and its four gates and
+review/independence machinery are real as of M1b/M1c — while the role
+disciplines remain proposals until M2. Read both when
 changing the factory itself, and treat only the parts that name a shipped
 command as installed.
 
@@ -149,8 +150,11 @@ checks — plus a `git status` snapshot. A reviewer reads that, writes
 line, and `review record` binds it to the manifest. `record` refuses the
 builder's own session, any file outside `.factory/<bead>/`, any product file
 changed after `start`, and a package that has gone stale. `accept` is the human
-act: it copies nothing, it records that a named human accepted a specific
-verdict at a specific commit. `withdraw` deletes that record and says why.
+act: it copies nothing, it makes an annotated SSH-signed git tag
+`factory-accept/<bead>` at `HEAD` whose message carries `bead:`,
+`verdict_sha256:`, `reviewer_session:`, `accepted_by:` and `note:`, and it only
+runs from a human session. `withdraw` deletes the tag with `git tag -d` and
+says why; the trail keeps both lines.
 
 `attest` records one artifact; with no `--command` it takes the command from
 the policy check, and with no `--policy` it reads `config/factory.policy.yaml`.
@@ -200,23 +204,52 @@ first.
 
 **Two phases need more than artifacts.** When a policy is in force:
 
-- **Phase 7 (ship)** needs a human acceptance. `factory-review.mjs accept` writes
-  `.factory/<bead>/acceptance.json` only when the caller declares
-  `FACTORY_ROLE=human`, the recorded review verdict is `pass`, the reviewer
-  session differs from the frozen builder session, the verdict file still hashes
-  to what the manifest recorded, and the accepted commit is still `HEAD`.
-  `complete 7` re-checks all of that, so editing the code after an acceptance
-  revokes it.
+- **Phase 7 (ship)** needs a human acceptance, and since M1c an acceptance is a
+  signed git tag, not a file. `factory-review.mjs accept` runs only when the
+  caller declares `FACTORY_ROLE=human` and sets `FACTORY_SESSION`, and the
+  recorded review verdict is `pass`, the reviewer session differs from the
+  frozen builder session, the verdict file still hashes to what the manifest
+  recorded, and `HEAD` is the commit being accepted. It then creates an
+  annotated SSH-signed tag `factory-accept/<bead>` at `HEAD` whose message
+  carries `bead:`, `verdict_sha256:`, `reviewer_session:`, `accepted_by:` and
+  `note:`, and verifies its own tag with `git verify-tag` against
+  `config/factory.allowed_signers`, destroying a tag that will not verify —
+  a tag that does not verify against `config/factory.allowed_signers` is not
+  an acceptance. `complete 7` re-checks all of that (`acceptanceProblems`):
+  the signers file present, the tag present, the signature valid, the message
+  fields matching the `id:"review"` artifact, the tag commit still `HEAD`, the
+  verdict hash matching, and the verdict file still hashing. Editing the code
+  after an acceptance revokes it.
 - **Phase 8 (close)** needs `.factory/<bead>/outcome.md` with `## What changed`
   and either `## Measured before / after` or a `Not measurable: <reason>` line.
   Existence is the gate; whether the numbers are honest is a human judgement
   made later.
 
+**Acceptance setup, once per person and machine.** Signing is git's SSH mode:
+
+```
+git config gpg.format ssh
+git config user.signingkey <path-to-your-public-key>
+```
+
+and trust is one line per person or machine in `config/factory.allowed_signers`:
+
+```
+<identity> namespaces="git" <public-key>
+```
+
+`git verify-tag` is what checks an acceptance; without the signers file there
+is no default keyring and `accept` refuses before writing anything.
+
 `complete 7` also verifies the pinned grading machinery. Every script listed in
 `config/factory.protected.json` must still hash to its recorded value, and that
 file must match the committed blob at `HEAD`. `factory-attest.mjs protect
 --write` refreshes the set, but only for a caller declaring `FACTORY_ROLE=human`,
-and the refreshed set must be committed before ship can pass.
+and the refreshed set must be committed before ship can pass. When
+`config/factory.allowed_signers` exists, the commit that last touched
+`config/factory.protected.json` must itself be signed by an allowed signer
+(`git log -1 --format=%G?` at that path must print `G`); with no signers file
+the rule is skipped — signing the baseline is opt-in.
 
 ### What this does not prove
 
@@ -233,9 +266,14 @@ nothing more:
   environment can still claim to be a reviewer or a human.
 - `FACTORY_SESSION` is **not a secret**. It is an environment variable the
   builder sets, so anyone willing to set it can claim any session identity.
-- `acceptance.json` is a **file, not a signature**. It records that a session
-  declaring itself human accepted a specific verdict at a specific commit. The
-  trail and the git history are the witnesses; they are not proof.
+- The acceptance **signature is only as good as key custody**. An agent that
+  can read the private key — or drive an unlocked `ssh-agent` with no
+  confirmation prompt — can sign an acceptance, and the declared
+  `FACTORY_ROLE` cannot stop it. `config/factory.allowed_signers` is
+  also **trust-on-first-review**: a public key that gets committed without
+  review is trusted from then on, so an agent that lands its own key in that
+  file unreviewed can sign too. The signature proves *who could sign*, not
+  *that a human did*.
 - The reviewer's write scope is checked **after the fact**: `record` compares
   `git status` (with a sha256 per dirty path) against the snapshot `start`
   took, and refuses changes outside the verdict file. It does not sandbox the

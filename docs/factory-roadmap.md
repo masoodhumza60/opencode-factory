@@ -99,13 +99,13 @@ on different roots; pointing `BEADS_DIR` at a directory with no database is refu
 Prove the exit criterion with:
 
 ```bash
-node scripts/test-factory-phase.mjs     # 150/150 phase-machine tests passed.
+node scripts/test-factory-phase.mjs     # 167/167 phase-machine tests passed.
 node scripts/test-fake-ship.mjs         # 6/6 fake-ship paths refused.
 node scripts/test-factory-manifest.mjs  # 26/26 manifest tests passed.
 node scripts/test-factory-policy.mjs    # 59/59 policy tests passed.
 node scripts/test-factory-attest.mjs    # 99/99 attest tests passed.
-node scripts/test-factory-review.mjs    # 77/77 review tests passed.
-node scripts/test-factory-protect.mjs   # 14/14 protect tests passed.
+node scripts/test-factory-review.mjs    # 82/82 review tests passed.
+node scripts/test-factory-protect.mjs   # 17/17 protect tests passed.
 ```
 
 ### M1b — review and independence (shipped)
@@ -114,26 +114,49 @@ node scripts/test-factory-protect.mjs   # 14/14 protect tests passed.
   `complete 7` refuses a changed script, and re-baselining needs `FACTORY_ROLE=human` plus a commit.
 - Per-role write scope — `factory-review start` snapshots `git status` (with a sha256 per dirty
   path) and `record` refuses any change outside the reviewer's own verdict file.
-- `phase_ok` vs `accepted` — `complete 7` needs `.factory/<bead>/acceptance.json` written by
-  `factory-review accept` from a human session; `complete 8` needs an outcome record.
+- `phase_ok` vs `accepted` — `complete 7` needs the signed tag `factory-accept/<bead>`,
+  made by `factory-review accept` from a human session (a file at M1b, a signed git tag since
+  M1c); `complete 8` needs an outcome record.
 - Independence — the builder session is frozen at the first manifest write, and `review record`
   refuses a verdict recorded from it.
 
 1. `scripts/factory-review.mjs start|record|show` — the reviewer reads
    `.factory/<bead>/review-package.md` (commit range, diff, attested artifacts, policy checks; no
    `.superpowers/` narrative) and writes one `review*.md` with a single `Verdict:` line.
-2. `accept|withdraw` — the human act, recorded beside the review rather than inside the phase state.
+2. `accept|withdraw` — the human act, made as an annotated SSH-signed tag
+   `factory-accept/<bead>` beside the review rather than inside the phase state.
 3. The review is enforced as a G3 artifact at phase 7, which is what `factory-v2-model.md` already
    describes. The gate **renaming** (G1 / G2a / G2b / G3 with A / B / C as aliases) is **M1c**, not
-   M1b: it changes names, not assurance, and shipping it untested would have bought nothing.
+   M1b: it changes names, not assurance, and shipping it untested would have bought nothing. M1c
+   has since shipped in its own right — see the M1c section below.
 
 **Exit:** self-review is refused; nothing is accepted on the builder's word alone.
 
 **What M1b cannot prove.** Identity is declared, not proven: `FACTORY_SESSION` and `FACTORY_ROLE`
 are environment variables, so an agent with shell access can claim to be a reviewer or a human.
-`acceptance.json` is a file, not a signature. The reviewer's write scope is checked after the fact
+At M1b an acceptance was a file, not a signature; M1c made it a signed tag. The reviewer's write
+scope is checked after the fact
 and cannot see gitignored paths. The protected set detects an edited grading script and leaves a
 trail; it does not prevent the edit.
+
+### M1c — gates and a human signature (shipped)
+
+- Gates are named `G1`, `G2a`, `G2b`, `G3`; `A`, `B`, `C` remain accepted aliases that resolve to
+  the same bead dimensions, so no existing gate record had to be migrated. `G1` is required by
+  `complete 1` only when a policy file exists.
+- Acceptance is an annotated, SSH-signed git tag `factory-accept/<bead>` at the reviewed commit,
+  verified against `config/factory.allowed_signers`. `acceptance.json` is gone; `withdraw` deletes
+  the tag.
+- When `config/factory.allowed_signers` exists, the commit that last changed
+  `config/factory.protected.json` must itself be signed by an allowed signer.
+
+**Exit:** a gate name is no longer a letter someone remembered, and an acceptance is a signature
+that git can check, not a JSON file the agent could write.
+
+**What M1c cannot prove.** Key custody is the guarantee: an agent that can read the private key, or
+an unlocked agent, can sign. `allowed_signers` is trust-on-first-review — a public key committed
+without review is trusted. Deleting `.factory/<bead>/` still restarts the record, and a tag can be
+replayed onto an older signed commit. The signature proves *who could sign*, not *what they read*.
 
 ### M2 - The disciplines that make it real (2-3 weeks)
 
