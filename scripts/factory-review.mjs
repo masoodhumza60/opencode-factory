@@ -13,10 +13,13 @@
 //
 // Nothing here judges the work. The reviewer does that in prose; the machine
 // only checks that the prose came from a different session and still describes
-// the bytes on disk. Accept judges even less: it records a human's word - the
-// word is declared, like every identity in this milestone, not proven.
+// the bytes on disk. Accept judges even less: it makes an annotated tag named
+// factory-accept/<bead> and signs it with git's SSH signing key, and only a key
+// listed in config/factory.allowed_signers makes the signature mean anything.
+// A file left beside the review is no longer an acceptance; the tag is.
 
-import { existsSync, readFileSync, statSync, writeFileSync, mkdirSync, renameSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, relative, resolve, sep, basename, dirname } from "node:path";
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
@@ -563,60 +566,95 @@ const ACCEPT_USAGE = 'accepted flag is --note "<text>"';
 const WITHDRAW_FLAGS = { note: "" };
 const WITHDRAW_USAGE = 'accepted flag is --note "<why>"';
 
-function acceptancePath(root, bead) {
-  return join(reviewDir(root, bead), "acceptance.json");
+const TAG_PREFIX = "factory-accept/";
+
+function tagName(bead) {
+  return `${TAG_PREFIX}${bead}`;
 }
 
-// `show` has to render a record it did not write, so a hand-mangled
-// acceptance.json is reported, not thrown: `show` never decides anything.
-function loadAcceptance(root, bead) {
-  const path = acceptancePath(root, bead);
-  if (!existsSync(path)) return { acceptance: null, unreadable: false };
+function signersFile(root) {
+  return join(root, "config", "factory.allowed_signers");
+}
+
+const NO_SIGNERS =
+  "config/factory.allowed_signers is missing; a signature nobody can check is not an acceptance";
+const BAD_SIGNER =
+  "the acceptance tag is not signed by an allowed signer; add your public key to config/factory.allowed_signers";
+const VERDICT_DRIFTED = "the verdict file changed after review; run factory-review record again";
+
+function tagExists(root, tag) {
   try {
-    return { acceptance: JSON.parse(readFileSync(path, "utf8")), unreadable: false };
+    git(root, ["rev-parse", "-q", "--verify", `refs/tags/${tag}`]);
+    return true;
   } catch {
-    return { acceptance: null, unreadable: true };
+    return false;
   }
 }
 
-// Atomic like the manifest: temp file, rename over the real path, so a crash
-// mid-write leaves a .tmp behind and never a half-written acceptance.
-function saveAcceptance(root, bead, acceptance) {
-  mkdirSync(reviewDir(root, bead), { recursive: true });
-  const path = acceptancePath(root, bead);
-  const tmp = `${path}.tmp`;
-  writeFileSync(tmp, JSON.stringify(acceptance, null, 2) + "\n");
-  renameSync(tmp, path);
-}
-
-// The checks `accept` applies at write time, re-run at ship time. An acceptance
-// is a claim about a review, and the claim decays if the verdict file, the
-// manifest or the commit moved since. `complete` calls this instead of trusting
-// the file, so a hand-written acceptance.json is only a wrong claim.
-export function acceptanceProblems(root, bead) {
-  const path = acceptancePath(root, bead);
-  if (!existsSync(path)) {
-    return [`no acceptance recorded at .factory/${bead}/acceptance.json`];
-  }
-  let acc;
+// An annotated tag carries its message as the tag object's body, with the SSH
+// signature armor appended by git; a lightweight tag points straight at a
+// commit and carries none. Fields are parsed first-match from the body, and
+// their counts come along so a duplicate line can be named at check time - a
+// tag this module wrote has none, so a duplicate is somebody else's edit.
+function readAcceptanceTag(root, bead, { verify = false } = {}) {
+  const tag = tagName(bead);
+  let ref;
   try {
-    acc = JSON.parse(readFileSync(path, "utf8"));
-  } catch (e) {
-    return [`acceptance.json is not valid JSON: ${e.message}`];
+    ref = git(root, ["rev-parse", "-q", "--verify", `refs/tags/${tag}`]).trim();
+  } catch {
+    return null;
   }
-  if (!acc || typeof acc !== "object" || Array.isArray(acc)) {
-    return ["acceptance.json is not an object"];
+  const commit = git(root, ["rev-parse", `${ref}^{commit}`]).trim();
+  let body = "";
+  try {
+    const cat = git(root, ["cat-file", "tag", ref]);
+    const split = cat.indexOf("\n\n");
+    if (split >= 0) body = cat.slice(split + 2);
+  } catch {
+    // No tag object, no message: the bare-commit shape of a forged tag.
+  }
+  const armor = body.indexOf("-----BEGIN SSH SIGNATURE-----");
+  if (armor >= 0) body = body.slice(0, armor);
+
+  const fields = {};
+  const counts = {};
+  for (const line of body.split(/\r?\n/)) {
+    const m = line.match(/^(bead|verdict_sha256|reviewer_session|accepted_by|note):(.*)$/);
+    if (m) {
+      if (counts[m[1]] === undefined) {
+        counts[m[1]] = 1;
+        fields[m[1]] = m[2].trim();
+      } else {
+        counts[m[1]] += 1;
+      }
+    }
   }
 
+  let verify_ok = null;
+  if (verify) {
+    try {
+      git(root, ["-c", `gpg.ssh.allowedSignersFile=${signersFile(root)}`, "verify-tag", tag]);
+      verify_ok = true;
+    } catch {
+      verify_ok = false;
+    }
+  }
+  return { tag, ref, commit, fields, counts, verify_ok };
+}
+
+// The checks `accept` applied at tag time, re-run at ship time. An acceptance
+// is a signed claim about a review, and the claim decays if the signature, the
+// commit or the verdict bytes moved since. `complete` calls this instead of
+// trusting anything, so a hand-forged tag is only a wrong claim whose name is
+// already taken.
+export function acceptanceProblems(root, bead) {
   const problems = [];
-  if (acc.version !== 1) problems.push(`acceptance.json version is ${JSON.stringify(acc.version)}; expected 1`);
-  if (acc.bead !== bead) problems.push(`acceptance.json is for ${JSON.stringify(acc.bead)}, not "${bead}"`);
-  if (acc.role !== "human") problems.push(`acceptance.json was written by role ${JSON.stringify(acc.role)}; only a human may accept`);
-  if (acc.verdict !== "pass") problems.push(`acceptance.json records verdict ${JSON.stringify(acc.verdict)}; only a passing review can be accepted`);
-  if (typeof acc.accepted_by !== "string" || acc.accepted_by.trim() === "") {
-    problems.push("acceptance.json does not say who accepted it (accepted_by)");
+  if (!existsSync(signersFile(root))) {
+    problems.push(NO_SIGNERS);
   }
 
+  // The review-artifact checks are unchanged: the tag must describe a real,
+  // passing, independent review.
   const manifest = loadManifest(root, bead);
   const artifact = (manifest.artifacts || []).find((a) => a.id === "review");
   if (!artifact) {
@@ -634,19 +672,44 @@ export function acceptanceProblems(root, bead) {
   } else if (reviewer === builder) {
     problems.push(`the reviewer session "${reviewer}" is the builder session`);
   }
-  if (acc.verdict_sha256 !== artifact.sha256) {
-    problems.push("acceptance.json names a different verdict file than the manifest's review artifact");
-  } else {
-    const file = artifact.path ? join(root, artifact.path) : null;
-    if (!file || !existsSync(file)) {
-      problems.push(`the verdict file ${artifact.path ?? "<no path>"} is gone; run factory-review record again`);
-    } else if (sha256File(file) !== artifact.sha256) {
-      problems.push("the verdict file changed after review; run factory-review record again");
-    }
+
+  const acc = readAcceptanceTag(root, bead, { verify: true });
+  if (!acc) {
+    problems.push(`no acceptance tag for ${bead}; accept it with: git tag -s factory-accept/${bead} -F <msg> <commit>`);
+    return problems;
   }
+  if (acc.verify_ok === false) {
+    problems.push(BAD_SIGNER);
+    return problems;
+  }
+
+  if (acc.counts.bead === undefined) {
+    problems.push("the acceptance tag message has no bead: line");
+  } else if (acc.counts.bead > 1) {
+    problems.push("the acceptance tag message states bead: more than once");
+  } else if (acc.fields.bead !== bead) {
+    problems.push(`the acceptance tag is for bead ${JSON.stringify(acc.fields.bead)}, not "${bead}"`);
+  }
+  if (acc.counts.verdict_sha256 === undefined) {
+    problems.push("the acceptance tag message has no verdict_sha256: line");
+  }
+  if (acc.counts.reviewer_session === undefined) {
+    problems.push("the acceptance tag message has no reviewer_session: line");
+  }
+  if (typeof acc.fields.accepted_by !== "string" || acc.fields.accepted_by.trim() === "") {
+    problems.push("the acceptance tag message does not say who accepted it (accepted_by)");
+  }
+
   const head = gitHead(root);
   if (acc.commit !== head) {
-    problems.push(`the code moved after acceptance: accepted at ${acc.commit ?? "<no commit>"}, now ${head ?? "<no commit>"}`);
+    problems.push(`the acceptance tag points at ${acc.commit}, not the current commit ${head}`);
+  }
+  if (typeof acc.fields.verdict_sha256 === "string" && acc.fields.verdict_sha256 !== artifact.sha256) {
+    problems.push(`the acceptance tag names verdict ${acc.fields.verdict_sha256}, but the review artifact is ${artifact.sha256}`);
+  }
+  const file = artifact.path ? join(root, artifact.path) : null;
+  if (!file || !existsSync(file) || sha256File(file) !== artifact.sha256) {
+    problems.push(VERDICT_DRIFTED);
   }
   return problems;
 }
@@ -699,28 +762,66 @@ export function accept(argv) {
     throw new ReviewError("an acceptance must be signed; set FACTORY_SESSION");
   }
 
+  // A signature nobody can check is not an acceptance. There is no default
+  // keyring and no fallback: without the signers file, accept stops here, with
+  // no tag written and nothing half-done to clean up.
+  if (!existsSync(signersFile(root))) {
+    throw new ReviewError(NO_SIGNERS);
+  }
+
+  const tag = tagName(bead);
+  if (tagExists(root, tag)) {
+    throw new ReviewError(`an acceptance tag already exists for ${bead}; withdraw it first: git tag -d ${tag}`);
+  }
+
   const note = typeof values.note === "string" && values.note.trim() !== "" ? values.note : null;
   const head = gitHead(root);
-  saveAcceptance(root, bead, {
-    version: 1,
-    bead,
-    accepted_by: heldBy,
-    role: "human",
-    verdict_sha256: entry.sha256,
-    verdict: entry.verdict,
-    commit: head,
-    at: new Date().toISOString(),
-    note,
-  });
+  // The message is exactly what git signs; every check downstream parses it
+  // back out of the tag object and compares field by field.
+  const message = [
+    `bead: ${bead}`,
+    `verdict_sha256: ${entry.sha256}`,
+    `reviewer_session: ${reviewer}`,
+    `accepted_by: ${heldBy}`,
+    `note: ${note ?? ""}`,
+    "",
+  ].join("\n");
+
+  const tmpDir = mkdtempSync(join(tmpdir(), "factory-accept-"));
+  try {
+    const msgFile = join(tmpDir, "tag-message");
+    writeFileSync(msgFile, message);
+    try {
+      git(root, ["tag", "-s", tag, "-F", msgFile, head]);
+    } catch (e) {
+      const stderr = String(e.stderr ?? e.message ?? "").trim().split("\n")[0].trim();
+      throw new ReviewError(
+        `git could not sign the acceptance tag: ${stderr || "(no stderr)"}; ` +
+        "configure an SSH signing key with: git config gpg.format ssh && git config user.signingkey <key>");
+    }
+    // Verify its own output: a tag git just made must pass git's own check
+    // against the signers file, otherwise this is not an acceptance but an
+    // ordinary tag wearing one's name, and it is destroyed on the way out.
+    try {
+      git(root, ["-c", `gpg.ssh.allowedSignersFile=${signersFile(root)}`, "verify-tag", tag]);
+    } catch {
+      try { git(root, ["tag", "-d", tag]); } catch { /* never there */ }
+      throw new ReviewError(BAD_SIGNER);
+    }
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+
   appendTrail(root, bead, {
     event: "accept",
     accepted_by: heldBy,
     verdict_sha256: entry.sha256,
     commit: head,
     note,
+    tag,
   });
 
-  return `accepted ${bead} on the review by ${reviewer}, commit ${head.slice(0, 7)}`;
+  return `accepted ${bead} on the review by ${reviewer}, tag ${tag} at ${head.slice(0, 7)}`;
 }
 
 export function withdraw(argv) {
@@ -738,14 +839,14 @@ export function withdraw(argv) {
   }
   const root = rootOrRefusal();
 
-  const path = acceptancePath(root, bead);
-  if (!existsSync(path)) {
+  const tag = tagName(bead);
+  // Deleting the tag is the whole withdrawal: an absent tag is the exact state
+  // accept began from, and the trail keeps why it stopped being there.
+  if (!tagExists(root, tag)) {
     throw new ReviewError(`no acceptance recorded for ${bead}`);
   }
-  // Delete, never truncate: an absent record is the exact state accept began
-  // from, and a truncated pickup-stick of JSON would parse to nothing.
-  rmSync(path);
-  appendTrail(root, bead, { event: "withdraw", note });
+  git(root, ["tag", "-d", tag]);
+  appendTrail(root, bead, { event: "withdraw", note, tag });
 
   return `withdrew the acceptance of ${bead}: ${note}`;
 }
@@ -767,10 +868,17 @@ export function show(argv) {
   const builder = manifest.builder_session ?? null;
   const reviewer = entry ? entry.reviewer_session ?? entry.producer_session ?? null : null;
   const head = gitHead(root);
-  // The acceptance is a human act recorded beside the review, so `show` prints
-  // it beside the review - including one it cannot parse (reported, not a
-  // crash) or one that names nobody (rendered as not accepted).
-  const { acceptance, unreadable: acceptanceUnreadable } = loadAcceptance(root, bead);
+  // The acceptance is a signed tag beside the review, so `show` reads it from
+  // git - including one whose signature does not check out (reported, not
+  // hidden) or one that names nobody (rendered as not accepted).
+  const acc = readAcceptanceTag(root, bead, { verify: true });
+  const acceptance = acc === null ? null : {
+    tag: acc.tag,
+    accepted_by: typeof acc.fields.accepted_by === "string" && acc.fields.accepted_by !== ""
+      ? acc.fields.accepted_by : null,
+    commit: acc.commit,
+    verdict_sha256: typeof acc.fields.verdict_sha256 === "string" ? acc.fields.verdict_sha256 : null,
+  };
 
   const result = {
     bead,
@@ -792,11 +900,12 @@ export function show(argv) {
 
   if (!entry) return `no review recorded for ${bead}`;
   const mark = (ok) => (ok ? "ok  " : "FAIL");
-  const acceptedLine =
-    acceptance && typeof acceptance === "object" && acceptance.accepted_by
-      ? `accepted: by ${acceptance.accepted_by} at commit ${String(acceptance.commit ?? "").slice(0, 7)}…`
-      : acceptanceUnreadable
-        ? "accepted: not accepted (unreadable acceptance.json)"
+  const acceptedLine = acc === null
+    ? "accepted: not accepted"
+    : acc.verify_ok === false
+      ? "accepted: tag present but NOT signed by an allowed signer"
+      : acceptance.accepted_by
+        ? `accepted: by ${acceptance.accepted_by} at tag ${acc.tag} (${String(acceptance.commit).slice(0, 7)}…)`
         : "accepted: not accepted";
   return [
     `review ${bead}: verdict ${result.verdict ?? "(none)"} at ${result.path}`,

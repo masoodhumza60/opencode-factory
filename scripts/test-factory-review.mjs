@@ -14,6 +14,9 @@ import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 
 import { sha256File, loadManifest, saveManifest, readTrail } from "./factory-manifest.mjs";
+// `acceptanceProblems` is also `complete`'s contract, so its refusal strings
+// are asserted in-process here rather than through the CLI.
+import { acceptanceProblems } from "./factory-review.mjs";
 
 let pass = 0, fail = 0;
 function check(name, ok, detail = "") {
@@ -434,11 +437,48 @@ check("14 an unknown FACTORY_ROLE is a refusal naming builder, reviewer, human -
   r.stderr.includes("builder, reviewer or human"),
   `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
 
-// Factories for the two files the accept/withdraw sections live and die by,
-// and the current HEAD (nothing below commits, so it holds throughout).
+// Factories for what the accept/withdraw sections live and die by, and the
+// current HEAD (nothing below commits, so it holds throughout).
 const reviewMd = join(sand.sandbox, ".factory", bead, "review.md");
-const acceptanceJson = join(sand.sandbox, ".factory", bead, "acceptance.json");
 const headNow = () => git(["rev-parse", "HEAD"], sand.sandbox, sand.env);
+const acceptTag = `factory-accept/${bead}`;
+const allowedSignersPath = join(sand.sandbox, "config", "factory.allowed_signers");
+const artSha = () => manifestOf(sand, bead).artifacts.find((a) => a.id === "review").sha256;
+
+const tagRef = () => {
+  try { return git(["rev-parse", "-q", "--verify", `refs/tags/${acceptTag}`], sand.sandbox, sand.env); }
+  catch { return null; }
+};
+const tagCommit = () => git(["rev-parse", `${acceptTag}^{commit}`], sand.sandbox, sand.env);
+const tagVerifyOk = () => {
+  try {
+    git(["-c", `gpg.ssh.allowedSignersFile=${allowedSignersPath}`, "verify-tag", acceptTag], sand.sandbox, sand.env);
+    return true;
+  } catch { return false; }
+};
+const setSigners = (line) => writeFileSync(allowedSignersPath, line);
+// The tamper cases build the offending tags directly, with git, exactly as an
+// attacker or a mistake would - `accept` itself only ever signs coherent ones.
+const createSignedTag = (commit, message) => {
+  const msg = join(sand.sandbox, ".factory", bead, "tag-msg.tmp");
+  writeFileSync(msg, message);
+  execFileSync("git", ["tag", "-s", acceptTag, "-F", msg, commit],
+    { cwd: sand.sandbox, env: sand.env, stdio: "ignore" });
+};
+const createLightTag = (commit) => {
+  execFileSync("git", ["tag", acceptTag, commit], { cwd: sand.sandbox, env: sand.env, stdio: "ignore" });
+};
+const dropTag = () => {
+  try {
+    execFileSync("git", ["tag", "-d", acceptTag], { cwd: sand.sandbox, env: sand.env, stdio: "ignore" });
+  } catch { /* already absent */ }
+};
+// acceptanceProblems runs in-process; it is what `complete` calls, so its list
+// is the contract the refusals below assert.
+const problemsOf = () => acceptanceProblems(sand.sandbox, bead);
+const ACCEPT_MSG = (verdictSha, reviewerSession = "review-S1", acceptor = "human-B", note = "") =>
+  `bead: ${bead}\nverdict_sha256: ${verdictSha}\nreviewer_session: ${reviewerSession}\n` +
+  `accepted_by: ${acceptor}\nnote: ${note}\n`;
 
 console.log("\naccept: the refusals, in the plan's order");
 // The show section above left the verdict file hand-edited, so the hash the
@@ -520,60 +560,85 @@ check("15 an acceptance with no FACTORY_SESSION is refused: it must be signed",
   r.status === 1 && r.stderr.includes("an acceptance must be signed; set FACTORY_SESSION"),
   `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
 
-console.log("\naccept: the record it writes");
+console.log("\naccept: the tag replaces the file, and the tag must be signed");
+// The signing half needs a real key, not a made-up one: git sign and git
+// verify-tag both go through ssh-keygen, once per sandbox, and the sandbox's
+// public half is who is allowed.
+let keygenBin = null;
+let keygenErr = null;
+const keyPath = join(sand.sandbox, ".factory-test-key");
+for (const bin of ["ssh-keygen", "C:\\Program Files\\Git\\usr\\bin\\ssh-keygen.exe"]) {
+  try {
+    execFileSync(bin, ["-t", "ed25519", "-N", "", "-f", keyPath, "-q"],
+      { cwd: sand.sandbox, env: sand.env, stdio: "ignore" });
+    keygenBin = bin;
+    break;
+  } catch (e) {
+    keygenErr = e;
+  }
+}
+if (keygenBin === null) {
+  throw new Error("ssh-keygen is required for the signing tests" +
+    (keygenErr ? ` (${keygenErr.message})` : ""));
+}
+execFileSync("git", ["config", "gpg.format", "ssh"], { cwd: sand.sandbox, env: sand.env, stdio: "ignore" });
+execFileSync("git", ["config", "user.signingkey", keyPath], { cwd: sand.sandbox, env: sand.env, stdio: "ignore" });
+
+// No signers file yet: a missing file is a refusal, never a default keyring.
+r = review(sand, ["accept", bead], { FACTORY_ROLE: "human", FACTORY_SESSION: "human-B" });
+check("16 accept without config/factory.allowed_signers is refused, naming the file",
+  r.status === 1 && r.stderr.includes("config/factory.allowed_signers is missing") &&
+  r.stderr.includes("a signature nobody can check is not an acceptance"),
+  `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
+check("16 the refused accept left no tag behind", tagRef() === null, `ref=${tagRef()}`);
+
+const signersPub = readFileSync(`${keyPath}.pub`, "utf8").trim();
+setSigners(`* namespaces="git" ${signersPub}\n`);
+
+console.log("\naccept: the record it signs");
 const headForAccept = headNow();
 const acceptCountBefore = trailOf(sand, bead).filter((e) => e.event === "accept").length;
 r = review(sand, ["accept", bead, "--note", "read the diff; the findings were addressed"],
   { FACTORY_ROLE: "human", FACTORY_SESSION: "human-B" });
-check("16 a human accept exits 0, naming the bead, the reviewer and the commit",
+check("16 a human accept exits 0, naming the bead, the reviewer, the tag and the commit",
   r.status === 0 && r.stdout.includes(`accepted ${bead}`) && r.stdout.includes("review-S1") &&
-  r.stdout.includes(headForAccept.slice(0, 7)),
+  r.stdout.includes(`tag ${acceptTag}`) && r.stdout.includes(headForAccept.slice(0, 7)),
   `status=${r.status} stdout=${JSON.stringify(r.stdout)} stderr=${JSON.stringify(r.stderr)}`);
-const stored = JSON.parse(readFileSync(acceptanceJson, "utf8"));
+check("16 the acceptance tag exists and is an annotated tag object",
+  tagRef() !== null && git(["cat-file", "-t", tagRef()], sand.sandbox, sand.env) === "tag", `ref=${tagRef()}`);
+check("16 the acceptance tag commits to the head accept ran at and verifies against the signers",
+  tagCommit() === headForAccept && tagVerifyOk() === true,
+  `commit=${tagCommit()} head=${headForAccept} verify=${tagVerifyOk()}`);
 const reviewArtNow = manifestOf(sand, bead).artifacts.find((a) => a.id === "review");
-check("16 acceptance.json is version 1, by human-B, role human, head and note recorded",
-  stored.version === 1 && stored.bead === bead && stored.accepted_by === "human-B" &&
-  stored.role === "human" && stored.verdict === "pass" && stored.commit === headForAccept &&
-  typeof stored.at === "string" &&
-  stored.note === "read the diff; the findings were addressed",
-  JSON.stringify(stored));
-check("16 acceptance.json carries the verdict file's sha256",
-  stored.verdict_sha256 === reviewArtNow.sha256 &&
-  reviewArtNow.sha256 === sha256File(reviewMd),
-  `stored=${stored.verdict_sha256} artifact=${reviewArtNow.sha256}`);
 const acceptTrailOne = trailOf(sand, bead).filter((e) => e.event === "accept");
-check("16 the trail appends one accept event with signer, sha256, commit and note",
+check("16 the trail appends one accept event with signer, sha256, commit, note and tag",
   acceptTrailOne.length === acceptCountBefore + 1 &&
   acceptTrailOne[acceptTrailOne.length - 1].accepted_by === "human-B" &&
   acceptTrailOne[acceptTrailOne.length - 1].verdict_sha256 === reviewArtNow.sha256 &&
   acceptTrailOne[acceptTrailOne.length - 1].commit === headForAccept &&
-  acceptTrailOne[acceptTrailOne.length - 1].note === "read the diff; the findings were addressed",
+  acceptTrailOne[acceptTrailOne.length - 1].note === "read the diff; the findings were addressed" &&
+  acceptTrailOne[acceptTrailOne.length - 1].tag === acceptTag,
   JSON.stringify(acceptTrailOne));
 r = review(sand, ["show", bead]);
-check("16 show reports the acceptance with its signer and commit",
-  r.status === 0 && r.stdout.includes(`accepted: by human-B at commit ${headForAccept.slice(0, 7)}`),
+check("16 show reports the acceptance with its signer and tag",
+  r.status === 0 && r.stdout.includes("accepted: by human-B") && r.stdout.includes(acceptTag),
   `status=${r.status} stdout=${JSON.stringify(r.stdout)}`);
 
 let shownJson = null;
 r = review(sand, ["show", bead, "--json"]);
 try { shownJson = JSON.parse(r.stdout); } catch { /* asserted below */ }
-check("16 show --json reports the acceptance as an object",
+check("16 show --json exposes the tag's accepted_by, verdict_sha256, commit and name",
   r.status === 0 && shownJson !== null && shownJson.acceptance !== null &&
-  shownJson.acceptance.accepted_by === "human-B" &&
+  shownJson.acceptance.tag === acceptTag && shownJson.acceptance.accepted_by === "human-B" &&
+  shownJson.acceptance.commit === headForAccept &&
   shownJson.acceptance.verdict_sha256 === reviewArtNow.sha256,
   `status=${r.status} stdout=${JSON.stringify(r.stdout)}`);
 
-// Accepting twice is allowed on purpose: the record is overwritten, the trail
-// keeps both lines. History stays honest even when the file cannot.
-r = review(sand, ["accept", bead], { FACTORY_ROLE: "human", FACTORY_SESSION: "human-C" });
-check("16 a second accept overwrites the record instead of refusing",
-  r.status === 0 && JSON.parse(readFileSync(acceptanceJson, "utf8")).accepted_by === "human-C" &&
-  JSON.parse(readFileSync(acceptanceJson, "utf8")).note === null,
-  `status=${r.status} stored=${JSON.stringify(stored)}`);
-check("16 the second accept appends its own trail event, and no note is invented",
-  trailOf(sand, bead).filter((e) => e.event === "accept").length === acceptTrailOne.length + 1 &&
-  trailOf(sand, bead).filter((e) => e.event === "accept")[1].note === null,
-  JSON.stringify(trailOf(sand, bead).filter((e) => e.event === "accept")));
+r = review(sand, ["accept", bead, "--note", "a second word"], { FACTORY_ROLE: "human", FACTORY_SESSION: "human-C" });
+check("16 a second accept is refused while the tag exists, naming the way out",
+  r.status === 1 && r.stderr.includes(`an acceptance tag already exists for ${bead}`) &&
+  r.stderr.includes(`withdraw it first: git tag -d ${acceptTag}`),
+  `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
 
 console.log("\nwithdraw: acceptance is not a one-way door");
 r = review(sand, ["withdraw", bead], { FACTORY_SESSION: "human-B" });
@@ -604,12 +669,13 @@ check("17 a human withdraws with a stated reason, in one line",
   r.status === 0 && r.stdout.includes(`withdrew the acceptance of ${bead}`) &&
   r.stdout.includes("session id looked wrong"),
   `status=${r.status} stdout=${JSON.stringify(r.stdout)} stderr=${JSON.stringify(r.stderr)}`);
-check("17 the acceptance file is deleted by withdraw",
-  !existsSync(acceptanceJson), `acceptanceJson still present`);
+check("17 the acceptance tag is deleted by withdraw",
+  tagRef() === null, `ref=${tagRef()}`);
 const withdrawTrail = trailOf(sand, bead).filter((e) => e.event === "withdraw");
-check("17 the trail appends one withdraw event with the note",
+check("17 the trail appends one withdraw event with the note and the tag",
   withdrawTrail.length === withdrawCountBefore + 1 &&
-  withdrawTrail[withdrawTrail.length - 1].note === "the reviewer's session id looked wrong",
+  withdrawTrail[withdrawTrail.length - 1].note === "the reviewer's session id looked wrong" &&
+  withdrawTrail[withdrawTrail.length - 1].tag === acceptTag,
   JSON.stringify(withdrawTrail));
 r = review(sand, ["show", bead]);
 check("17 show reports the bead as not accepted after withdraw",
@@ -623,27 +689,59 @@ check("17 show --json reports acceptance null after withdraw",
 
 r = review(sand, ["accept", bead, "--note", "re-checked; the id was right on re-read"],
   { FACTORY_ROLE: "human", FACTORY_SESSION: "human-B" });
-check("17 after a withdraw, accept can be recorded again",
-  r.status === 0 && existsSync(acceptanceJson) &&
-  JSON.parse(readFileSync(acceptanceJson, "utf8")).note === "re-checked; the id was right on re-read",
+check("17 after a withdraw, accept can be recorded again as a fresh signed tag",
+  r.status === 0 && tagRef() !== null && tagVerifyOk() === true && tagCommit() === headNow(),
   `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
 
-console.log("\nshow survives a corrupt acceptance.json");
-// A record a human tampered with must degrade to a sentence, not take `show`
-// down with it: show renders, it never decides.
-writeFileSync(acceptanceJson, "{acceptance oops");
+console.log("\nacceptanceProblems: the tag can rot");
+// Each case below drops the good tag, plants the offending shape with git, and
+// reads the problem list - the same list `complete` refuses on.
+const goodMessage = ACCEPT_MSG(artSha(), "review-S1", "human-B", "re-checked; the id was right on re-read");
+
+dropTag();
+createLightTag(headNow());
+let probs = problemsOf();
+check("16 a lightweight (unsigned) tag under the acceptance name is refused with the allowed-signer message",
+  probs.length >= 1 && probs[0] === "the acceptance tag is not signed by an allowed signer; " +
+  "add your public key to config/factory.allowed_signers",
+  JSON.stringify(probs));
 r = review(sand, ["show", bead]);
-check("18 a corrupt acceptance.json does not crash show and is named unreadable",
-  r.status === 0 && r.stdout.includes("not accepted (unreadable acceptance.json)"),
+check("16 show reports the unsigned tag as present but not signed by an allowed signer",
+  r.status === 0 && r.stdout.includes("accepted: tag present but NOT signed by an allowed signer"),
   `status=${r.status} stdout=${JSON.stringify(r.stdout)}`);
-r = review(sand, ["show", bead, "--json"]);
-try { shownJson = JSON.parse(r.stdout); } catch { /* asserted below */ }
-check("18 show --json survives the corrupt file with acceptance null",
-  r.status === 0 && shownJson !== null && shownJson.acceptance === null,
-  `status=${r.status} stdout=${JSON.stringify(r.stdout)}`);
-r = review(sand, ["accept", bead], { FACTORY_ROLE: "human", FACTORY_SESSION: "human-B" });
-check("18 re-accepting over a corrupt file restores a readable record",
-  r.status === 0 && JSON.parse(readFileSync(acceptanceJson, "utf8")).accepted_by === "human-B",
+dropTag();
+
+const olderSha = rootSha; // anything not the current head; the root is always older
+createSignedTag(olderSha, goodMessage);
+probs = problemsOf();
+check("16 a tag left at an older commit is refused with the points-at message",
+  probs.length >= 1 && probs[0] === `the acceptance tag points at ${olderSha}, not the current commit ${headNow()}`,
+  JSON.stringify(probs));
+dropTag();
+
+const foreignSha = "f".repeat(64);
+createSignedTag(headNow(), ACCEPT_MSG(foreignSha, "review-S1", "human-B", "tampered"));
+probs = problemsOf();
+check("16 a tag whose verdict_sha256 line was altered is refused, naming the divergence",
+  probs.length >= 1 && probs[0] === `the acceptance tag names verdict ${foreignSha}, but the review artifact is ${artSha()}`,
+  JSON.stringify(probs));
+dropTag();
+
+createSignedTag(headNow(), goodMessage);
+const verdictBytes = readFileSync(reviewMd);
+writeFileSync(reviewMd, "Verdict: pass\n\nhand-edited after the record\n");
+probs = problemsOf();
+check("16 a verdict file changed after acceptance is refused with the re-record pointer",
+  probs.length >= 1 && probs[0] === "the verdict file changed after review; run factory-review record again",
+  JSON.stringify(probs));
+writeFileSync(reviewMd, verdictBytes);
+check("16 the restored verdict bytes leave acceptanceProblems empty",
+  problemsOf().length === 0, JSON.stringify(problemsOf()));
+dropTag();
+
+r = review(sand, ["withdraw", bead, "--note", "sweep"], { FACTORY_ROLE: "human", FACTORY_SESSION: "human-B" });
+check("17 withdraw with no tag recorded for the bead is refused, naming the bead",
+  r.status === 1 && r.stderr.includes(`no acceptance recorded for ${bead}`),
   `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
 
 rmSandbox(sand.sandbox);
