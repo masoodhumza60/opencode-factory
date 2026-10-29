@@ -724,6 +724,34 @@ export function protectedProblems(home = factoryHome()) {
   if (!head || !sameProtectedSet(set, head)) {
     problems.push(`the protected set is not committed; commit ${PROTECTED_SET} before shipping`);
   }
+  // A committed baseline is still unsigned by default. When the install carries
+  // an allowed-signers file, the commit that last changed the set must verify
+  // against it - the same sentence the acceptance tag is judged by. Without the
+  // file a factory cannot check signatures at all, so the rule stays silent:
+  // the docs state that ceiling rather than this check inventing a problem.
+  const signers = join(home, "config", "factory.allowed_signers");
+  if (existsSync(signers)) {
+    let verdict = null;
+    let shortSha = "";
+    try {
+      verdict = execFileSync("git",
+        ["-C", home, "-c", `gpg.ssh.allowedSignersFile=${signers}`, "log", "-1",
+          "--format=%G?", "--", PROTECTED_SET],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+      shortSha = execFileSync("git",
+        ["-C", home, "log", "-1", "--format=%h", "--", PROTECTED_SET],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+    } catch {
+      problems.push(
+        "config/factory.allowed_signers exists but git cannot verify signatures; " +
+        "check gpg.format=ssh and the allowed signers file");
+      return problems;
+    }
+    if (verdict !== "G") {
+      problems.push(
+        `the protected set was last changed in ${shortSha}, which is not signed by an allowed signer`);
+    }
+  }
   return problems;
 }
 

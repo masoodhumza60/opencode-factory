@@ -164,6 +164,82 @@ console.log("\nthe table");
     /changed\s+scripts\/factory-attest\.mjs/.test(table), table);
 }
 
+// ---- the signature rule: opt-in via config/factory.allowed_signers -----------
+// A factory that carries no allowed-signers file cannot check signatures at
+// all, so the baseline rule stays silent - its ceiling is the docs' problem.
+// With one present, the commit that last changed the protected set must
+// verify the same way an acceptance tag does: by an allowed signer.
+console.log("\nthe signature rule");
+
+// One ephemeral key for the whole section, kept outside the homes being
+// cleaned up below. Resolved like the review suite: PATH first, then Git for
+// Windows' bundled binary; without either the second and third cases cannot
+// exist, so fail loudly rather than pass by default.
+const keyHome = mkdtempSync(join(tmpdir(), "factory-protect-key-"));
+const keyPath = join(keyHome, ".testkey");
+let keygenBin = null;
+let keygenErr = null;
+for (const bin of ["ssh-keygen", "C:\\Program Files\\Git\\usr\\bin\\ssh-keygen.exe"]) {
+  try {
+    execFileSync(bin, ["-t", "ed25519", "-N", "", "-f", keyPath, "-q"], { stdio: "ignore" });
+    keygenBin = bin;
+    break;
+  } catch (e) {
+    keygenErr = e;
+  }
+}
+if (keygenBin === null) {
+  throw new Error("ssh-keygen is required for the signature tests" +
+    (keygenErr ? ` (${keygenErr.message})` : ""));
+}
+const keyPub = readFileSync(`${keyPath}.pub`, "utf8").trim();
+
+{
+  // No signers file: the ceiling is preserved, no signature problem is added.
+  const none = makeHome();
+  withRole("human", () => protect(["--write"], none));
+  commit(none);
+  const problems = protectedProblems(none);
+  check("no allowed_signers file adds no signature problem",
+    !existsSync(join(none, "config", "factory.allowed_signers")) && problems.length === 0,
+    JSON.stringify(problems));
+}
+
+{
+  // The signers file exists and nobody signed the baseline commit: %G? reads
+  // N, which is exactly the unsigned case the rule exists to catch.
+  const unsigned = makeHome();
+  withRole("human", () => protect(["--write"], unsigned));
+  commit(unsigned);
+  writeFileSync(join(unsigned, "config", "factory.allowed_signers"),
+    `* namespaces="git" ${keyPub}\n`);
+  const problems = protectedProblems(unsigned);
+  check("an unsigned baseline commit under an allowed_signers file is refused by name",
+    problems.some((p) => p.includes("not signed by an allowed signer")) &&
+    problems.some((p) => p.includes("the protected set was last changed in ")),
+    JSON.stringify(problems));
+}
+
+{
+  // The signers file exists and the baseline commit IS signed with the key it
+  // names: %G? reads G, and the baseline alone clears.
+  const signed = makeHome();
+  writeFileSync(join(signed, "config", "factory.allowed_signers"),
+    `* namespaces="git" ${keyPub}\n`);
+  withRole("human", () => protect(["--write"], signed));
+  execFileSync("git", ["-c", "init.defaultBranch=main", "init", "-q", signed], { stdio: "ignore" });
+  execFileSync("git", ["-C", signed, "add", "-A"], { stdio: "ignore" });
+  execFileSync("git", ["-C", signed, "-c", "user.email=t@t", "-c", "user.name=t",
+    "-c", "gpg.format=ssh", `-c`, `user.signingkey=${keyPath}`,
+    "commit", "-S", "-qm", "signed baseline"], { stdio: "ignore" });
+  const problems = protectedProblems(signed);
+  check("a baseline commit signed by an allowed signer adds no problem",
+    problems.length === 0, JSON.stringify(problems));
+}
+
+try { rmSync(keyHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
+catch (e) { console.log(`  cleanup warning: ${keyHome} left behind (${e.code})`); }
+
 for (const home of homes) {
   try { rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
   catch (e) { console.log(`  cleanup warning: ${home} left behind (${e.code})`); }

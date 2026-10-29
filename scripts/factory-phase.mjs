@@ -1078,8 +1078,8 @@ function cmdComplete(bead, target, evidence, ranArg, artifactArg) {
           ? `phase 7 (ship) is not ready to ship:\n` +
             problems.map((p) => `  ${p}`).join("\n") +
             `\nA passing review is not an acceptance, and an edited grading script is not a rule. Record one with:\n` +
-            `  FACTORY_ROLE=reviewer FACTORY_SESSION=review:<you> node scripts/factory-review.mjs record ${bead} --file .factory/${bead}/review.md --verdict pass\n` +
-            `  FACTORY_ROLE=human FACTORY_SESSION=human:<you> node scripts/factory-review.mjs accept ${bead} --note "<what you read>"\n` +
+            `  FACTORY_ROLE=reviewer FACTORY_SESSION=review:<you> node scripts/factory-review.mjs record <bead> --file .factory/<bead>/review.md --verdict pass\n` +
+            `  git tag -s factory-accept/<bead> -F <msg> <commit>     (message: bead:, verdict_sha256:, reviewer_session:, accepted_by:, note:)\n` +
             `  FACTORY_ROLE=human node scripts/factory-attest.mjs protect --write, then commit config/factory.protected.json`
           : `phase 8 (close) needs an outcome record at .factory/${bead}/outcome.md (G4):\n` +
             problems.map((p) => `  ${p}`).join("\n") +

@@ -10,7 +10,7 @@
 // Exit 0 = every case behaved as specified.
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, appendFileSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, appendFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1227,6 +1227,37 @@ console.log("\nship acceptance and the outcome record");
 const reviewCli = join(HERE, "factory-review.mjs");
 const review = (args, env = {}) => run(process.execPath, [reviewCli, ...args], { BEADS_DIR: BEADS, ...env });
 
+// The ship gate demands a signed acceptance tag (factory-accept/<bead>), so the
+// suite needs a real signing key: git sign and git verify-tag both go through
+// ssh-keygen. Resolved like the review suite: PATH first, then Git for Windows'
+// bundled binary; without either there is nothing to prove, so fail loudly.
+const keyPath = join(SANDBOX, ".testkey");
+let keygenBin = null;
+let keygenErr = null;
+for (const bin of ["ssh-keygen", "C:\\Program Files\\Git\\usr\\bin\\ssh-keygen.exe"]) {
+  const kg = run(bin, ["-t", "ed25519", "-N", "", "-f", keyPath, "-q"]);
+  if (kg.code === 0) { keygenBin = bin; break; }
+  keygenErr = kg.out;
+}
+if (keygenBin === null) {
+  throw new Error("ssh-keygen is required for the acceptance-tag tests" +
+    (keygenErr ? ` (${keygenErr})` : ""));
+}
+// The signers file lives beside the policy in config/ (created only if missing:
+// the policy block above already owns that directory). It must exist BEFORE the
+// first complete 7 of this block, because the first one tests the refusal.
+const learnSSH = (args) => run("git", args);
+mkdirSync(join(SANDBOX, "config"), { recursive: true });
+writeFileSync(join(SANDBOX, "config", "factory.allowed_signers"),
+  `* namespaces="git" ${readFileSync(`${keyPath}.pub`, "utf8").trim()}\n`);
+learnSSH(["config", "gpg.format", "ssh"]);
+learnSSH(["config", "user.signingkey", keyPath]);
+
+// An acceptance is a tag, not a file beside the review.
+const hasTag = (b) =>
+  run("git", ["rev-parse", "-q", "--verify", `refs/tags/factory-accept/${b}`]).code === 0;
+const dropTag = (b) => run("git", ["tag", "-d", `factory-accept/${b}`]);
+
 function shipBead(title, file) {
   // The policy block installs a phase-5 `run` check before this block runs, so
   // the walk must satisfy it or complete 5 refuses. run.txt already exists in
@@ -1247,13 +1278,16 @@ function shipBead(title, file) {
   return b;
 }
 
-function acceptedReview(b, verdict = "pass") {
+function acceptedReview(b) {
   const started = review(["start", b]);
   if (started.code !== 0) throw new Error(`review start for ${b} failed: ${started.out.slice(0, 300)}`);
-  writeFileSync(join(SANDBOX, ".factory", b, "review-1.md"), `# Review\n\nVerdict: ${verdict}\n`);
-  const rec = review(["record", b, "--file", `.factory/${b}/review-1.md`, "--verdict", verdict],
+  writeFileSync(join(SANDBOX, ".factory", b, "review-1.md"), "# Review\n\nVerdict: pass\n");
+  const rec = review(["record", b, "--file", `.factory/${b}/review-1.md`, "--verdict", "pass"],
     { FACTORY_ROLE: "reviewer", FACTORY_SESSION: "review:1" });
   if (rec.code !== 0) throw new Error(`review record for ${b} failed: ${rec.out.slice(0, 300)}`);
+  // The tag is created by the real accept command, not a hand-made git call:
+  // this proves the shipped signing path, not a fixture that happens to nod at
+  // it.
   return review(["accept", b, "--note", "read the diff and the run"],
     { FACTORY_ROLE: "human", FACTORY_SESSION: "human:1" });
 }
@@ -1262,16 +1296,16 @@ function acceptedReview(b, verdict = "pass") {
   const p7 = shipBead("ship without acceptance", "ship.txt");
   const noAcc = phase(["complete", p7, "7", "--evidence", "the build is done and the review passed", "--quiet"]);
   check(
-    "shipping without a human acceptance REFUSES",
-    noAcc.code === 1 && has(noAcc.out, "acceptance.json") && has(noAcc.out, "factory-review.mjs accept"),
+    "shipping without a human acceptance REFUSES, naming the tag",
+    noAcc.code === 1 && has(noAcc.out, "factory-accept/") && has(noAcc.out, "factory-review.mjs record"),
     `${noAcc.code} ${noAcc.out.slice(0, 300)}`
   );
 
   const acc = acceptedReview(p7);
   check(
-    "a separate reviewer and a human can accept the bead",
-    acc.code === 0 && existsSync(join(SANDBOX, ".factory", p7, "acceptance.json")),
-    `${acc.code} ${acc.out.slice(0, 200)}`
+    "a separate reviewer and a human can accept the bead, leaving a signed tag",
+    acc.code === 0 && hasTag(p7),
+    `${acc.code} ${acc.out.slice(0, 200)} tag=${hasTag(p7)}`
   );
 
   const shipped = phase(["complete", p7, "7", "--evidence", "the review passed and a human accepted it", "--quiet"]);
@@ -1297,6 +1331,40 @@ function acceptedReview(b, verdict = "pass") {
   const p7b = shipBead("ship after a late edit", "ship2.txt");
   const acc = acceptedReview(p7b);
   if (acc.code !== 0) throw new Error(`accept for ${p7b} failed: ${acc.out.slice(0, 300)}`);
+  const reaccept = (why) => {
+    const r = review(["accept", p7b, "--note", why], { FACTORY_ROLE: "human", FACTORY_SESSION: "human:1" });
+    if (r.code !== 0) throw new Error(`re-accept for ${p7b} failed: ${r.out.slice(0, 300)}`);
+    return r;
+  };
+
+  // Deleting the tag is a withdrawal: a signed gate that is gone is not a pass.
+  const dropped = dropTag(p7b);
+  const noTag = phase(["complete", p7b, "7", "--evidence", "the review was accepted before this delete", "--quiet"]);
+  check(
+    "deleting the acceptance tag REFUSES ship again",
+    dropped.code === 0 && noTag.code === 1 && has(noTag.out, `no acceptance tag for ${p7b}`) &&
+    has(noTag.out, "factory-accept/"),
+    `${dropped.code} ${noTag.code} ${noTag.out.slice(0, 300)}`
+  );
+
+  // An unsigned lightweight tag wearing the acceptance name is not signed by
+  // anybody: verify-tag fails it and the refusal says so, same as a stranger's
+  // key would be.
+  const droppedAgain = dropTag(p7b);
+  const headSha = run("git", ["rev-parse", "HEAD"]).out.trim();
+  const forged = run("git", ["tag", `factory-accept/${p7b}`, headSha]);
+  const unsigned = phase(["complete", p7b, "7", "--evidence", "a tag of this name exists", "--quiet"]);
+  check(
+    "an unsigned lightweight tag is REFUSED with the allowed-signer message",
+    droppedAgain.code === 0 && forged.code === 0 && unsigned.code === 1 &&
+    has(unsigned.out, "not signed by an allowed signer"),
+    `${droppedAgain.code} ${forged.code} ${unsigned.code} ${unsigned.out.slice(0, 300)}`
+  );
+
+  // Back to a real acceptance before the verdict-drift case: the tag is
+  // re-signed from the untouched review, so the only change below is the file.
+  dropTag(p7b);
+  reaccept("signed again after the unsigned tag was removed");
   appendFileSync(join(SANDBOX, ".factory", p7b, "review-1.md"), "\nAdded after the human read it.\n");
   const late = phase(["complete", p7b, "7", "--evidence", "the review was accepted before this edit", "--quiet"]);
   check(
