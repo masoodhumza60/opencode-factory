@@ -1350,15 +1350,18 @@ function acceptedReview(b) {
   // An unsigned lightweight tag wearing the acceptance name is not signed by
   // anybody: verify-tag fails it and the refusal says so, same as a stranger's
   // key would be.
-  const droppedAgain = dropTag(p7b);
+  // The tag is already gone here: the assertion above deleted it to prove
+  // `complete 7` refuses without one. Deleting it again fails, and that failure
+  // is not part of what this case is about - the forged tag and the refusal are.
+  dropTag(p7b);
   const headSha = run("git", ["rev-parse", "HEAD"]).out.trim();
   const forged = run("git", ["tag", `factory-accept/${p7b}`, headSha]);
   const unsigned = phase(["complete", p7b, "7", "--evidence", "a tag of this name exists", "--quiet"]);
   check(
     "an unsigned lightweight tag is REFUSED with the allowed-signer message",
-    droppedAgain.code === 0 && forged.code === 0 && unsigned.code === 1 &&
+    forged.code === 0 && unsigned.code === 1 &&
     has(unsigned.out, "not signed by an allowed signer"),
-    `${droppedAgain.code} ${forged.code} ${unsigned.code} ${unsigned.out.slice(0, 300)}`
+    `${forged.code} ${unsigned.code} ${unsigned.out.slice(0, 300)}`
   );
 
   // Back to a real acceptance before the verdict-drift case: the tag is
