@@ -14,6 +14,16 @@
 # optimistically is a config file that silently does the wrong thing.
 version: 2
 
+# profiles: the vocabulary of project profiles that skill resolution knows.
+#            `factory-skills.mjs resolve` refuses an unknown profile with this
+#            list, and a skill entry may declare `profiles:` (which profiles may
+#            pull it), `stacks:` (which stack tokens may pull it) and
+#            `version:` (the pin). An entry that declares none of those applies
+#            to every stack and profile. An api profile project therefore never
+#            resolves a skill tagged `profiles: web` - including the framework
+#            skill itself.
+profiles: web, mobile, desktop, api, cli, library, infra, embedded, game, data-ml
+
 mandatory:
   - name: commit-work
     source: softaworks/agent-toolkit
