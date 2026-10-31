@@ -1,6 +1,7 @@
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   PolicyError, parseYamlSubset, loadPolicy, effectiveChecks, requiredForPhase, validatePolicy,
 } from "./factory-policy.mjs";
@@ -178,10 +179,19 @@ expect("version must be 1",
   "version: 2\ntiers:\nprofiles:\nchecks:\n", /version must be 1/);
 expect("an unknown kind is refused",
   "version: 1\ntiers:\n  prototype:\n    checks: [x]\nprofiles:\n  web:\n    checks: []\nchecks:\n  x:\n    phase: 2\n    kind: telepathy\n    command: null\n",
-  /check "x" has kind "telepathy", which is not one of the sixteen kinds/);
-expect("a phase of 9 is refused",
+  /check "x" has kind "telepathy", which is not one of the known kinds/);
+expect("a phase of 9 is refused, naming the allowed phase ids",
   "version: 1\ntiers:\n  prototype:\n    checks: [x]\nprofiles:\n  web:\n    checks: []\nchecks:\n  x:\n    phase: 9\n    kind: prr\n    command: null\n",
-  /check "x" has phase 9/);
+  /check "x" has phase 9, which is not a phase; allowed phase ids are 0, 1, 2, 3, 4, 4p, 5, 6, 7, 8$/);
+expect("a phase id the machine does not know is refused, naming the allowed phase ids",
+  "version: 1\ntiers:\n  prototype:\n    checks: [x]\nprofiles:\n  web:\n    checks: []\nchecks:\n  x:\n    phase: x\n    kind: prr\n    command: null\n",
+  /check "x" has phase "x", which is not a phase; allowed phase ids are 0, 1, 2, 3, 4, 4p, 5, 6, 7, 8$/);
+expect("a check with no phase is refused, in the checklist's own voice",
+  "version: 1\ntiers:\n  prototype:\n    checks: [x]\nprofiles:\n  web:\n    checks: []\nchecks:\n  x:\n    kind: prr\n    command: null\n",
+  /check "x" has no phase; every check gates a phase \(0-8, or 4p\)/);
+expect("an unknown top-level profile is still refused",
+  "version: 1\ntier: prototype\nprofile: nope\ntiers:\n  prototype:\n    checks: []\nprofiles:\n  web:\n    checks: []\nchecks:\n",
+  /profile "nope" is not declared under profiles/);
 
 console.log("\nrefusals name the line");
 function refuse(name, text, pattern, line) {
@@ -382,6 +392,52 @@ check("an unknown tier is refused naming the legal values", (() => {
   }
 })(), (() => { try { effectiveChecks(arith, { tier: "payments" }); return ""; }
   catch (e) { return e.message; } })());
+
+// M2a: the shipped example policy is a real policy. The ten profiles from
+// docs/factory-domain-profiles.md live there as data, and the parser's own
+// guarantee - every profile check id is declared - is proven against the real
+// file, not a fixture shaped like it.
+console.log("\nprofiles: the example policy is a real policy");
+const EXAMPLE = fileURLToPath(new URL("../config/factory.policy.example.yaml", import.meta.url));
+const example = loadPolicy(root, EXAMPLE);
+const EXAMPLE_PROFILES = ["web", "api", "cli", "library", "infra", "mobile", "desktop", "embedded", "game", "data-ml"];
+check("config/factory.policy.example.yaml parses with loadPolicy",
+  example !== null && example.version === 1);
+check("the example declares exactly ten profiles",
+  example !== null && JSON.stringify(Object.keys(example.profiles)) === JSON.stringify(EXAMPLE_PROFILES),
+  JSON.stringify(Object.keys(example.profiles)));
+check("each of the ten profiles names at least one check",
+  example !== null && EXAMPLE_PROFILES.every((p) =>
+    Array.isArray(example.profiles[p].checks) && example.profiles[p].checks.length >= 1));
+check("every check id named by every profile is declared under checks (the parser's own guarantee, on the real file)",
+  example !== null && EXAMPLE_PROFILES.every((p) =>
+    example.profiles[p].checks.every((id) => Object.prototype.hasOwnProperty.call(example.checks, id))));
+check("the example's new checks are declared with kinds and phases the parser accepts",
+  example !== null && example.checks.visual.kind === "screenshot" &&
+  example.checks["plan-diff"].phase === 5 &&
+  example.checks["data-quality"].kind === "data-quality");
+
+const exWeb = effectiveChecks(example, { tier: "prototype", profile: "web" });
+check("prototype+web unions to exactly six unique ids (3 tier + 3 profile, no overlap)",
+  exWeb.checks.length === 6 && exWeb.checks.join(",") === "tests,run,review,a11y,perf,visual",
+  JSON.stringify(exWeb.checks));
+const exApi = effectiveChecks(example, { tier: "prototype", profile: "api" });
+check("prototype+api unions to exactly six unique ids (contract is profile-only at this tier)",
+  exApi.checks.length === 6 && exApi.checks.join(",") === "tests,run,review,contract,authz,load",
+  JSON.stringify(exApi.checks));
+const exInfra = effectiveChecks(example, { tier: "prototype", profile: "infra" });
+check("prototype+infra unions to exactly six unique ids (rollback is not in prototype, so no overlap)",
+  exInfra.checks.length === 6 && exInfra.checks.join(",") === "tests,run,review,plan-diff,policy-check,rollback",
+  JSON.stringify(exInfra.checks));
+const exPublic = effectiveChecks(example, { tier: "public", profile: "web" });
+check("public+web unions without duplicates (length equals the distinct-id count)",
+  exPublic.checks.length === 14 &&
+  JSON.stringify([...new Set(exPublic.checks)]) === JSON.stringify(exPublic.checks),
+  `${exPublic.checks.length} total, ${new Set(exPublic.checks).size} distinct`);
+check("the dedupe keeps tier ids first and appends only web's new visual",
+  exPublic.checks.slice(0, 13).join(",") === TIER_CHECKS.public.join(",") &&
+  exPublic.checks[13] === "visual",
+  JSON.stringify(exPublic.checks));
 
 rmSync(root, { recursive: true, force: true });
 rmSync(bare, { recursive: true, force: true });

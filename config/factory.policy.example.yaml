@@ -30,13 +30,30 @@ tiers:
   regulated:
     checks: [tests, run, review, lint, types, contract, a11y, perf, security, migration, rollback, observability, privacy, audit, retention, incident, dr, segregation, training, attestation]
 
-# A profile adds the checks a surface needs on top of its tier. Effective
-# checks are tiers[tier].checks union profiles[profile].checks. Add profiles
-# (api, cli, library, mobile, desktop, data-ml, infra, embedded, game) in the
-# same shape; each id they name must also be declared under checks below.
+# A profile adds the checks its surface needs on top of its tier; the union of
+# the two lists is the effective set the bead must produce, and every id a
+# profile names must also be declared under checks below.
 profiles:
   web:
-    checks: [a11y, perf]
+    checks: [a11y, perf, visual]
+  api:
+    checks: [contract, authz, load]
+  cli:
+    checks: [golden, tty]
+  library:
+    checks: [api-diff, consumer-build]
+  infra:
+    checks: [plan-diff, policy-check, rollback]
+  mobile:
+    checks: [a11y, device, perf]
+  desktop:
+    checks: [a11y, signing, update]
+  embedded:
+    checks: [watchdog, recovery]
+  game:
+    checks: [frame, input]
+  data-ml:
+    checks: [eval, data-quality]
 
 # Every check id above is declared here with the phase it gates, the artifact
 # kind the manifest must record, and the command that produces it. `command`
@@ -122,3 +139,78 @@ checks:
     phase: 7
     kind: plan
     command: null
+  visual:
+    phase: 5
+    kind: screenshot
+    command: npm run visual
+  authz:
+    phase: 5
+    kind: authz
+    command: npm run authz
+  load:
+    phase: 5
+    kind: load
+    command: npm run load
+  golden:
+    phase: 5
+    kind: golden
+    command: npm run golden
+  tty:
+    phase: 5
+    kind: tty
+    command: npm run tty
+  api-diff:
+    phase: 5
+    kind: api-diff
+    command: npm run api-diff
+  consumer-build:
+    phase: 5
+    kind: consumer-build
+    command: npm run consumer-build
+  plan-diff:
+    phase: 5
+    kind: plan-diff
+    command: null
+  policy-check:
+    phase: 5
+    kind: policy-check
+    command: npm run policy-check
+  device:
+    phase: 5
+    kind: device
+    command: npm run device
+  # signing and update gate 7 (ship), not 5 (verify): they are
+  # release-integrity evidence - the operator's signed tag, the update channel
+  # actually upgraded - not per-run evidence the verify phase proves.
+  signing:
+    phase: 7
+    kind: signing
+    command: null
+  update:
+    phase: 7
+    kind: update
+    command: null
+  watchdog:
+    phase: 5
+    kind: watchdog
+    command: npm run watchdog
+  recovery:
+    phase: 5
+    kind: recovery
+    command: npm run recovery
+  frame:
+    phase: 5
+    kind: frame
+    command: npm run frame
+  input:
+    phase: 5
+    kind: input
+    command: npm run input
+  eval:
+    phase: 5
+    kind: eval
+    command: npm run eval
+  data-quality:
+    phase: 5
+    kind: data-quality
+    command: npm run data-quality

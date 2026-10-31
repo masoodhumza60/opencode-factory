@@ -29,11 +29,18 @@ const POLICY_FILE = "factory.policy.yaml";
 
 const REFUSED = ["{", "}", "|", ">", "&", "*", "'", '"'];
 
+// The artifact kinds a check may declare. Anchored to the check ids the
+// profiles name in docs/factory-domain-profiles.md; factory-attest still
+// copies the original sixteen producing kinds until the evidence vocabulary
+// is closed (M2a Task 4) - this set governs what a policy may declare.
 const KINDS = new Set([
   "screenshot", "transcript", "contract", "api-diff", "plan", "eval",
   "hil-log", "prr", "exit-code-matrix", "golden-file", "help-snapshot",
   "tty-transcript", "completion-script", "install-log", "device-capture",
   "check-output",
+  "visual", "authz", "load", "golden", "tty", "consumer-build",
+  "plan-diff", "policy-check", "device", "signing", "update",
+  "watchdog", "recovery", "frame", "input", "data-quality",
 ]);
 
 const KEY_RE = /^([A-Za-z0-9_.-]+):\s*(.*)$/;
@@ -215,11 +222,17 @@ export function validatePolicy(policy, file) {
       throw new PolicyError(`${file}: check "${id}" must be a mapping`);
     }
     const phase = def.phase;
-    if (!(Number.isInteger(phase) && phase >= 0 && phase <= 8)) {
-      throw new PolicyError(`${file}: check "${id}" has phase ${JSON.stringify(phase)}, which must be an integer 0-8`);
+    if (phase === undefined || phase === null) {
+      throw new PolicyError(`${file}: check "${id}" has no phase; every check gates a phase (0-8, or 4p)`);
+    }
+    // Anchored to the phase table in factory-phase.mjs: ids 0-8 plus the 4p
+    // debug detour. Numeric ids stay integers in the policy; "4p" is the one
+    // string form the machine knows.
+    if (!(phase === "4p" || (Number.isInteger(phase) && phase >= 0 && phase <= 8))) {
+      throw new PolicyError(`${file}: check "${id}" has phase ${JSON.stringify(phase)}, which is not a phase; allowed phase ids are 0, 1, 2, 3, 4, 4p, 5, 6, 7, 8`);
     }
     if (!KINDS.has(def.kind)) {
-      throw new PolicyError(`${file}: check "${id}" has kind "${def.kind}", which is not one of the sixteen kinds`);
+      throw new PolicyError(`${file}: check "${id}" has kind "${def.kind}", which is not one of the known kinds`);
     }
   }
 
