@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   PolicyError, parseYamlSubset, loadPolicy, effectiveChecks, requiredForPhase, validatePolicy,
+  DECLARABLE_KINDS,
 } from "./factory-policy.mjs";
 
 let pass = 0, fail = 0;
@@ -72,6 +73,27 @@ check("a null command stays null", policy.checks.review.command === null);
 check("nested block parses to the right shape",
   JSON.stringify(policy.checks.tests) === JSON.stringify({ phase: 2, kind: "check-output", command: "npm test" }),
   JSON.stringify(policy.checks.tests));
+
+console.log("\nclosed vocabulary");
+// One list, two readers: the policy validates declarations against it and
+// factory-attest derives what it accepts from it. This pins the list itself so
+// neither side can quietly grow a kind the other has never heard of.
+check("the policy exports the vocabulary", Array.isArray(DECLARABLE_KINDS) && DECLARABLE_KINDS.length > 0);
+check("the vocabulary has no duplicates",
+  new Set(DECLARABLE_KINDS).size === DECLARABLE_KINDS.length,
+  `${DECLARABLE_KINDS.length} entries, ${new Set(DECLARABLE_KINDS).size} distinct`);
+const vocabRoot = mkdtempSync(join(tmpdir(), "factory-policy-vocab-"));
+mkdirSync(join(vocabRoot, "config"), { recursive: true });
+let vocabText = "version: 1\ntiers:\n  prototype:\n    checks: [" +
+  DECLARABLE_KINDS.map((_, i) => `k${i}`).join(", ") + "]\nprofiles:\n  web:\n    checks: []\nchecks:\n";
+DECLARABLE_KINDS.forEach((kind, i) => {
+  vocabText += `  k${i}:\n    phase: 3\n    kind: ${kind}\n    command: null\n`;
+});
+writeFileSync(join(vocabRoot, "config", "factory.policy.yaml"), vocabText);
+let vocabErr = null;
+try { loadPolicy(vocabRoot); } catch (e) { vocabErr = e.message; }
+check("a policy may declare every kind in the vocabulary", vocabErr === null, String(vocabErr));
+rmSync(vocabRoot, { recursive: true, force: true });
 
 console.log("\ninline lists");
 check("an inline empty list is []", JSON.stringify(parseYamlSubset("a:\n  checks: []\n", "f").a.checks) === "[]");

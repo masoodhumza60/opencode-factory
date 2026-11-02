@@ -29,11 +29,13 @@ const POLICY_FILE = "factory.policy.yaml";
 
 const REFUSED = ["{", "}", "|", ">", "&", "*", "'", '"'];
 
-// The artifact kinds a check may declare. Anchored to the check ids the
-// profiles name in docs/factory-domain-profiles.md; factory-attest still
-// copies the original sixteen producing kinds until the evidence vocabulary
-// is closed (M2a Task 4) - this set governs what a policy may declare.
-const KINDS = new Set([
+// The closed evidence vocabulary: the one list both sides read. A policy may
+// declare any of these, and factory-attest accepts any of them plus the kinds
+// only the orchestrator writes (see factory-attest's KINDS). Keeping the list
+// here - in the file that judges declarations - means attest cannot drift from
+// the policy, and a kind a profile names is always a kind an artifact can carry.
+// docs/factory-domain-profiles.md lists the same set for readers.
+export const DECLARABLE_KINDS = [
   "screenshot", "transcript", "contract", "api-diff", "plan", "eval",
   "hil-log", "prr", "exit-code-matrix", "golden-file", "help-snapshot",
   "tty-transcript", "completion-script", "install-log", "device-capture",
@@ -41,7 +43,9 @@ const KINDS = new Set([
   "visual", "authz", "load", "golden", "tty", "consumer-build",
   "plan-diff", "policy-check", "device", "signing", "update",
   "watchdog", "recovery", "frame", "input", "data-quality",
-]);
+];
+
+const KINDS = new Set(DECLARABLE_KINDS);
 
 const KEY_RE = /^([A-Za-z0-9_.-]+):\s*(.*)$/;
 

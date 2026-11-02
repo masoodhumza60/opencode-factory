@@ -23,20 +23,17 @@ import {
   projectRoot, gitHead, sha256File, loadManifest, saveManifest,
   upsertArtifact, appendTrail, ensureBuilderSession,
 } from "./factory-manifest.mjs";
-import { loadPolicy, effectiveChecks, requiredForPhase } from "./factory-policy.mjs";
+import { loadPolicy, effectiveChecks, requiredForPhase, DECLARABLE_KINDS } from "./factory-policy.mjs";
 
-// The seventeen producing kinds are copy-anchored to factory-policy's KINDS
-// and to docs/factory-domain-profiles.md; changing the set means changing all
-// three. `hidden-tests` is the one exception on the policy side, for the reason
-// written next to it.
+// The evidence vocabulary: every kind a policy may declare, derived from the
+// policy rather than copied beside it, plus the kinds the builder must never
+// write. Deriving means a policy that names a kind is always a kind an
+// artifact can carry; the two files cannot drift silently.
 export const KINDS = [
-  "screenshot", "transcript", "contract", "api-diff", "plan", "eval",
-  "hil-log", "prr", "exit-code-matrix", "golden-file", "help-snapshot",
-  "tty-transcript", "completion-script", "install-log", "device-capture",
-  "check-output",
+  ...DECLARABLE_KINDS,
   // Written by the orchestrator, never the builder. Deliberately absent from
-  // factory-policy's KINDS: a policy that declared a hidden test would print
-  // its id in the review package, and the builder reads that package.
+  // the policy's list: a policy that declared a hidden test would print its id
+  // in the review package, and the builder reads that package.
   "hidden-tests",
 ];
 
@@ -73,7 +70,7 @@ function firstLine(text) {
 
 const FLAGS = {
   id: "the check id this artifact satisfies (a non-empty id is accepted even without a policy)",
-  kind: "one of the seventeen artifact kinds (docs/factory-domain-profiles.md)",
+  kind: "one of the artifact kinds listed in docs/factory-domain-profiles.md",
   command: "the command whose run produced this artifact (optional)",
   policy: "the policy file to read checks from instead of config/factory.policy.yaml (optional)",
 };
@@ -178,7 +175,7 @@ function refuseArtifactPath(rawPath) {
 function requireKind(kind) {
   if (!KINDS.includes(kind)) {
     throw new AttestError(
-      `kind "${kind}" is not one of the seventeen kinds; the kinds are: ${KINDS.join(", ")}`,
+      `kind "${kind}" is not one of the ${KINDS.length} kinds; the kinds are: ${KINDS.join(", ")}`,
     );
   }
 }
@@ -227,8 +224,8 @@ export function attest(argv) {
   // 4. The artifact must be a non-empty file.
   const { abs, stat } = refuseArtifactPath(args.path);
 
-  // 5. The kind must be one of the seventeen, and the declared role must be a
-  //    role we know. The second check grants nothing by itself; it exists so a
+  // 5. The kind must be in the closed vocabulary, and the declared role must be
+  //    a role we know. The second check grants nothing by itself; it exists so a
   //    typo cannot pass as "some other role" on a run that then records.
   requireKind(args.kind);
   role();
@@ -415,12 +412,19 @@ export function verifyChecks(root, bead, phase, policy) {
   const checks = ids.map((id) => {
     const entry = manifest.artifacts.find((a) => a.id === id) || null;
     const def = policy.checks[id] || {};
-    const result = decide(
+    let result = decide(
       entry,
       entry ? join(root, entry.path) : null,
       entry ? entry.sha256 : null,
       head,
     );
+    // A transcript cannot stand in for a screenshot. The policy declares what
+    // kind answers each check, and an artifact of any other kind answers a
+    // different question - without this rung the profile matrix is a wish and
+    // the evidence is merely "something that hashed".
+    if (result === "ok" && typeof def.kind === "string" && entry.kind !== def.kind) {
+      result = "mismatch";
+    }
     const row = {
       id,
       result,
@@ -440,6 +444,14 @@ export function verifyChecks(root, bead, phase, policy) {
     // leave that field missing or non-string; the walker found `stale` by
     // inequality, so the honest report is "we do not know", never a crash.
     row.head = head;
+    if (result === "mismatch") {
+      // The two names travel so the report and --json can say which kind the
+      // check asked for and which it got, not merely that they differ.
+      row.actual_kind = entry.kind ?? null;
+      row.detail =
+        `check "${id}" needs a ${def.kind} artifact; ` +
+        `the manifest has ${entry.kind ?? "<no kind>"} (${entry.path})`;
+    }
     if (result === "stale") {
       row.recorded_commit = typeof entry.commit === "string" ? entry.commit : null;
     }
@@ -512,6 +524,8 @@ function rowLine(row, details) {
       return `${left}  recorded at commit ${short(row.recorded_commit, 7)}, HEAD is ${short(row.head, 7)}`;
     case "producer":
       return `${left}  no producer session recorded`;
+    case "mismatch":
+      return `${left}  needs a ${short(row.kind, 24)} artifact; the manifest has ${short(row.actual_kind, 24)}; re-attest it with: ${row.fix}`;
     case "independence":
       return `${left}  the reviewer session "${short(row.reviewer_session, 40)}" ` +
         `is the builder session "${short(row.builder_session, 40)}"; the builder cannot review its own bead`;

@@ -13,7 +13,8 @@ import { execFileSync } from "node:child_process";
 
 import { sha256File, loadManifest, readTrail } from "./factory-manifest.mjs";
 import { loadPolicy } from "./factory-policy.mjs";
-import { verifyChecks } from "./factory-attest.mjs";
+import { verifyChecks, KINDS as ATTEST_KINDS } from "./factory-attest.mjs";
+import { DECLARABLE_KINDS } from "./factory-policy.mjs";
 
 let pass = 0, fail = 0;
 function check(name, ok, detail = "") {
@@ -23,13 +24,19 @@ function check(name, ok, detail = "") {
 
 const script = resolve(dirname(fileURLToPath(import.meta.url)), "factory-attest.mjs");
 
-// The seventeen kinds are pinned here from docs/factory-domain-profiles.md so
-// the CLI cannot satisfy this refusal by truncating the list.
+// The closed vocabulary is pinned here from docs/factory-domain-profiles.md so
+// the CLI cannot satisfy this refusal by truncating the list. It is the policy's
+// declarable kinds (which attest derives) plus the one only an orchestrator
+// writes.
 const KINDS = [
   "screenshot", "transcript", "contract", "api-diff", "plan", "eval",
   "hil-log", "prr", "exit-code-matrix", "golden-file", "help-snapshot",
   "tty-transcript", "completion-script", "install-log", "device-capture",
-  "check-output", "hidden-tests",
+  "check-output",
+  "visual", "authz", "load", "golden", "tty", "consumer-build",
+  "plan-diff", "policy-check", "device", "signing", "update",
+  "watchdog", "recovery", "frame", "input", "data-quality",
+  "hidden-tests",
 ];
 
 // A sandbox is a git repo with its own beads workspace. Every child runs with
@@ -153,9 +160,17 @@ r = run({ sandbox, env }, [bead, "out/empty.txt", "--id", "run", "--kind", "chec
 check("7 a 0-byte file is refused",
   r.status === 1 && r.stderr.includes("is empty"), `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
 r = run({ sandbox, env }, [bead, "out/log.txt", "--id", "run", "--kind", "telepathy"]);
-check("8 a bad kind is refused naming every one of the seventeen",
+check("8 a bad kind is refused naming every kind in the vocabulary",
   r.status === 1 && r.stderr.includes("telepathy") && KINDS.every((k) => r.stderr.includes(k)),
   `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
+// The pinned list and the runtime list are the same list: attest derives what
+// it accepts from the policy's vocabulary, so the only addition is the kind the
+// builder must never write.
+check("8 attest accepts the policy's kinds, in order, plus hidden-tests",
+  ATTEST_KINDS.length === DECLARABLE_KINDS.length + 1 &&
+  DECLARABLE_KINDS.every((k, i) => ATTEST_KINDS[i] === k) &&
+  ATTEST_KINDS[ATTEST_KINDS.length - 1] === "hidden-tests",
+  JSON.stringify(ATTEST_KINDS));
 r = run({ sandbox, env }, [bead, "out/log.txt", "--id", "run", "--kind", "check-output", "--bogus", "x"]);
 check("unknown flag is refused with the accepted list",
   r.status === 1 && r.stderr.includes("unknown flag") && r.stderr.includes("--policy"), `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
@@ -1003,6 +1018,62 @@ check("an empty builder_session is a loud read, not a silent default",
   builderRefusal !== null && /builder_session/.test(builderRefusal),
   `error=${JSON.stringify(builderRefusal)}`);
 writeFileSync(badManifestPath, goodManifest);
+
+// ---- the declared kind is the only kind that answers a check ----------------
+//
+// A check declares what evidence answers it. A transcript proves a command ran;
+// it says nothing about what a screen showed, so it cannot answer a screenshot
+// check. Without this rung the profile matrix is a wish and "evidence" is
+// merely a file that hashed. The refusal lives at verify - the gate - rather
+// than at attest, so an artifact recorded before its check was written can
+// still be reported against rather than silently orphaned.
+console.log("\nthe declared kind is the only kind that answers a check");
+
+const ms = makeSandbox();
+const mbead = makeBead(ms, "kind mismatch");
+mkdirSync(join(ms.sandbox, "config"));
+mkdirSync(join(ms.sandbox, "out"));
+writeFileSync(join(ms.sandbox, "config", "factory.policy.yaml"),
+  "version: 1\ntier: prototype\nprofile: web\n" +
+  "\ntiers:\n" +
+  "  prototype:\n    checks: [shot]\n" +
+  "  internal:\n    checks: []\n" +
+  "  public:\n    checks: []\n" +
+  "  regulated:\n    checks: []\n" +
+  "\nprofiles:\n" +
+  "  web:\n    checks: []\n" +
+  "\nchecks:\n" +
+  "  shot:\n" +
+  "    phase: 3\n" +
+  "    kind: screenshot\n" +
+  "    command: null\n");
+writeFileSync(join(ms.sandbox, "out", "shot.txt"), "screenshot of the checkout page\n");
+
+let kc = attest2(ms, [mbead, "out/shot.txt", "--id", "shot", "--kind", "transcript"],
+  { FACTORY_SESSION: "build-M" });
+check("kind 1 the wrong kind is still attesting (the policy is read at verify, not here)",
+  kc.status === 0, `status=${kc.status} stderr=${JSON.stringify(kc.stderr)}`);
+kc = verify(ms, [mbead]);
+check("kind 2 a transcript cannot stand in for a screenshot: MISMATCH, exit 1",
+  kc.status === 1 && /^  MISMATCH\s+shot\s/m.test(kc.stdout),
+  `status=${kc.status} stdout=${JSON.stringify(kc.stdout)}`);
+check("kind 3 the report names the declared kind, the actual kind and the fix",
+  kc.stdout.includes("needs a screenshot artifact; the manifest has transcript") &&
+  kc.stdout.includes("--id shot --kind screenshot"),
+  kc.stdout);
+const mResult = withSandboxEnv(ms, () => verifyChecks(ms.sandbox, mbead, "3", loadPolicy(ms.sandbox)));
+check("kind 4 the row carries mismatch, both kinds, and the exact sentence",
+  mResult.ok === false && mResult.checks[0].result === "mismatch" &&
+  mResult.checks[0].kind === "screenshot" && mResult.checks[0].actual_kind === "transcript" &&
+  mResult.checks[0].detail ===
+    `check "shot" needs a screenshot artifact; the manifest has transcript (.factory/${mbead}/out/shot.txt)`,
+  JSON.stringify(mResult.checks));
+kc = attest2(ms, [mbead, "out/shot.txt", "--id", "shot", "--kind", "screenshot"]);
+check("kind 5 re-attesting with the declared kind verifies",
+  kc.status === 0 && verify(ms, [mbead]).status === 0,
+  `status=${kc.status} stderr=${JSON.stringify(kc.stderr)}`);
+
+rmSandbox(ms.sandbox);
 
 rmSandbox(bs.sandbox);
 rmSandbox(anon.sandbox);
