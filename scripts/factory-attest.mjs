@@ -25,14 +25,36 @@ import {
 } from "./factory-manifest.mjs";
 import { loadPolicy, effectiveChecks, requiredForPhase } from "./factory-policy.mjs";
 
-// The sixteen kinds are copy-anchored to factory-policy's KINDS and to
-// docs/factory-domain-profiles.md; changing the set means changing all three.
+// The seventeen producing kinds are copy-anchored to factory-policy's KINDS
+// and to docs/factory-domain-profiles.md; changing the set means changing all
+// three. `hidden-tests` is the one exception on the policy side, for the reason
+// written next to it.
 export const KINDS = [
   "screenshot", "transcript", "contract", "api-diff", "plan", "eval",
   "hil-log", "prr", "exit-code-matrix", "golden-file", "help-snapshot",
   "tty-transcript", "completion-script", "install-log", "device-capture",
   "check-output",
+  // Written by the orchestrator, never the builder. Deliberately absent from
+  // factory-policy's KINDS: a policy that declared a hidden test would print
+  // its id in the review package, and the builder reads that package.
+  "hidden-tests",
 ];
+
+// The role is a declaration like the session: FACTORY_ROLE names which part of
+// the factory is running. It defaults to builder so every existing call site
+// keeps working; an unknown value is a refusal, because a typo must not be
+// mistaken for a permission.
+export const ROLES = ["builder", "reviewer", "orchestrator", "human"];
+
+export function role() {
+  const raw = (process.env.FACTORY_ROLE ?? "").trim();
+  if (raw === "") return "builder";
+  if (!ROLES.includes(raw)) {
+    throw new AttestError(
+      `unknown FACTORY_ROLE "${raw}"; expected builder, reviewer, orchestrator or human`);
+  }
+  return raw;
+}
 
 export class AttestError extends Error {
   constructor(message) {
@@ -51,7 +73,7 @@ function firstLine(text) {
 
 const FLAGS = {
   id: "the check id this artifact satisfies (a non-empty id is accepted even without a policy)",
-  kind: "one of the sixteen artifact kinds (docs/factory-domain-profiles.md)",
+  kind: "one of the seventeen artifact kinds (docs/factory-domain-profiles.md)",
   command: "the command whose run produced this artifact (optional)",
   policy: "the policy file to read checks from instead of config/factory.policy.yaml (optional)",
 };
@@ -156,7 +178,7 @@ function refuseArtifactPath(rawPath) {
 function requireKind(kind) {
   if (!KINDS.includes(kind)) {
     throw new AttestError(
-      `kind "${kind}" is not one of the sixteen kinds; the kinds are: ${KINDS.join(", ")}`,
+      `kind "${kind}" is not one of the seventeen kinds; the kinds are: ${KINDS.join(", ")}`,
     );
   }
 }
@@ -205,13 +227,31 @@ export function attest(argv) {
   // 4. The artifact must be a non-empty file.
   const { abs, stat } = refuseArtifactPath(args.path);
 
-  // 5. The kind must be one of the sixteen.
+  // 5. The kind must be one of the seventeen, and the declared role must be a
+  //    role we know. The second check grants nothing by itself; it exists so a
+  //    typo cannot pass as "some other role" on a run that then records.
   requireKind(args.kind);
+  role();
 
   // 5b. A verdict artifact must name who said so. The factory:<uuid> fallback
   //     would hand every anonymous run a fresh identity, so a builder could
   //     attest its own review and look independent of itself. Other kinds keep
   //     the fallback: check-output has no second party to name.
+  // A hidden acceptance test is the one artifact the builder must never be able
+  // to author: it is the check the builder cannot read and therefore cannot
+  // target. The role is a declaration, so this refuses the ordinary case and
+  // records the claim; the phase-7 gate then requires the artifact to exist and
+  // to have come from a different session than the builder's.
+  if (args.kind === "hidden-tests") {
+    if (role() !== "orchestrator") {
+      throw new AttestError(
+        "hidden acceptance tests are written by the orchestrator, not the builder");
+    }
+    if ((process.env.FACTORY_SESSION ?? "").trim() === "") {
+      throw new AttestError(
+        "hidden acceptance tests must be named; set FACTORY_SESSION to an orchestrator session");
+    }
+  }
   if (args.kind === "prr" && (process.env.FACTORY_SESSION ?? "").trim() === "") {
     throw new AttestError(
       "a verdict must be named; set FACTORY_SESSION to a reviewer session distinct from the builder");
@@ -220,7 +260,9 @@ export function attest(argv) {
   // 6. With a policy on disk, the id must be one it declares. Without one,
   //    any non-empty id is accepted: no policy, no gate yet.
   const policy = loadChecksPolicy(root, args.policy);
-  if (policy && !Object.hasOwn(policy.checks ?? {}, args.id)) {
+  // Hidden tests are exempt on purpose: the policy is readable by the builder,
+  // so a declared hidden test would announce what it checks.
+  if (policy && args.kind !== "hidden-tests" && !Object.hasOwn(policy.checks ?? {}, args.id)) {
     requireDeclaredId(policy, args.id);
   }
 

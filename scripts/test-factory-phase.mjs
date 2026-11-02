@@ -1258,7 +1258,21 @@ const hasTag = (b) =>
   run("git", ["rev-parse", "-q", "--verify", `refs/tags/factory-accept/${b}`]).code === 0;
 const dropTag = (b) => run("git", ["tag", "-d", `factory-accept/${b}`]);
 
-function shipBead(title, file) {
+// A hidden acceptance test lives under .factory/<bead>/hidden/ and is attested
+// by the orchestrator, never the builder: the builder cannot read it, so it
+// cannot target it. The file is created here, not hand-written into a manifest,
+// so the hash and the producer session are the real writer's.
+function attestHidden(b, name = "probe.txt") {
+  const dir = join(SANDBOX, ".factory", b, "hidden");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, name), "acceptance: the factory refuses an unproven ship\n");
+  const a = run(process.execPath,
+    [join(HERE, "factory-attest.mjs"), "attest", b, `.factory/${b}/hidden/${name}`, "--id", "hidden", "--kind", "hidden-tests"],
+    { BEADS_DIR: BEADS, FACTORY_ROLE: "orchestrator", FACTORY_SESSION: "orch:1" });
+  if (a.code !== 0) throw new Error(`attest hidden for ${b} failed: ${a.out.slice(0, 300)}`);
+}
+
+function shipBead(title, file, { hidden = true } = {}) {
   // The policy block installs a phase-5 `run` check before this block runs, so
   // the walk must satisfy it or complete 5 refuses. run.txt already exists in
   // the sandbox from that block; attest it for this bead, then let walkTo
@@ -1268,10 +1282,11 @@ function shipBead(title, file) {
       [join(HERE, "factory-attest.mjs"), "attest", bead, "run.txt", "--id", "run", "--kind", "transcript", "--command", "npm test"],
       { BEADS_DIR: BEADS, FACTORY_SESSION: "build:1" });
     if (a.code !== 0) throw new Error(`attest run for ${bead} failed: ${a.out.slice(0, 300)}`);
+    if (hidden) attestHidden(bead);
   });
   approveGate(b, "C");
   writeFileSync(join(SANDBOX, file), "ok\n");
-  // No second attestation here: the policy declares only the `run` check, and
+  // No second policy check here: the policy declares only the `run` check, and
   // attest refuses an id the policy does not declare. The `run` attestation in
   // the prep already froze the builder session, which is all the acceptance
   // checks need. complete 7 has no policy checks of its own.
@@ -1374,6 +1389,48 @@ function acceptedReview(b) {
     "a verdict edited after acceptance REFUSES ship",
     late.code === 1 && has(late.out, "verdict file changed after review"),
     `${late.code} ${late.out.slice(0, 300)}`
+  );
+}
+
+{
+  // A hidden acceptance test is a ship requirement of its own: a green evidence
+  // set and a signed acceptance do not prove the builder's blind spot was ever
+  // checked. This bead is accepted but has no hidden test, so ship must refuse
+  // and name the orchestrator's command; attesting one then unblocks it.
+  const p7c = shipBead("ship without a hidden test", "ship3.txt", { hidden: false });
+  const acc = acceptedReview(p7c);
+  if (acc.code !== 0) throw new Error(`accept for ${p7c} failed: ${acc.out.slice(0, 300)}`);
+
+  const noHidden = phase(["complete", p7c, "7", "--evidence", "the review was accepted", "--quiet"]);
+  check(
+    "shipping without a hidden acceptance test REFUSES, naming the orchestrator's command",
+    noHidden.code === 1 && has(noHidden.out, "no hidden acceptance test is attested") &&
+    has(noHidden.out, "--kind hidden-tests"),
+    `${noHidden.code} ${noHidden.out.slice(0, 300)}`
+  );
+
+  attestHidden(p7c);
+  const withHidden = phase(["complete", p7c, "7", "--evidence", "the orchestrator's test is attested", "--quiet"]);
+  check(
+    "ship completes once an orchestrator has attested the hidden test",
+    withHidden.code === 0, `${withHidden.code} ${withHidden.out.slice(0, 300)}`
+  );
+}
+
+{
+  // The hash is what makes "hidden" mean "unchanged since the orchestrator
+  // wrote it". A builder that edits the test after attestation is editing its
+  // own acceptance criterion, so ship must refuse.
+  const p7d = shipBead("ship after a hidden edit", "ship4.txt");
+  const acc = acceptedReview(p7d);
+  if (acc.code !== 0) throw new Error(`accept for ${p7d} failed: ${acc.out.slice(0, 300)}`);
+
+  appendFileSync(join(SANDBOX, ".factory", p7d, "hidden", "probe.txt"), "and also accept this\n");
+  const edited = phase(["complete", p7d, "7", "--evidence", "the test was attested before this edit", "--quiet"]);
+  check(
+    "a hidden test edited after attestation REFUSES ship",
+    edited.code === 1 && has(edited.out, "changed after attestation"),
+    `${edited.code} ${edited.out.slice(0, 300)}`
   );
 }
 

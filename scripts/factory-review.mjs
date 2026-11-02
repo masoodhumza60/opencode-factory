@@ -33,7 +33,7 @@ import { readBeadPhase, loadBeadMeta } from "./factory-attest.mjs";
 
 export class ReviewError extends Error {}
 
-const ROLES = ["builder", "reviewer", "human"];
+const ROLES = ["builder", "reviewer", "orchestrator", "human"];
 
 // The role is declared, like the session. An unknown value is a refusal rather
 // than a silent fallback to builder: a typo must not quietly grant or deny a
@@ -42,7 +42,8 @@ function role() {
   const raw = (process.env.FACTORY_ROLE ?? "").trim();
   if (raw === "") return "builder";
   if (!ROLES.includes(raw)) {
-    throw new ReviewError(`unknown FACTORY_ROLE "${raw}"; expected builder, reviewer or human`);
+    throw new ReviewError(
+      `unknown FACTORY_ROLE "${raw}"; expected builder, reviewer, orchestrator or human`);
   }
   return raw;
 }
@@ -430,6 +431,11 @@ export function record(argv) {
 
   const abs = resolve(root, values.file);
   const rel = relative(root, abs).split(sep).join("/");
+  if (rel.startsWith(`.factory/${bead}/hidden/`)) {
+    throw new ReviewError(
+      "a review verdict may not be a hidden acceptance test; write it outside " +
+      `.factory/${bead}/hidden/`);
+  }
   const expected = `.factory/${bead}/`;
   if (!rel.startsWith(expected) || rel.slice(expected.length).includes("/")) {
     throw new ReviewError(

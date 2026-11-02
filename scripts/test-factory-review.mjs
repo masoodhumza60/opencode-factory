@@ -432,9 +432,22 @@ check("13 --json reports the same tamper as hash_ok false, with independence int
 console.log("\nunknown roles");
 r = review(sand, ["record", bead, "--file", `.factory/${bead}/review.md`, "--verdict", "pass"],
   { FACTORY_ROLE: "admin", FACTORY_SESSION: "review-S1" });
-check("14 an unknown FACTORY_ROLE is a refusal naming builder, reviewer, human - not a silent default",
+check("14 an unknown FACTORY_ROLE is a refusal naming builder, reviewer, orchestrator, human - not a silent default",
   r.status === 1 && r.stderr.includes('unknown FACTORY_ROLE "admin"') &&
-  r.stderr.includes("builder, reviewer or human"),
+  r.stderr.includes("builder, reviewer, orchestrator or human"),
+  `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
+
+// A hidden acceptance test is the builder's blind spot, so a verdict that is
+// literally the hidden test is either a leak or a misunderstanding. The path
+// confinement would refuse it anyway (it is not review*.md at the top level);
+// this case pins the sentence that says why.
+mkdirSync(join(sand.sandbox, ".factory", bead, "hidden"), { recursive: true });
+writeFileSync(join(sand.sandbox, ".factory", bead, "hidden", "review.md"), "Verdict: pass\n");
+r = review(sand, ["record", bead, "--file", `.factory/${bead}/hidden/review.md`, "--verdict", "pass"],
+  { FACTORY_ROLE: "reviewer", FACTORY_SESSION: "review-S1" });
+check("14 a verdict file under hidden/ is refused by name, not just by confinement",
+  r.status === 1 && r.stderr.includes("may not be a hidden acceptance test") &&
+  r.stderr.includes(`.factory/${bead}/hidden/`),
   `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
 
 // Factories for what the accept/withdraw sections live and die by, and the

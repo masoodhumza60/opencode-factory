@@ -23,13 +23,13 @@ function check(name, ok, detail = "") {
 
 const script = resolve(dirname(fileURLToPath(import.meta.url)), "factory-attest.mjs");
 
-// The sixteen kinds are pinned here from docs/factory-domain-profiles.md so
+// The seventeen kinds are pinned here from docs/factory-domain-profiles.md so
 // the CLI cannot satisfy this refusal by truncating the list.
 const KINDS = [
   "screenshot", "transcript", "contract", "api-diff", "plan", "eval",
   "hil-log", "prr", "exit-code-matrix", "golden-file", "help-snapshot",
   "tty-transcript", "completion-script", "install-log", "device-capture",
-  "check-output",
+  "check-output", "hidden-tests",
 ];
 
 // A sandbox is a git repo with its own beads workspace. Every child runs with
@@ -153,7 +153,7 @@ r = run({ sandbox, env }, [bead, "out/empty.txt", "--id", "run", "--kind", "chec
 check("7 a 0-byte file is refused",
   r.status === 1 && r.stderr.includes("is empty"), `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
 r = run({ sandbox, env }, [bead, "out/log.txt", "--id", "run", "--kind", "telepathy"]);
-check("8 a bad kind is refused naming every one of the sixteen",
+check("8 a bad kind is refused naming every one of the seventeen",
   r.status === 1 && r.stderr.includes("telepathy") && KINDS.every((k) => r.stderr.includes(k)),
   `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
 r = run({ sandbox, env }, [bead, "out/log.txt", "--id", "run", "--kind", "check-output", "--bogus", "x"]);
@@ -258,6 +258,69 @@ check("14 a non-verdict kind without FACTORY_SESSION still succeeds and still fr
   r.status === 0 && againEntry !== undefined &&
   /^factory:[0-9a-f-]{36}$/.test(againEntry.producer_session || ""),
   JSON.stringify(againEntry && againEntry.producer_session));
+
+// ---- hidden acceptance tests -------------------------------------------------
+//
+// A hidden test is the check the builder cannot read, so it is the one artifact
+// the builder must never be able to author. The role is a declaration, not a
+// secret: these assertions pin the refusal text and the recording, and the
+// phase suite pins that ship actually requires one from someone else.
+
+console.log("\nhidden acceptance tests");
+const hiddenDir = join(sandbox, ".factory", bead, "hidden");
+mkdirSync(hiddenDir, { recursive: true });
+const hiddenPath = join(hiddenDir, "probe.txt");
+writeFileSync(hiddenPath, "acceptance: the export runs on a machine with no network\n");
+const hiddenRel = `.factory/${bead}/hidden/probe.txt`;
+
+r = run({ sandbox, env }, [bead, hiddenRel, "--id", "hidden", "--kind", "hidden-tests"],
+  { FACTORY_SESSION: "build:1" });
+check("hidden 1 the builder may not attest a hidden acceptance test",
+  r.status === 1 && r.stderr.includes("hidden acceptance tests are written by the orchestrator, not the builder"),
+  `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
+check("hidden 1 the refused builder attestation wrote no artifact and no trail event",
+  artifactsOf({ sandbox }, bead).every((a) => a.kind !== "hidden-tests") &&
+  readTrail(sandbox, bead).every((x) => x.id !== "hidden"),
+  JSON.stringify(artifactsOf({ sandbox }, bead).map((a) => a.kind)));
+
+r = run({ sandbox, env }, [bead, hiddenRel, "--id", "hidden", "--kind", "hidden-tests"],
+  { FACTORY_ROLE: "orchestrator" });
+check("hidden 2 an orchestrator must still name itself; the uuid fallback is refused",
+  r.status === 1 && r.stderr.includes("hidden acceptance tests must be named") &&
+  r.stderr.includes("set FACTORY_SESSION to an orchestrator session"),
+  `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
+check("hidden 2 the refused anonymous attestation wrote no artifact",
+  artifactsOf({ sandbox }, bead).every((a) => a.kind !== "hidden-tests"),
+  JSON.stringify(artifactsOf({ sandbox }, bead).map((a) => a.kind)));
+
+r = run({ sandbox, env }, [bead, hiddenRel, "--id", "hidden", "--kind", "hidden-tests"],
+  { FACTORY_ROLE: "orchestratr", FACTORY_SESSION: "orch:1" });
+check("hidden 3 an unknown FACTORY_ROLE is a refusal, not a silent builder",
+  r.status === 1 && r.stderr.includes(`unknown FACTORY_ROLE "orchestratr"`) &&
+  r.stderr.includes("expected builder, reviewer, orchestrator or human"),
+  `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
+
+r = run({ sandbox, env }, [bead, hiddenRel, "--id", "hidden", "--kind", "hidden-tests"],
+  { FACTORY_ROLE: "orchestrator", FACTORY_SESSION: "orch:1" });
+const hiddenEntry = artifactsOf({ sandbox }, bead).find((a) => a.kind === "hidden-tests");
+const hiddenTrail = readTrail(sandbox, bead).filter((x) => x.id === "hidden");
+check("hidden 4 an orchestrator with a session records the test and who produced it",
+  r.status === 0 && hiddenEntry !== undefined && hiddenEntry.id === "hidden" &&
+  hiddenEntry.path === hiddenRel && hiddenEntry.producer_session === "orch:1" &&
+  hiddenTrail.length === 1 && hiddenTrail[0].producer_session === "orch:1",
+  `status=${r.status} entry=${JSON.stringify(hiddenEntry)}`);
+
+// The policy on disk declares only `tests`; a hidden test must still be
+// attestable, because a declared hidden test would be printed in the review
+// package the builder reads.
+const pHiddenDir = join(pb.sandbox, ".factory", pbead, "hidden");
+mkdirSync(pHiddenDir, { recursive: true });
+writeFileSync(join(pHiddenDir, "probe.txt"), "acceptance: the cli exits 2 on a bad flag\n");
+r = run(pb, [pbead, `.factory/${pbead}/hidden/probe.txt`, "--id", "hidden", "--kind", "hidden-tests"],
+  { FACTORY_ROLE: "orchestrator", FACTORY_SESSION: "orch:1" });
+check("hidden 5 a hidden test is exempt from the declared-id rule",
+  r.status === 0 && artifactsOf(pb, pbead).some((a) => a.kind === "hidden-tests"),
+  `status=${r.status} stderr=${JSON.stringify(r.stderr)}`);
 
 // ---- verify -----------------------------------------------------------------
 //

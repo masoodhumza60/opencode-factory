@@ -28,7 +28,7 @@ import { dirname, join, resolve } from "node:path";
 // The mechanical half of completion. factory-manifest and factory-policy import
 // nothing from this file, so there is no cycle: the phase machine is free to
 // read the evidence store and the policy that says which evidence is required.
-import { appendTrail, isWorkspaceBeads } from "./factory-manifest.mjs";
+import { appendTrail, isWorkspaceBeads, loadManifest, sha256File } from "./factory-manifest.mjs";
 import { loadPolicy } from "./factory-policy.mjs";
 import { verifyChecks, protectedProblems, factoryHome } from "./factory-attest.mjs";
 // One definition of "is this acceptance still true", shared with the writer, so
@@ -906,6 +906,43 @@ function cmdGate(bead, which, evidence) {
 // G4 asks one question and checks only that the answer exists: did it work, and
 // what changes next time. The content is judged by a human later; a missing
 // record is a refusal, not a warning.
+// Hidden acceptance tests are the builder's blind spot: written by the
+// orchestrator, never shown to the builder, and required at ship. A hidden test
+// that the builder produced, moved, or edited after attestation is not hidden
+// from the builder at all, so each of those is a refusal rather than a warning.
+function hiddenProblems(root, bead) {
+  const prefix = `.factory/${bead}/hidden/`;
+  const manifest = loadManifest(root, bead);
+  const hidden = manifest.artifacts.filter((a) => a.kind === "hidden-tests");
+  if (hidden.length === 0) {
+    return ["no hidden acceptance test is attested; the orchestrator writes them, not the builder"];
+  }
+  const problems = [];
+  for (const a of hidden) {
+    const path = typeof a.path === "string" ? a.path : "";
+    if (!path.startsWith(prefix)) {
+      problems.push(
+        `hidden test ${a.id} is at ${path || "<no path>"}; hidden acceptance tests live under ${prefix}`);
+      continue;
+    }
+    const abs = join(root, path);
+    if (!existsSync(abs)) {
+      problems.push(`hidden test ${a.id} is gone: ${path}`);
+      continue;
+    }
+    if (sha256File(abs) !== a.sha256) {
+      problems.push(`hidden test ${a.id} changed after attestation: ${path}`);
+      continue;
+    }
+    if (!a.producer_session || a.producer_session === manifest.builder_session) {
+      problems.push(
+        `hidden test ${a.id} was produced by the builder (${a.producer_session || "no session"}); ` +
+        "only the orchestrator may write it");
+    }
+  }
+  return problems;
+}
+
 function outcomeProblems(root, bead) {
   const rel = `.factory/${bead}/outcome.md`;
   const path = join(root, rel);
@@ -1063,7 +1100,8 @@ function cmdComplete(bead, target, evidence, ranArg, artifactArg) {
     // Both records are checked here, after the artifacts and before the state
     // write, so a refusal leaves phase_done untouched like every other refusal.
     const problems = target === "7"
-      ? [...protectedProblems(factoryHome()), ...acceptanceProblems(policyRoot, bead)]
+      ? [...protectedProblems(factoryHome()), ...hiddenProblems(policyRoot, bead),
+         ...acceptanceProblems(policyRoot, bead)]
       : target === "8" ? outcomeProblems(policyRoot, bead)
       : [];
     if (problems.length) {
@@ -1079,6 +1117,7 @@ function cmdComplete(bead, target, evidence, ranArg, artifactArg) {
             problems.map((p) => `  ${p}`).join("\n") +
             `\nA passing review is not an acceptance, and an edited grading script is not a rule. Record one with:\n` +
             `  FACTORY_ROLE=reviewer FACTORY_SESSION=review:<you> node scripts/factory-review.mjs record <bead> --file .factory/<bead>/review.md --verdict pass\n` +
+            `  FACTORY_ROLE=orchestrator FACTORY_SESSION=orch:<you> node scripts/factory-attest.mjs attest <bead> .factory/<bead>/hidden/<test> --id hidden --kind hidden-tests\n` +
             `  git tag -s factory-accept/<bead> -F <msg> <commit>     (message: bead:, verdict_sha256:, reviewer_session:, accepted_by:, note:)\n` +
             `  FACTORY_ROLE=human node scripts/factory-attest.mjs protect --write, then commit config/factory.protected.json`
           : `phase 8 (close) needs an outcome record at .factory/${bead}/outcome.md (G4):\n` +
