@@ -69,9 +69,31 @@ Every profile declares exactly these fields:
 | **embedded** | Device behaviour | Hardware-in-the-loop test log, timing and memory budget, power draw, OTA update test | Device a11y if it has a human interface | Latency, flash/RAM ceiling, power budget | Secure boot, signed firmware, SBOM, CVE scan | Watchdog, telemetry, recovery mode | Signed OTA, A/B partition, rollback | experimental: reduced checks |
 | **game / real-time** | Frame and input | Capture, input replay, performance trace, save/load integrity | Subtitles, colourblind modes, input remapping | Frame time, load time, memory | Anti-cheat, asset pipeline, save integrity | Crash reporting, telemetry, live-ops runbook | Store build, patch, rollback | experimental: reduced checks |
 
-`experimental: reduced checks` means the profile may be selected, but its G3 verdict must say `not-verified` for every check the factory cannot execute. A profile is promoted to `enforced` only when a named tool produces its evidence and a testapp exercises it.
+`experimental: reduced checks` means the profile may be selected, but its G3 verdict must say `not-verified` for every check the factory cannot execute. A profile is promoted to `enforced` only when a named tool produces its evidence and a testapp exercises it. Nothing in the machine enforces that rule today: it is a reviewer's judgement written down, and the `status` column is a claim about the tooling, not a gate.
 
-The matrix summarises fields 1–7. Fields 8 (compatibility and deprecation) and 9 (evidence command and threshold) are not yet filled in for any profile; they are M2 work.
+The matrix summarises fields 1–7. Field 8 (compatibility and deprecation) is not yet filled in for any profile. Field 9 is filled in **as data**, not as prose: each profile adds named checks on top of its tier, and `config/factory.policy.example.yaml` declares the phase, artifact kind and command for every one of them.
+
+### The check ids each profile adds
+
+A bead's effective evidence is its tier's list plus its profile's list. The tier says how much assurance the change needs; the profile says what the surface can even produce. These are the profile additions, with the artifact kind the gate demands and the phase it gates:
+
+| Profile | Checks added to the tier | Kinds |
+|---|---|---|
+| `web` | `a11y` (7), `perf` (7), `visual` (5) | check-output, check-output, screenshot |
+| `api` | `contract` (6), `authz` (5), `load` (5) | api-diff, authz, load |
+| `cli` | `golden` (5), `tty` (5) | golden, tty |
+| `library` | `api-diff` (5), `consumer-build` (5) | api-diff, consumer-build |
+| `infra` | `plan-diff` (5), `policy-check` (5), `rollback` (7) | plan-diff, policy-check, plan |
+| `mobile` | `a11y` (7), `device` (5), `perf` (7) | check-output, device, check-output |
+| `desktop` | `a11y` (7), `signing` (7), `update` (7) | check-output, signing, update |
+| `embedded` | `watchdog` (5), `recovery` (5) | watchdog, recovery |
+| `game` | `frame` (5), `input` (5) | frame, input |
+| `data-ml` | `eval` (5), `data-quality` (5) | eval, data-quality |
+
+Two consequences worth stating plainly:
+
+- **The kind is checked, not just recorded.** `verify` refuses an artifact whose kind is not the one its check declares, with `check "<id>" needs a <declared> artifact; the manifest has <actual> (<path>)`. A transcript cannot answer a `visual` check.
+- **A surface with no capture tool cannot claim `enforced`.** `desktop`'s `signing` and `update` checks demand artifact kinds (`signing`, `update`) that no script in this repository produces yet, so a policy copied today would gate on evidence someone has to attest by hand and a reviewer has to accept. That is the honest state: the check list is a declaration. M2b builds the capture tooling; until then the `experimental` column is the truth about the profile, not the row above it.
 
 ## What is *not* universal
 
@@ -93,9 +115,21 @@ The matrix summarises fields 1–7. Fields 8 (compatibility and deprecation) and
 
 1. `factory.policy.yaml` carries `profile:` next to `tier:`.
 2. The profile maps to a **named check list**, not hardcoded logic. A missing
-   check refuses the gate; a check marked `not_applicable` needs a reason.
+   check refuses the gate; the only way to drop one is to edit the policy, which
+   is itself a reviewed change.
 3. The evidence manifest records a `kind` per artifact, so G3 validates the
-   *right* artifact rather than a screenshot for an API. `kind` is one of: `screenshot`, `transcript`, `contract`, `api-diff`, `plan`, `eval`, `hil-log`, `prr`, `exit-code-matrix`, `golden-file`, `help-snapshot`, `tty-transcript`, `completion-script`, `install-log`, `device-capture`, `check-output`.
+   *right* artifact rather than a screenshot for an API. The vocabulary is
+   closed and declared once, as `DECLARABLE_KINDS` in `scripts/factory-policy.mjs`;
+   attestation derives what it accepts from the same list, and `verify` refuses
+   an artifact whose kind is not the kind its check declares. Declarable kinds:
+   `screenshot`, `transcript`, `contract`, `api-diff`, `plan`, `eval`, `hil-log`,
+   `prr`, `exit-code-matrix`, `golden-file`, `help-snapshot`, `tty-transcript`,
+   `completion-script`, `install-log`, `device-capture`, `check-output`, `visual`,
+   `authz`, `load`, `golden`, `tty`, `consumer-build`, `plan-diff`,
+   `policy-check`, `device`, `signing`, `update`, `watchdog`, `recovery`,
+   `frame`, `input`, `data-quality`. A thirty-third kind, `hidden-tests`, can be
+   attested but not declared: the orchestrator writes it, and a policy entry
+   would print its id in the review package the builder reads.
 4. The Reviewer rubric is a property of the role, not the profile; it lives in `factory-v2-model.md` § Role contracts.
 5. Multi-surface beads (web + API, mobile + backend) declare a **list** of
    profiles; G3 needs evidence for every surface. In a monorepo, profile is

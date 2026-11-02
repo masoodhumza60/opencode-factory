@@ -56,7 +56,7 @@ The evidence layer currently accepts `" "` as proof. Nothing else matters until 
 **Exit:** the ~20-command fake-ship path fails at the first missing artifact. Suite green on Windows
 and Linux.
 
-Prove the exit criterion with:
+Prove the exit criterion with (counts as they stood at M0; the current numbers are in the M1c block below):
 
 ```bash
 node scripts/test-factory-phase.mjs   # 143/143 phase-machine tests passed.
@@ -99,14 +99,17 @@ on different roots; pointing `BEADS_DIR` at a directory with no database is refu
 Prove the exit criterion with:
 
 ```bash
-node scripts/test-factory-phase.mjs     # 167/167 phase-machine tests passed.
+node scripts/test-factory-phase.mjs     # 170/170 phase-machine tests passed.
 node scripts/test-fake-ship.mjs         # 6/6 fake-ship paths refused.
 node scripts/test-factory-manifest.mjs  # 26/26 manifest tests passed.
-node scripts/test-factory-policy.mjs    # 59/59 policy tests passed.
-node scripts/test-factory-attest.mjs    # 99/99 attest tests passed.
-node scripts/test-factory-review.mjs    # 82/82 review tests passed.
+node scripts/test-factory-policy.mjs    # 75/75 policy tests passed.
+node scripts/test-factory-attest.mjs    # 112/112 attest tests passed.
+node scripts/test-factory-review.mjs    # 83/83 review tests passed.
 node scripts/test-factory-protect.mjs   # 17/17 protect tests passed.
 ```
+
+The counts are kept current with the last shipped milestone (M2a); each suite's
+number only ever grows, so a stale count here is a doc bug, not a weaker claim.
 
 ### M1b — review and independence (shipped)
 
@@ -158,15 +161,19 @@ an unlocked agent, can sign. `allowed_signers` is trust-on-first-review — a pu
 without review is trusted. Deleting `.factory/<bead>/` still restarts the record, and a tag can be
 replayed onto an older signed commit. The signature proves *who could sign*, not *what they read*.
 
-### M2 - The disciplines that make it real (2-3 weeks)
+### M2 - The disciplines that make it real (2-3 weeks) - **in progress, M2a shipped**
 
 Each item is a role skill plus mechanical checks plus a gate refusal. Do them in this order, because
 each one depends on the manifest from M1.
 
+**M2a shipped the machinery this list runs on** - skill resolution (item 1), profile check lists as
+data, and hidden acceptance tests (part of item 6). Items 2-5 and the rest of 6-7 are M2b and M2c;
+see *M2a - the mechanisms* below for what is done and what is owed.
+
 1. **Project skill resolution (on demand).** `factory-skills.mjs resolve` reads the project stack and
-   MCP servers, resolves `nuxt`, `nuxt-ui`, framework test tools and design skills from skills.sh,
-   pins them in the project's `skills.lock.json`, and records the reason. Nothing is fetched at run
-   time; an API-only project never installs UI skills.
+   the policy's profile, resolves the matching skills from `skills/catalog.yaml`, pins them in the
+   project's `skills.lock.json`, and records the reason for each. Nothing is fetched at run time; an
+   API-only project never resolves UI skills.
 2. **Design (human interfaces only).** Directions artifact: two or three named directions, the chosen one,
    the rejected ones and why; a prototype route with radically different variations; a critique
    record at G1 and G3. Mechanical floor where the profile has a visual surface: declared tokens
@@ -201,6 +208,51 @@ each one depends on the manifest from M1.
 A `public` `api` run is not forced to produce screenshots; it is forced to produce contracts, authz
 tests and a load result. A `public` `library` is forced to produce an API diff and a consumer build.
 See `docs/factory-domain-profiles.md` for all ten profiles.
+
+#### M2a - the mechanisms (shipped)
+
+Four mechanisms, each a refusal rather than a paragraph:
+
+1. **Skill resolution has a record.** `node scripts/factory-skills.mjs resolve`
+   reads `skills/catalog.yaml` and the project's `config/factory.policy.yaml` and
+   writes `.agents/skills/skills.lock.json`: every resolved skill with its
+   version and its reason (`mandatory`, `profile=web`, `stack=rust`, `default`),
+   every skip with its reason. It is catalog-local, so the answer is reproducible
+   offline; 43 skills resolve on this repo. Commit `90d42c6`.
+2. **Profiles are data, not prose.** `config/factory.policy.example.yaml`
+   declares all ten profiles and the four tier lists; `factory-policy.mjs` unions
+   the tier's checks with each profile's, dedupes, and answers the same set the
+   docs promise - `prototype+web` 6, `public+api` 15, `regulated+data-ml` 22.
+   Commit `c434f0e`.
+3. **Hidden acceptance tests are the orchestrator's.** A builder who can read the
+   policy can target it, so end-to-end acceptance lives outside the builder's
+   reach: attested as `--kind hidden-tests` under `.factory/<bead>/hidden/`, only
+   with `FACTORY_ROLE=orchestrator` and a named session, and required by
+   `complete 7` with a hash that still matches and a `producer_session` that is
+   not the manifest's `builder_session`. A verdict may not itself be a hidden
+   test. Commit `1229e7f`.
+4. **The evidence vocabulary is closed.** One exported list -
+   `DECLARABLE_KINDS` in `factory-policy.mjs` - and attestation derives what it
+   accepts from it, so a policy can no longer declare a kind nothing can carry
+   (the example's `authz`, `signing` and `load` checks were unsatisfiable before
+   this). `verify` also refuses an artifact whose kind is not the kind its check
+   declares: `check "shot" needs a screenshot artifact; the manifest has
+   transcript (…)`. Commit `0ff2b13`.
+
+**What M2a does not prove.** A check list is a declaration, not a detector:
+`profile: web` requires the web checks to be attested, and never runs them.
+`FACTORY_ROLE` is a declared string, so the hidden-test rule refuses the
+ordinary builder and records the claim; the signed acceptance tag remains the
+only gate backed by a secret. Skill resolution answers from the local catalog, so
+it proves a consistent recorded set, not an installed one. An evidence `kind`
+proves an artifact's shape, not its quality: a transcript cannot answer a
+screenshot check, but a passing transcript is not a passing test. And with no
+policy file on disk, none of it applies - the M0 behaviour is unchanged.
+
+**Still owed to M2:** M2b (design, interface, accessibility) and M2c (security,
+QA, SRE) owe their mechanisms. Their kinds - `visual-diff`, `axe`, `keyboard`,
+`sbom` - are correspondingly absent from the vocabulary until something produces
+them, because a kind nobody can attest is a label, not evidence.
 
 ### M3 - Real delivery (1 week)
 

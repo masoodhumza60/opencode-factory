@@ -1048,6 +1048,9 @@ writeFileSync(join(ms.sandbox, "config", "factory.policy.yaml"),
   "    kind: screenshot\n" +
   "    command: null\n");
 writeFileSync(join(ms.sandbox, "out", "shot.txt"), "screenshot of the checkout page\n");
+// The bead records its own phase, so verify resolves the policy's phase-3
+// checks the way the machine does rather than by a flag the test supplies.
+execFileSync("bd", ["set-state", mbead, "phase=3"], { cwd: ms.sandbox, env: ms.env, stdio: "ignore" });
 
 let kc = attest2(ms, [mbead, "out/shot.txt", "--id", "shot", "--kind", "transcript"],
   { FACTORY_SESSION: "build-M" });
@@ -1066,7 +1069,7 @@ check("kind 4 the row carries mismatch, both kinds, and the exact sentence",
   mResult.ok === false && mResult.checks[0].result === "mismatch" &&
   mResult.checks[0].kind === "screenshot" && mResult.checks[0].actual_kind === "transcript" &&
   mResult.checks[0].detail ===
-    `check "shot" needs a screenshot artifact; the manifest has transcript (.factory/${mbead}/out/shot.txt)`,
+    `check "shot" needs a screenshot artifact; the manifest has transcript (out/shot.txt)`,
   JSON.stringify(mResult.checks));
 kc = attest2(ms, [mbead, "out/shot.txt", "--id", "shot", "--kind", "screenshot"]);
 check("kind 5 re-attesting with the declared kind verifies",

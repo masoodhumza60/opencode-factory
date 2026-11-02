@@ -66,6 +66,28 @@ The factory is strict about context economy:
   visible and cheap — that flag is the tool that keeps the pull-only promise
   honest.
 
+## Skills are resolved, not assumed
+
+Which skills a project needs is a decision with a record, not a sentence in a
+chat:
+
+```
+node scripts/factory-skills.mjs resolve [--profile <id>] [--stack <a,b>] [--dry-run]
+```
+
+It reads `skills/catalog.yaml` and the project's `config/factory.policy.yaml`
+and writes `.agents/skills/skills.lock.json`: every resolved skill with its
+version and the reason it was included (`mandatory`, `profile=<id>`,
+`stack=<a,b>`, or `default`), plus the skipped entries and why. Resolution is
+**catalog-local** — it answers from the catalog and the local policy, never from
+a network registry — so a project's skill set is reproducible offline, and a
+re-run produces the same lock.
+
+The ceiling: the catalog is a declaration. Resolving it proves the factory chose
+a consistent, recorded set; it does not prove those skills are installable, or
+that the ones installed match. `install-record.json` is what the installer
+wrote; `skills.lock.json` is what this project decided it needs.
+
 ## The pipeline at a glance
 
 Phases 1–8 with their mandatory skills, gates A/B/C, the journey, the
@@ -100,10 +122,21 @@ edited, or stale. Everything lives beside the bead's `.beads` directory under
 artifact, with these fields:
 
 - `id` — the policy check id this artifact satisfies (`tests`, `review`, …).
-- `kind` — one of the sixteen artifact kinds (`screenshot`, `transcript`,
-  `contract`, `api-diff`, `plan`, `eval`, `hil-log`, `prr`, `exit-code-matrix`,
-  `golden-file`, `help-snapshot`, `tty-transcript`, `completion-script`,
-  `install-log`, `device-capture`, `check-output`).
+- `kind` — one of the **closed evidence vocabulary**. The policy owns the list
+  (`DECLARABLE_KINDS` in `scripts/factory-policy.mjs`); attestation derives what
+  it accepts from that same list, so a kind a policy may declare is always a
+  kind an artifact can carry. `verify` also refuses an artifact whose kind is
+  not the one its check declares — `check "shot" needs a screenshot artifact;
+  the manifest has transcript (out/shot.txt)` — because a
+  transcript proves a command ran, and says nothing about what a screen showed.
+  The declarable kinds are `screenshot`, `transcript`, `contract`, `api-diff`,
+  `plan`, `eval`, `hil-log`, `prr`, `exit-code-matrix`, `golden-file`,
+  `help-snapshot`, `tty-transcript`, `completion-script`, `install-log`,
+  `device-capture`, `check-output`, `visual`, `authz`, `load`, `golden`, `tty`,
+  `consumer-build`, `plan-diff`, `policy-check`, `device`, `signing`, `update`,
+  `watchdog`, `recovery`, `frame`, `input`, `data-quality`. One more kind,
+  `hidden-tests`, is accepted by attestation and deliberately **not** declarable
+  in a policy (see below).
 - `path` — the file, root-relative, with `/` separators.
 - `sha256` — the hash of the bytes at attestation time.
 - `bytes` — the file size.
@@ -138,10 +171,31 @@ node scripts/factory-review.mjs withdraw <bead> --note "<why>"
 ```
 
 Two environment variables carry identity. `FACTORY_SESSION` names the session;
-`FACTORY_ROLE` is `builder` (the default), `reviewer` or `human`. An unknown
-role is a refusal, not a fallback. The builder session is frozen at the first
-manifest write: a later run with a different `FACTORY_SESSION` still counts as
-the same builder, because the artifacts already exist.
+`FACTORY_ROLE` is `builder` (the default), `reviewer`, `orchestrator` or
+`human`. An unknown role is a refusal, not a fallback. The builder session is
+frozen at the first manifest write: a later run with a different
+`FACTORY_SESSION` still counts as the same builder, because the artifacts
+already exist.
+
+**Hidden acceptance tests.** The builder writes the code and reads the policy,
+so a check the builder can read is a check the builder can target. End-to-end
+acceptance therefore lives outside the builder's reach:
+
+```
+FACTORY_ROLE=orchestrator FACTORY_SESSION=orch:<you> \
+  node scripts/factory-attest.mjs attest <bead> .factory/<bead>/hidden/<test> \
+  --id hidden --kind hidden-tests
+```
+
+Attestation refuses `--kind hidden-tests` unless the role is `orchestrator` and
+the session is named (`hidden acceptance tests are written by the orchestrator,
+not the builder`). `hidden-tests` is not in the policy's vocabulary on purpose:
+a declared check prints its id in `review-package.md`, and the builder reads
+that package. `complete 7` then requires a `hidden-tests` artifact under
+`.factory/<bead>/hidden/` whose hash still matches and whose `producer_session`
+differs from the manifest's `builder_session`; a missing, edited, moved or
+self-produced hidden test refuses ship. A review verdict may not itself be a
+file under `hidden/`.
 
 `review start` writes `.factory/<bead>/review-package.md` — the commit range,
 the diff (excluding `.superpowers/`), the attested artifacts, and the policy's
@@ -285,6 +339,17 @@ nothing more:
 - A hand-edited manifest that rewrites both `sha256` and `commit` to match an
   edited file **will verify**. The manifest is validated for shape, not
   authenticated; M1a assumes a single operator who is not attacking themselves.
+- An artifact's **kind proves shape, not quality**. Requiring `screenshot` where
+  a check declares a screenshot stops a transcript standing in for it; it
+  cannot tell a passing test log from a failing one, or a screenshot of the
+  wrong screen from the right one.
+- A **check list is a declaration, not a detector**. `profile: web` requires the
+  web checks to be attested; it does not run them. Dropping a check is a policy
+  edit, not a `not_applicable` mark, and a policy edit is a reviewed change.
+- **Hidden tests are hidden from the builder, not from an agent with shell
+  access.** The refusal is on the declared `FACTORY_ROLE`, and the phase-7 gate
+  compares the artifact's `producer_session` to the manifest's
+  `builder_session`; an agent that sets both can satisfy both.
 
 ## Troubleshooting
 
