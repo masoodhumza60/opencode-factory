@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Testapp - tasks</title>
+    <link rel="stylesheet" href="app.css" />
+  </head>
+  <body data-state="loading">
+    <main>
+      <h1>Tasks</h1>
+      <p id="lede" class="lede">Everything you have to do, in one list.</p>
+      <section id="skeleton" data-testid="skeleton" aria-busy="true" aria-live="polite">
+        <p class="visually-hidden">Loading your tasks</p>
+        <div class="bar"></div>
+        <div class="bar short"></div>
+      </section>
+      <section id="empty" data-testid="empty-state" hidden>
+        <h2>No tasks yet</h2>
+        <p>Add your first task and it will show up here.</p>
+      </section>
+      <section id="error" data-testid="error-state" role="alert" hidden>
+        <h2>We could not load your tasks</h2>
+        <p>Check your connection, then try again.</p>
+      </section>
+      <button id="primary" data-testid="primary-action" type="button">Add a task</button>
+      <ul id="list" aria-label="Your tasks"></ul>
+    </main>
+    <script src="states.js"></script>
+  </body>
+</html>

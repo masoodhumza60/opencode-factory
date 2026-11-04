@@ -25,3 +25,5 @@ opencode.json
 # never be shared.
 .ignore
 .factory/
+/node_modules/
+/out/
