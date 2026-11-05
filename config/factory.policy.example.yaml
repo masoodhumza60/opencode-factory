@@ -26,7 +26,7 @@ tiers:
   internal:
     checks: [tests, run, review, lint, types, contract]
   public:
-    checks: [tests, run, review, lint, types, contract, a11y, perf, security, migration, rollback, observability, privacy]
+    checks: [tests, run, review, lint, types, contract, a11y, axe, perf, security, migration, rollback, observability, privacy]
   regulated:
     checks: [tests, run, review, lint, types, contract, a11y, perf, security, migration, rollback, observability, privacy, audit, retention, incident, dr, segregation, training, attestation]
 
@@ -35,7 +35,7 @@ tiers:
 # profile names must also be declared under checks below.
 profiles:
   web:
-    checks: [a11y, perf, visual]
+    checks: [a11y, perf, visual, directions]
   api:
     checks: [contract, authz, load]
   cli:
@@ -87,6 +87,10 @@ checks:
     phase: 7
     kind: check-output
     command: npm run a11y
+  axe:
+    phase: 7
+    kind: axe
+    command: node scripts/factory-capture.mjs --fixture fixtures/testapp
   perf:
     phase: 7
     kind: check-output
@@ -139,6 +143,10 @@ checks:
     phase: 7
     kind: plan
     command: null
+  directions:
+    phase: 1
+    kind: directions
+    command: node scripts/factory-design.mjs check $bead .factory/$bead/design/directions.md
   visual:
     phase: 5
     kind: screenshot
