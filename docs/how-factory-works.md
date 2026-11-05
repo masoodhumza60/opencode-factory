@@ -88,6 +88,27 @@ a consistent, recorded set; it does not prove those skills are installable, or
 that the ones installed match. `install-record.json` is what the installer
 wrote; `skills.lock.json` is what this project decided it needs.
 
+## Design judgment and runtime evidence
+
+Human surfaces can now produce two separate pieces of evidence:
+
+```
+node scripts/factory-design.mjs check <bead> .factory/<bead>/design/directions.md
+node scripts/factory-capture.mjs --fixture fixtures/testapp
+```
+
+`factory-design` checks the **shape** of a directions artifact: it refuses a
+file with no user, no journey, fewer than two named directions, no critique or
+fit verdict, no chosen direction, or a rejected direction without a substantive
+reason. Whether a direction is any good is judged at G1.
+
+`factory-capture` serves the fixture over a plain static server and captures
+the five states (`default`, `loading`, `empty`, `error`, `disabled`) at
+1440/768/390, then writes `axe.json` over the default state. It fails loudly on
+a console error or an unreadable fixture, and it never attests. The two are
+separate because capture must be able to fail without leaving something behind
+that looks like evidence but proves nothing.
+
 ## The pipeline at a glance
 
 Phases 1–8 with their mandatory skills, gates A/B/C, the journey, the
@@ -134,9 +155,12 @@ artifact, with these fields:
   `help-snapshot`, `tty-transcript`, `completion-script`, `install-log`,
   `device-capture`, `check-output`, `visual`, `authz`, `load`, `golden`, `tty`,
   `consumer-build`, `plan-diff`, `policy-check`, `device`, `signing`, `update`,
-  `watchdog`, `recovery`, `frame`, `input`, `data-quality`. One more kind,
+  `watchdog`, `recovery`, `frame`, `input`, `data-quality`, `directions`,
+  `axe`. One more kind,
   `hidden-tests`, is accepted by attestation and deliberately **not** declarable
-  in a policy (see below).
+  in a policy (see below). `directions` is a shape-checked record of who the
+  user is, the journey, and the directions considered — not proof of taste.
+  `axe` is an axe-core report over the default state at 1440px.
 - `path` — the file, root-relative, with `/` separators.
 - `sha256` — the hash of the bytes at attestation time.
 - `bytes` — the file size.
@@ -309,6 +333,15 @@ the rule is skipped — signing the baseline is opt-in.
 
 A hash is evidence that the bytes did not change **after** attestation, and
 nothing more:
+
+- A **shape check is not taste**. `factory-design` catches an empty or
+  incoherent directions artifact; a human at G1 decides whether the chosen
+  direction is any good.
+- **One profile's capture path is proved, not every profile's.** `web` has a
+  real `fixtures/testapp` path; mobile and desktop are designed but not built.
+- **The example policy is an example.** No `config/factory.policy.yaml` ships
+  here, so landing `directions` or `axe` on disk does not make them this
+  repository's own gate.
 
 - It does **not** prove the `command` recorded in the manifest produced the
   artifact. The `command` is a label the producer wrote down; M1a never runs it

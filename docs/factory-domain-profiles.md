@@ -79,7 +79,7 @@ A bead's effective evidence is its tier's list plus its profile's list. The tier
 
 | Profile | Checks added to the tier | Kinds |
 |---|---|---|
-| `web` | `a11y` (7), `perf` (7), `visual` (5) | check-output, check-output, screenshot |
+| `web` | `directions` (1), `visual` (5), `a11y` (7), `axe` (7, public tier), `perf` (7) | directions, screenshot, check-output, axe, check-output |
 | `api` | `contract` (6), `authz` (5), `load` (5) | api-diff, authz, load |
 | `cli` | `golden` (5), `tty` (5) | golden, tty |
 | `library` | `api-diff` (5), `consumer-build` (5) | api-diff, consumer-build |
@@ -90,10 +90,12 @@ A bead's effective evidence is its tier's list plus its profile's list. The tier
 | `game` | `frame` (5), `input` (5) | frame, input |
 | `data-ml` | `eval` (5), `data-quality` (5) | eval, data-quality |
 
+The web row includes `axe` because a public web bead resolves it at phase 7; it is declared by the **public tier**, not by the web profile. `directions` is profile-level and applies at every tier.
+
 Two consequences worth stating plainly:
 
 - **The kind is checked, not just recorded.** `verify` refuses an artifact whose kind is not the one its check declares, with `check "<id>" needs a <declared> artifact; the manifest has <actual> (<path>)`. A transcript cannot answer a `visual` check.
-- **A surface with no capture tool cannot claim `enforced`.** `desktop`'s `signing` and `update` checks demand artifact kinds (`signing`, `update`) that no script in this repository produces yet, so a policy copied today would gate on evidence someone has to attest by hand and a reviewer has to accept. That is the honest state: the check list is a declaration. M2b builds the capture tooling; until then the `experimental` column is the truth about the profile, not the row above it.
+- **A surface with no capture tool cannot claim `enforced`.** `desktop`'s `signing` and `update` checks demand artifact kinds (`signing`, `update`) that no script in this repository produces yet, so a policy copied today would gate on evidence someone has to attest by hand and a reviewer has to accept. That is the honest state: the check list is a declaration. M2b ships one capture adapter and proves it on `fixtures/testapp`; mobile and desktop capture paths are designed but not built, so those profiles stay `experimental`.
 
 ## What is *not* universal
 
@@ -127,9 +129,9 @@ Two consequences worth stating plainly:
    `completion-script`, `install-log`, `device-capture`, `check-output`, `visual`,
    `authz`, `load`, `golden`, `tty`, `consumer-build`, `plan-diff`,
    `policy-check`, `device`, `signing`, `update`, `watchdog`, `recovery`,
-   `frame`, `input`, `data-quality`. A thirty-third kind, `hidden-tests`, can be
+   `frame`, `input`, `data-quality`, `directions`, `axe`: thirty-four declarable kinds. A thirty-fifth, `hidden-tests`, can be
    attested but not declared: the orchestrator writes it, and a policy entry
-   would print its id in the review package the builder reads.
+   would print its id in the review package the builder reads. `directions` is a shape-checked record of the user, journey, and directions considered — not proof of taste. `axe` is an axe-core report over the default state at 1440px.
 4. The Reviewer rubric is a property of the role, not the profile; it lives in `factory-v2-model.md` § Role contracts.
 5. Multi-surface beads (web + API, mobile + backend) declare a **list** of
    profiles; G3 needs evidence for every surface. In a monorepo, profile is

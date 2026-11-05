@@ -99,16 +99,22 @@ on different roots; pointing `BEADS_DIR` at a directory with no database is refu
 Prove the exit criterion with:
 
 ```bash
-node scripts/test-factory-phase.mjs     # 170/170 phase-machine tests passed.
+node scripts/test-factory-phase.mjs     # 173/173 phase-machine tests passed.
+node scripts/test-factory-fixture.mjs   # 20/20 fixture tests passed.
+node scripts/test-factory-design.mjs    # 12/12 design tests passed.
+node scripts/test-factory-capture.mjs   # 24/24 capture tests passed.
+node scripts/test-factory-skills.mjs    # 44/44 skills tests passed.
 node scripts/test-fake-ship.mjs         # 6/6 fake-ship paths refused.
 node scripts/test-factory-manifest.mjs  # 26/26 manifest tests passed.
-node scripts/test-factory-policy.mjs    # 75/75 policy tests passed.
+node scripts/test-factory-policy.mjs    # 76/76 policy tests passed.
 node scripts/test-factory-attest.mjs    # 112/112 attest tests passed.
 node scripts/test-factory-review.mjs    # 83/83 review tests passed.
 node scripts/test-factory-protect.mjs   # 17/17 protect tests passed.
 ```
 
-The counts are kept current with the last shipped milestone (M2a); each suite's
+The capture suite prints `SKIPPED: no browser` and exits 1 if no browser is available; a skip is not a pass.
+
+The counts are kept current with the last shipped milestone (M2b); each suite's
 number only ever grows, so a stale count here is a doc bug, not a weaker claim.
 
 ### M1b — review and independence (shipped)
@@ -161,14 +167,15 @@ an unlocked agent, can sign. `allowed_signers` is trust-on-first-review — a pu
 without review is trusted. Deleting `.factory/<bead>/` still restarts the record, and a tag can be
 replayed onto an older signed commit. The signature proves *who could sign*, not *what they read*.
 
-### M2 - The disciplines that make it real (2-3 weeks) - **in progress, M2a shipped**
+### M2 - The disciplines that make it real (2-3 weeks) - **in progress, M2a and M2b shipped**
 
 Each item is a role skill plus mechanical checks plus a gate refusal. Do them in this order, because
 each one depends on the manifest from M1.
 
 **M2a shipped the machinery this list runs on** - skill resolution (item 1), profile check lists as
-data, and hidden acceptance tests (part of item 6). Items 2-5 and the rest of 6-7 are M2b and M2c;
-see *M2a - the mechanisms* below for what is done and what is owed.
+data, and hidden acceptance tests (part of item 6). **M2b shipped the human-surface mechanisms** -
+directions, capture and `axe`. M2c remains; see *M2a - the mechanisms* and *M2b - human surfaces*
+below for what is done and what is owed.
 
 1. **Project skill resolution (on demand).** `factory-skills.mjs resolve` reads the project stack and
    the policy's profile, resolves the matching skills from `skills/catalog.yaml`, pins them in the
@@ -249,10 +256,22 @@ proves an artifact's shape, not its quality: a transcript cannot answer a
 screenshot check, but a passing transcript is not a passing test. And with no
 policy file on disk, none of it applies - the M0 behaviour is unchanged.
 
-**Still owed to M2:** M2b (design, interface, accessibility) and M2c (security,
-QA, SRE) owe their mechanisms. Their kinds - `visual-diff`, `axe`, `keyboard`,
-`sbom` - are correspondingly absent from the vocabulary until something produces
-them, because a kind nobody can attest is a label, not evidence.
+**Still owed to M2:** M2c (security, QA, SRE) owes its mechanisms. M2b delivered
+`directions` and `axe`; `visual-diff`, `keyboard` and `sbom` remain absent from
+the vocabulary until something produces them, because a kind nobody can attest is a label, not evidence.
+
+#### M2b - human surfaces (shipped)
+
+M2b treats design judgment and runtime accessibility as evidence-bearing work, not as a promise to care:
+
+1. **Directions are a reviewable record.** `factory-design.mjs` shape-checks the user, journey, at least two named directions, each critique and `fits|strains|rejects` verdict, the chosen direction, and rejected directions with substantive reasons. The web profile asks for `directions` at phase 1; the phase suite proves `complete 1` refuses without attested directions and passes with them. Commits `3dac181`, `1590191`, `6f47eaf`.
+2. **Capture is evidence, not attestation.** `factory-capture.mjs` serves `fixtures/testapp`, captures the five fixture states at 1440, 768 and 390, and writes an `axe.json` report for the default state. It fails loudly on console errors or an unreadable fixture and never attests. The example policy declares `axe` at phase 7 in the **public tier**, a deliberate deviation so every public surface gets the report without duplicate profile entries; the web profile itself adds `directions`, not `axe`. Commits `41fd16d`, `8e3cd46`, `1590191`.
+3. **Design judgment is resolvable.** `skills/catalog.yaml` gains `design-judgment` for `web`, `mobile`, `desktop` and `game`; it resolves for web and not for api. Commit `b54650d`.
+4. **The closed evidence vocabulary moved with the mechanisms.** `DECLARABLE_KINDS` grew from 32 to 34 (`directions`, `axe`), and the attestation vocabulary derives from it. Commit `8e3cd46`.
+
+The toolchain and fixture are committed at `eb3a3eb` and `a884a16`. The plan's fixtures cover six states; capture reports the five browser-observable states and uses `console-error` as a test-only probe.
+
+**What M2b does not prove.** A shape check is not taste: whether a direction is any good is judged at G1. One web capture path is proved; mobile and desktop remain designed-in but experimental, with no profile promoted to `enforced`. An axe-clean result is not accessible: review handles the contrast of meaning, keyboard order, focus and other failures a rule cannot judge. The example policy is data only; no `config/factory.policy.yaml` ships here, and the capture report is not an attestation of the product's quality.
 
 ### M3 - Real delivery (1 week)
 
