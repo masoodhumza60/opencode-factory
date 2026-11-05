@@ -25,10 +25,9 @@ import {
 } from "./factory-manifest.mjs";
 import { loadPolicy, effectiveChecks, requiredForPhase, DECLARABLE_KINDS } from "./factory-policy.mjs";
 
-// The evidence vocabulary: every kind a policy may declare, derived from the
-// policy rather than copied beside it, plus the kinds the builder must never
-// write. Deriving means a policy that names a kind is always a kind an
-// artifact can carry; the two files cannot drift silently.
+// factory-policy owns the closed vocabulary (DECLARABLE_KINDS); this list is
+// derived from it so a declared kind is always attestable, plus "hidden-tests",
+// which can be attested but never declared.
 export const KINDS = [
   ...DECLARABLE_KINDS,
   // Written by the orchestrator, never the builder. Deliberately absent from

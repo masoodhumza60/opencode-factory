@@ -1,8 +1,8 @@
 {
   "version": 1,
   "files": {
-    "scripts/factory-attest.mjs": "48d36fd57675f183a8cd17a10ee85dc13908505b4ba1b8d21087b5888c12ba9d",
-    "scripts/factory-policy.mjs": "8c7be26d85b3d56ca3dd3e4a7de1598a7120cdcc10c3bec30fad6a055cbb556c",
+    "scripts/factory-attest.mjs": "1786686f3839d926d9d83a58b58956f21ae8c1eee9ddf8277b80aa3392a58af2",
+    "scripts/factory-policy.mjs": "18e5eefb2a59457e2b2764cf3e3d84fcbeae227c10dc3e8bf3a0542e4d5c07ab",
     "scripts/factory-manifest.mjs": "03e307eecec8de7d971fb39bb6d12f62e70522428ecbb9c33c15ddbd2b5de5c2",
     "scripts/factory-phase.mjs": "2ffd532862307caaa881a9667dba717b48c979f11770a21d50e0a77938a75a88",
     "scripts/factory-review.mjs": "bc74c29073c904c0e140412b177aad8d5391f215c048f4c4f607d7205142613b"

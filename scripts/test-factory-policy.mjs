@@ -21,7 +21,7 @@ const policyPath = join(root, "config", "factory.policy.yaml");
 const TIER_CHECKS = {
   prototype: ["tests", "run", "review"],
   internal: ["tests", "run", "review", "lint", "types", "contract"],
-  public: ["tests", "run", "review", "lint", "types", "contract", "a11y", "perf", "security", "migration", "rollback", "observability", "privacy"],
+  public: ["tests", "run", "review", "lint", "types", "contract", "a11y", "axe", "perf", "security", "migration", "rollback", "observability", "privacy"],
   regulated: ["tests", "run", "review", "lint", "types", "contract", "a11y", "perf", "security", "migration", "rollback", "observability", "privacy", "audit", "retention", "incident", "dr", "segregation", "training", "attestation"],
 };
 const PROFILE_CHECKS = {
@@ -44,6 +44,7 @@ const KIND = {
   dr: "hil-log", segregation: "hil-log", training: "hil-log", attestation: "hil-log",
   help: "help-snapshot", "api-diff": "api-diff", eval: "eval", "plan-diff": "plan",
   "device-capture": "device-capture",
+  directions: "directions", axe: "axe",
 };
 
 let policyText = "version: 1\ntier: prototype\nprofile: web\n\ntiers:\n";
@@ -144,8 +145,8 @@ check("a directory at the policy path is refused as unreadable", (() => {
 
 console.log("\neffectiveChecks");
 const eff = effectiveChecks(policy, { tier: "public", profile: "web" });
-check("public+web dedupes a11y and perf", eff.checks.length === 13, String(eff.checks.length));
-check("tier ids come first", eff.checks[0] === "tests" && eff.checks.slice(0, 13).join(",") === TIER_CHECKS.public.join(","));
+check("public+web dedupes a11y and perf", eff.checks.length === 14, String(eff.checks.length));
+check("tier ids come first", eff.checks[0] === "tests" && eff.checks.slice(0, 14).join(",") === TIER_CHECKS.public.join(","));
 check("prototype+web is five", effectiveChecks(policy, { tier: "prototype", profile: "web" }).checks.length === 5);
 check("metadata tier beats the file default",
   effectiveChecks(policy, { tier: "regulated", profile: "api" }).tier === "regulated");
@@ -438,10 +439,14 @@ check("the example's new checks are declared with kinds and phases the parser ac
   example !== null && example.checks.visual.kind === "screenshot" &&
   example.checks["plan-diff"].phase === 5 &&
   example.checks["data-quality"].kind === "data-quality");
+check("the example declares the two M2b kinds at the phases the spec names",
+  example.checks.directions?.phase === 1 && example.checks.directions.kind === "directions" &&
+    example.checks.axe?.phase === 7 && example.checks.axe.kind === "axe",
+  JSON.stringify({ directions: example.checks.directions, axe: example.checks.axe }));
 
 const exWeb = effectiveChecks(example, { tier: "prototype", profile: "web" });
-check("prototype+web unions to exactly six unique ids (3 tier + 3 profile, no overlap)",
-  exWeb.checks.length === 6 && exWeb.checks.join(",") === "tests,run,review,a11y,perf,visual",
+check("prototype+web unions to exactly seven unique ids (3 tier + 4 profile, no overlap)",
+  exWeb.checks.length === 7 && exWeb.checks.join(",") === "tests,run,review,a11y,perf,visual,directions",
   JSON.stringify(exWeb.checks));
 const exApi = effectiveChecks(example, { tier: "prototype", profile: "api" });
 check("prototype+api unions to exactly six unique ids (contract is profile-only at this tier)",
@@ -453,12 +458,12 @@ check("prototype+infra unions to exactly six unique ids (rollback is not in prot
   JSON.stringify(exInfra.checks));
 const exPublic = effectiveChecks(example, { tier: "public", profile: "web" });
 check("public+web unions without duplicates (length equals the distinct-id count)",
-  exPublic.checks.length === 14 &&
+  exPublic.checks.length === 16 &&
   JSON.stringify([...new Set(exPublic.checks)]) === JSON.stringify(exPublic.checks),
   `${exPublic.checks.length} total, ${new Set(exPublic.checks).size} distinct`);
-check("the dedupe keeps tier ids first and appends only web's new visual",
-  exPublic.checks.slice(0, 13).join(",") === TIER_CHECKS.public.join(",") &&
-  exPublic.checks[13] === "visual",
+check("the dedupe keeps tier ids first and appends only web's new ids, in profile order",
+  exPublic.checks.slice(0, 14).join(",") === TIER_CHECKS.public.join(",") &&
+  exPublic.checks[14] === "visual" && exPublic.checks[15] === "directions",
   JSON.stringify(exPublic.checks));
 
 rmSync(root, { recursive: true, force: true });

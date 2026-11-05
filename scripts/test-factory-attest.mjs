@@ -36,6 +36,7 @@ const KINDS = [
   "visual", "authz", "load", "golden", "tty", "consumer-build",
   "plan-diff", "policy-check", "device", "signing", "update",
   "watchdog", "recovery", "frame", "input", "data-quality",
+  "directions", "axe",
   "hidden-tests",
 ];
 
