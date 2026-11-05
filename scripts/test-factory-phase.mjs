@@ -1217,6 +1217,78 @@ writeFileSync(policyArtifact, "200 OK\n");
   );
 }
 
+// ---- directions at phase 1 (M2b) --------------------------------------------
+// A human-surface profile asks for design judgment before the spec. The check
+// rides the existing verifier rail: no new gate, no new phase.
+console.log("\ndirections at phase 1");
+
+const writeDirections = (b) => {
+  const dir = join(SANDBOX, ".factory", b, "design");
+  mkdirSync(dir, { recursive: true });
+  const p = join(dir, "directions.md");
+  writeFileSync(p, [
+    "## User", "", "Someone with a dozen tasks and no patience.", "",
+    "## Journey", "", "1. Open.", "2. Read.", "",
+    "## Directions", "",
+    "### Ledger", "", "One column.", "", "- Critique: it gets long.", "- Fit: fits", "",
+    "### Grid", "", "Two columns.", "", "- Critique: wastes space.", "- Fit: strains", "",
+    "## Chosen", "", "Ledger.", "",
+    "## Rejected (with reasons)", "", "- Grid: it promises drag the page cannot do.", "",
+  ].join("\n"), "utf8");
+  return `.factory/${b}/design/directions.md`;
+};
+
+const dirPolicy = (b) => {
+  const file = join(SANDBOX, "config", "factory.policy.yaml");
+  writeFileSync(file, [
+    "version: 1",
+    "tier: prototype",
+    "profile: web",
+    "tiers:",
+    "  prototype:",
+    "    checks: []",
+    "profiles:",
+    "  web:",
+    "    checks: [directions]",
+    "checks:",
+    "  directions:",
+    "    phase: 1",
+    "    kind: directions",
+    `    command: node scripts/factory-design.mjs check ${b} .factory/${b}/design/directions.md`,
+    "",
+  ].join("\n"), "utf8");
+  return file;
+};
+
+const savedPolicy = join(SANDBOX, "config", "factory.policy.yaml");
+const savedPolicyBytes = readFileSync(savedPolicy, "utf8");
+const d1 = walkTo("directions bead", "1");
+dirPolicy(d1);
+// `walkTo` stops before completing its target, so phase 1 has not run yet and
+// its policy-gated G1 is still pending. Approve it first; otherwise the two
+// complete-1 failures below say BLOCKED instead of testing directions.
+approveGate(d1, "G1", "the directions are what I want to build");
+
+try {
+  const noDir = phase(["complete", d1, "1", "--evidence", "walked the phase without a directions artifact"]);
+  check("complete 1 REFUSES with no directions artifact", noDir.code !== 0 && has(noDir.out + noDir.err, "directions"),
+    (noDir.out + noDir.err).slice(0, 600));
+
+  const rel = writeDirections(d1);
+  const att = run(process.execPath, [join(HERE, "factory-attest.mjs"), "attest", d1, rel,
+    "--id", "directions", "--kind", "directions"], {
+    BEADS_DIR: BEADS, FACTORY_SESSION: "build:1",
+  });
+  check("the directions artifact attests", att.code === 0, att.out + att.err);
+
+  const pass1 = phase(["complete", d1, "1", "--evidence", "read the directions: one user, one journey, ledger chosen over grid"]);
+  check("complete 1 passes with an attested directions artifact", pass1.code === 0, (pass1.out + pass1.err).slice(0, 600));
+} finally {
+  // The ship tests below exercise the same policy-gated verifier rail. Restoring
+  // the previous policy, instead of deleting it, keeps their preconditions.
+  writeFileSync(savedPolicy, savedPolicyBytes, "utf8");
+}
+
 // ---- ship acceptance and the outcome record ---------------------------------
 // A passing review is not an acceptance, and completing a phase is not
 // accepting its output. These drive the real writers (factory-review record and
