@@ -61,3 +61,10 @@ topics:
       rank: 1
       official: true
       why: 'also a topic candidate - grading third-party skill quality on evidence'
+  design-judgment:
+    - name: design-judgment
+      source: factory/human-surfaces
+      rank: 1
+      official: false
+      profiles: web, mobile, desktop, game
+      why: 'a human surface is for a person - name the user, the journey and two or three real directions with critiques before the spec. Reject at G1: adjectives with no mechanism, a direction with no same-material critique, and a chosen direction with no rejection.'

@@ -664,6 +664,17 @@ t("resolve --json parses and agrees with the lock on disk", () => {
     "json resolved must equal the lock's skills");
 });
 
+t("the real catalog resolves design-judgment for web and not for api", () => {
+  const web = run(["resolve", "--profile", "web", "--stack", "nuxt", "--catalog", REAL_CATALOG, "--dry-run", "--json"]);
+  const api = run(["resolve", "--profile", "api", "--stack", "nuxt", "--catalog", REAL_CATALOG, "--dry-run", "--json"]);
+  assert(web.code === 0, `web resolve exited ${web.code}: ${web.err}`);
+  assert(api.code === 0, `api resolve exited ${api.code}: ${api.err}`);
+  const webIds = JSON.parse(web.out).resolved.map((r) => r.id);
+  const apiIds = JSON.parse(api.out).resolved.map((r) => r.id);
+  assert(webIds.includes("design-judgment"), `web resolved: ${webIds.join(", ")}`);
+  assert(!apiIds.includes("design-judgment"), `api resolved: ${apiIds.join(", ")}`);
+});
+
 t("check, install and record still pass after resolve landed", () => {
   const c = catalog("resolve-regress", GOOD);
   const env = freshEnv();
