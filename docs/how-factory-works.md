@@ -109,6 +109,11 @@ a console error or an unreadable fixture, and it never attests. The two are
 separate because capture must be able to fail without leaving something behind
 that looks like evidence but proves nothing.
 
+`factory-compliance` is the M2c shape checker. `node scripts/factory-compliance.mjs
+check <threat-model|sbom|traceability|runbook|slo> <bead> <path>` refuses a report
+with a missing or empty required section/field. It does not run a scanner, score
+severity, or decide whether a threat model, trace, runbook or SLO is adequate.
+
 ## The pipeline at a glance
 
 Phases 1–8 with their mandatory skills, gates A/B/C, the journey, the
@@ -156,11 +161,14 @@ artifact, with these fields:
   `device-capture`, `check-output`, `visual`, `authz`, `load`, `golden`, `tty`,
   `consumer-build`, `plan-diff`, `policy-check`, `device`, `signing`, `update`,
   `watchdog`, `recovery`, `frame`, `input`, `data-quality`, `directions`,
-  `axe`. One more kind,
+  `axe`, `threat-model`, `sbom`, `traceability`, `runbook`, `slo`. One more kind,
   `hidden-tests`, is accepted by attestation and deliberately **not** declarable
   in a policy (see below). `directions` is a shape-checked record of who the
   user is, the journey, and the directions considered — not proof of taste.
   `axe` is an axe-core report over the default state at 1440px.
+  `threat-model` and `runbook` are Markdown; `sbom`, `traceability` and `slo`
+  are JSON. The five M2c kinds are shape gates: adequacy is a reviewer or
+  human call.
 - `path` — the file, root-relative, with `/` separators.
 - `sha256` — the hash of the bytes at attestation time.
 - `bytes` — the file size.

@@ -92,6 +92,14 @@ A bead's effective evidence is its tier's list plus its profile's list. The tier
 
 The web row includes `axe` because a public web bead resolves it at phase 7; it is declared by the **public tier**, not by the web profile. `directions` is profile-level and applies at every tier.
 
+M2c adds five checks whose artifacts are shape-checked, not produced by a scanner:
+`threat-model` (phase 1, web profile), `traceability` (phase 6, web profile), and
+`sbom`, `runbook`, `slo` (phase 7, **public tier**). The public-tier placement follows
+the `axe` precedent: one release-readiness obligation for every public bead, without
+duplicating it across ten profiles. None of these checks asserts that the system is
+secure, the tests are adequate, or the service is operable; `scripts/factory-compliance.mjs`
+checks required sections and fields only, and reviewers judge content.
+
 Two consequences worth stating plainly:
 
 - **The kind is checked, not just recorded.** `verify` refuses an artifact whose kind is not the one its check declares, with `check "<id>" needs a <declared> artifact; the manifest has <actual> (<path>)`. A transcript cannot answer a `visual` check.
@@ -129,9 +137,10 @@ Two consequences worth stating plainly:
    `completion-script`, `install-log`, `device-capture`, `check-output`, `visual`,
    `authz`, `load`, `golden`, `tty`, `consumer-build`, `plan-diff`,
    `policy-check`, `device`, `signing`, `update`, `watchdog`, `recovery`,
-   `frame`, `input`, `data-quality`, `directions`, `axe`: thirty-four declarable kinds. A thirty-fifth, `hidden-tests`, can be
+   `frame`, `input`, `data-quality`, `directions`, `axe`, `threat-model`, `sbom`,
+   `traceability`, `runbook`, `slo`: thirty-nine declarable kinds. A fortieth, `hidden-tests`, can be
    attested but not declared: the orchestrator writes it, and a policy entry
-   would print its id in the review package the builder reads. `directions` is a shape-checked record of the user, journey, and directions considered — not proof of taste. `axe` is an axe-core report over the default state at 1440px.
+   would print its id in the review package the builder reads. `directions` is a shape-checked record of the user, journey, and directions considered — not proof of taste. `axe` is an axe-core report over the default state at 1440px. The five M2c kinds are shape-checked records: `sbom` is a report-shaped artifact, not a scanner run, and `threat-model`/`traceability`/`runbook`/`slo` are records whose adequacy a reviewer judges.
 4. The Reviewer rubric is a property of the role, not the profile; it lives in `factory-v2-model.md` § Role contracts.
 5. Multi-surface beads (web + API, mobile + backend) declare a **list** of
    profiles; G3 needs evidence for every surface. In a monorepo, profile is

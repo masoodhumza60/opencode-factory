@@ -106,7 +106,8 @@ node scripts/test-factory-capture.mjs   # 24/24 capture tests passed.
 node scripts/test-factory-skills.mjs    # 44/44 skills tests passed.
 node scripts/test-fake-ship.mjs         # 6/6 fake-ship paths refused.
 node scripts/test-factory-manifest.mjs  # 26/26 manifest tests passed.
-node scripts/test-factory-policy.mjs    # 76/76 policy tests passed.
+node scripts/test-factory-compliance.mjs # 33/33 compliance tests passed.
+node scripts/test-factory-policy.mjs    # 77/77 policy tests passed.
 node scripts/test-factory-attest.mjs    # 112/112 attest tests passed.
 node scripts/test-factory-review.mjs    # 83/83 review tests passed.
 node scripts/test-factory-protect.mjs   # 17/17 protect tests passed.
@@ -114,7 +115,7 @@ node scripts/test-factory-protect.mjs   # 17/17 protect tests passed.
 
 The capture suite prints `SKIPPED: no browser` and exits 1 if no browser is available; a skip is not a pass.
 
-The counts are kept current with the last shipped milestone (M2b); each suite's
+The counts are kept current with the last shipped milestone (M2c); each suite's
 number only ever grows, so a stale count here is a doc bug, not a weaker claim.
 
 ### M1b — review and independence (shipped)
@@ -256,9 +257,8 @@ proves an artifact's shape, not its quality: a transcript cannot answer a
 screenshot check, but a passing transcript is not a passing test. And with no
 policy file on disk, none of it applies - the M0 behaviour is unchanged.
 
-**Still owed to M2:** M2c (security, QA, SRE) owes its mechanisms. M2b delivered
-`directions` and `axe`; `visual-diff`, `keyboard` and `sbom` remain absent from
-the vocabulary until something produces them, because a kind nobody can attest is a label, not evidence.
+**Still owed to M2:** nothing. M2c closes the security/QA/SRE mechanisms; what remains
+unproven inside M2c is stated in its section below.
 
 #### M2b - human surfaces (shipped)
 
@@ -272,6 +272,29 @@ M2b treats design judgment and runtime accessibility as evidence-bearing work, n
 The toolchain and fixture are committed at `eb3a3eb` and `a884a16`. The plan's fixtures cover six states; capture reports the five browser-observable states and uses `console-error` as a test-only probe.
 
 **What M2b does not prove.** A shape check is not taste: whether a direction is any good is judged at G1. One web capture path is proved; mobile and desktop remain designed-in but experimental, with no profile promoted to `enforced`. An axe-clean result is not accessible: review handles the contrast of meaning, keyboard order, focus and other failures a rule cannot judge. The example policy is data only; no `config/factory.policy.yaml` ships here, and the capture report is not an attestation of the product's quality.
+
+#### M2c - security, QA and SRE (shipped)
+
+M2c turns three disciplines that were prose-only into named, shaped evidence:
+
+1. **Five kinds, one closed list.** `DECLARABLE_KINDS` grew from 34 to 39: `threat-model`,
+   `sbom`, `traceability`, `runbook`, `slo`. Attestation still derives its vocabulary from
+   that list, so a declarable kind is always attestable.
+2. **Shape is checked, adequacy is not.** `factory-compliance.mjs` exports one pure check per
+   type and a `check <type> <bead> <path>` CLI. It refuses missing/empty sections, malformed
+   JSON, neither-CycloneDX-nor-SPDX reports, unmapped traceability criteria, and incomplete
+   SLO objectives. It never runs a scanner, scores severity, or judges whether a report is good.
+3. **The example policy wires the proof.** `threat-model` (phase 1) and `traceability` (phase 6)
+   join the web profile; `sbom`, `runbook` and `slo` (phase 7) join the **public tier**, following
+   the M2b `axe` precedent. Example counts are 17 / 9 / 21.
+4. **Five checked-in fixtures prove it.** `fixtures/testapp/{security,qa,ops}/` carry one valid
+   artifact per kind, and the compliance suite runs the real CLI over each.
+
+**What M2c does not prove.** No scanner ran: `sbom` is a report-shaped artifact, not a dependency
+inventory of this repo. No ASVS/MASVS conformance, authz/IDOR runtime test, mutation score, flaky
+quarantine, load/rollback/restore drill, SLSA/signing, or live alert firing is claimed. The five
+checks are shape gates; reviewers judge content. The example policy is data only, no profile is
+promoted to `enforced`, and no `config/factory.policy.yaml` ships here.
 
 ### M3 - Real delivery (1 week)
 
