@@ -53,7 +53,7 @@ git clone https://github.com/masoodhumza60/opencode-factory && cd opencode-facto
 node scripts/factory-selfcheck.mjs --tokens   # 6 PASS = machine is factory-ready
 
 # 2) Any project (per project): stamp state, then build
-/factory onboard              # stamp the project: beads DB + graft graph + skill lockfile
+/factory onboard              # stamp the project: beads DB + skill lockfile
 /factory selfcheck [--tokens] # health + context-footprint report
 /factory feature <description> # run the full pipeline (gates at spec, plan, ship)
 ```

@@ -10,7 +10,7 @@
     {
       "id": "resume-login",
       "prompt": "We restarted mid-feature yesterday. We were in the implement phase of the login feature. Continue it and finish the login flow.",
-      "expected_output": "Resumes the existing feature via the resume path (factory phase <name> / bd show <id>), honors graft freshness and the required superpowers skill at implement/debug entry, and finishes through verify.",
+      "expected_output": "Resumes the existing feature via the resume path (factory phase <name> / bd show <id>), honors the required superpowers skill at implement/debug entry, and finishes through verify.",
       "files": []
     },
     {

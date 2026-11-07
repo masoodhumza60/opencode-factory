@@ -13,17 +13,34 @@
 // Run:  node scripts/test-selfcheck.mjs
 // Exits 0 when every expectation holds, 1 otherwise.
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, copyFileSync, appendFileSync, readFileSync, readdirSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const SELFCHECK = join(here, "factory-selfcheck.mjs");
+// The bundle root, for fixtures that must be the REAL scripts rather than
+// stand-ins. A hand-written fake factory-phase.mjs would let the
+// "installed phase machine runs" check pass for the wrong reason, which is
+// the exact failure mode the check exists to catch.
+const BUNDLE = join(here, "..");
 let failures = 0;
 let ran = 0;
+let skipped = 0;
 
 const report = (name, pass, detail = "") => {
+  // `null` means INCONCLUSIVE: the check could not be evaluated here. That is
+  // not a pass - a pass would be decoration, and this repo has spent 57 checks
+  // refusing to ship decoration. And it is not a failure either: refusing to
+  // verify something is not the same as finding it broken. It gets reported and
+  // stays out of both totals, so a number that means "decided" keeps meaning it.
+  if (pass === null) {
+    skipped += 1;
+    console.log(`  skip ${name}${detail ? " \u2014 " + detail : ""}`);
+    return;
+  }
   ran += 1;
   if (pass) console.log(`  ok   ${name}${detail ? " — " + detail : ""}`);
   else {
@@ -214,6 +231,124 @@ try {
     );
   }
 
+  console.log("deployed runtime scripts");
+  // 14a. The docs name commands the install must contain. A real run (2026-10-10)
+  //      had a phase-5 agent read the installed conductor.md, run
+  //      factory-phase.mjs as instructed, and find nothing there - while this
+  //      suite was green and "factory skill deployed" was passing beside it.
+  {
+    const home = join(tmp, "home-scripts");
+    const dir = join(home, ".agents", "skills", "factory");
+    mkdirSync(join(dir, "docs"), { recursive: true });
+    writeFileSync(join(dir, "SKILL.md"), "---\nname: factory\n---\n", "utf8");
+    for (const d of ["conductor.md", "how-factory-works.md", "plan-format.md", "discovery.md", "mcp-judging.md"]) {
+      writeFileSync(join(dir, "docs", d), "# fixture\n", "utf8");
+    }
+    // Docs and SKILL.md but no scripts/ - exactly the broken install from the run.
+    const noScripts = runSelfcheck([], { env: { USERPROFILE: home, HOME: home } });
+    report(
+      "factory skill deployed still PASSes without scripts (the blind spot the run found)",
+      noScripts.line(/^PASS\s+factory skill deployed/) !== "",
+      noScripts.line(/factory skill deployed/) || "(no verdict)",
+    );
+    report(
+      "factory runtime scripts deployed FAILs when the docs reference absent commands",
+      noScripts.line(/^FAIL\s+factory runtime scripts deployed/) !== "",
+      noScripts.line(/runtime scripts/) || "(no verdict)",
+    );
+    report(
+      "the failure names the missing scripts and the fix",
+      /factory-phase\.mjs/.test(noScripts.out) && /install\.ps1/.test(noScripts.out),
+      noScripts.line(/runtime scripts/) || "(no verdict)",
+    );
+    report(
+      "skills catalog deployed FAILs too (factory-skills.mjs resolves ../skills/catalog.yaml)",
+      noScripts.line(/^FAIL\s+skills catalog deployed/) !== "",
+      noScripts.line(/catalog deployed/) || "(no verdict)",
+    );
+
+    // Now a complete install: the real scripts, so the phase machine can run.
+    mkdirSync(join(dir, "scripts"), { recursive: true });
+    mkdirSync(join(dir, "skills"), { recursive: true });
+    const RUNTIME = ["factory-phase.mjs", "factory-mcp.mjs", "factory-plan.mjs", "factory-skills.mjs", "factory-selfcheck.mjs", "platform.mjs"];
+    for (const s of RUNTIME) copyFileSync(join(BUNDLE, "scripts", s), join(dir, "scripts", s));
+    copyFileSync(join(BUNDLE, "skills", "catalog.yaml"), join(dir, "skills", "catalog.yaml"));
+    const complete = runSelfcheck([], { env: { USERPROFILE: home, HOME: home } });
+    report(
+      "factory runtime scripts deployed PASSes on a complete install",
+      complete.line(/^PASS\s+factory runtime scripts deployed/) !== "",
+      complete.line(/runtime scripts/) || "(no verdict)",
+    );
+    report(
+      "skills catalog deployed PASSes when it sits beside the scripts",
+      complete.line(/^PASS\s+skills catalog deployed/) !== "",
+      complete.line(/catalog deployed/) || "(no verdict)",
+    );
+
+    // 14b. The other half of the same blind spot: not the scripts we know about,
+    //      but the ones the installed docs name. Every list here is a hand-kept
+    //      list, and a list cannot notice a script that was added to a doc.
+    //      Measured 2026-10-11 against a live install that was carrying
+    //      docs/conductor.md naming measure.mjs with no measure.mjs on disk.
+    {
+      const cond = join(dir, "docs", "conductor.md");
+      const baseline = runSelfcheck([], { env: { USERPROFILE: home, HOME: home } });
+      report(
+        "every script the installed docs name is shipped PASSes when they agree",
+        baseline.line(/^PASS\s+every script the installed docs name is shipped/) !== "",
+        baseline.line(/installed docs name/) || "(no verdict)",
+      );
+
+      // The doc now tells an agent to run something the install does not carry.
+      writeFileSync(cond, "# fixture\n\nrun it: node scripts/ghost-tool.mjs\n", "utf8");
+      const dangling = runSelfcheck([], { env: { USERPROFILE: home, HOME: home } });
+      report(
+        "every script the installed docs name is shipped FAILs on a dangling reference",
+        dangling.line(/^FAIL\s+every script the installed docs name is shipped/) !== "",
+        dangling.line(/installed docs name/) || "(no verdict)",
+      );
+      report(
+        "the dangling-reference failure names the script, its doc, and the fix",
+        /ghost-tool\.mjs/.test(dangling.out) && /conductor\.md/.test(dangling.out) && /install\.ps1/.test(dangling.out),
+        dangling.line(/installed docs name/) || "(no verdict)",
+      );
+
+      writeFileSync(cond, "# fixture\n", "utf8");
+      const repaired = runSelfcheck([], { env: { USERPROFILE: home, HOME: home } });
+      report(
+        "and it PASSes again once the doc stops naming it (pass -> fail -> pass)",
+        repaired.line(/^PASS\s+every script the installed docs name is shipped/) !== "",
+        repaired.line(/installed docs name/) || "(no verdict)",
+      );
+    }
+    report(
+      "installed phase machine runs - executed from the install, not the bundle",
+      complete.line(/^PASS\s+installed phase machine runs/) !== "",
+      complete.line(/installed phase machine/) || "(no verdict)",
+    );
+
+    // The mutation that separates the two checks. A script that landed but
+    // cannot execute passes every existsSync above; only running it catches
+    // that, and catching it is the reason this check exists.
+    writeFileSync(join(dir, "scripts", "factory-phase.mjs"), "this is not valid javascript {{{\n", "utf8");
+    const broken = runSelfcheck([], { env: { USERPROFILE: home, HOME: home } });
+    report(
+      "a present-but-broken script still PASSes the presence check (proving presence is blind)",
+      broken.line(/^PASS\s+factory runtime scripts deployed/) !== "",
+      broken.line(/runtime scripts/) || "(no verdict)",
+    );
+    report(
+      "installed phase machine runs FAILs on a script that landed corrupt",
+      broken.line(/^FAIL\s+installed phase machine runs/) !== "",
+      broken.line(/installed phase machine/) || "(no verdict)",
+    );
+    report(
+      "the corrupt-script failure says it is present but did not run",
+      /present but did not run/.test(broken.out),
+      broken.line(/installed phase machine/) || "(no verdict)",
+    );
+  }
+
   console.log("verify-app skill");
   // 15. The verify-app generator must be able to FAIL. It is what turns the
   //     phase-5 --booted claim into a committed artifact, so a machine that has
@@ -243,69 +378,41 @@ try {
     );
   }
 
-  console.log("mcp: graft handshake - the real wire protocol, both directions");
-  // A fake MCP server that answers `initialize` and `tools/list` over
-  // newline-delimited JSON-RPC. The PASS path needs a server that genuinely
-  // completes the handshake, otherwise the test would only prove that a
-  // misconfigured server is rejected.
-  const fakeMcp = join(tmp, "fake-mcp.mjs");
-  writeFileSync(fakeMcp, [
-    'let buf = "";',
-    'process.stdin.on("data", (d) => {',
-    '  buf += d;',
-    '  let i;',
-    '  while ((i = buf.indexOf("\\n")) >= 0) {',
-    '    const line = buf.slice(0, i); buf = buf.slice(i + 1);',
-    '    if (!line.trim()) continue;',
-    '    let m; try { m = JSON.parse(line); } catch { continue; }',
-    '    if (m.method === "initialize")',
-    '      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: m.id, result: { protocolVersion: "2024-11-05", serverInfo: { name: "graft", version: "0.18.0" }, capabilities: { tools: {} }, instructions: "fake" } }) + "\\n");',
-    '    else if (m.method === "tools/list")',
-    '      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: m.id, result: { tools: [] } }) + "\\n");',
-    '  }',
-    '});',
-  ].join("\n"), "utf8");
-  const mcpConfig = (name, servers) => state(name, { mcp: { servers } });
-  // 11. A server that completes the handshake must PASS, and the verdict must
-  //     carry the version it reported (proving it came off the wire, not out
-  //     of a constant).
+  console.log("graft is not a requirement - and must stay that way");
+  // These assertions are the inverse of the family they replace. The old one
+  // proved that `mcp: graft handshake` graded a server correctly; the check is
+  // gone, so those assertions would now pass vacuously - they would read a
+  // line that can never appear. A test that cannot fail is not a test, and
+  // this project has shipped several.
+  //
+  // What is asserted instead is the decision itself: the factory must not
+  // require graft. If someone re-adds the requirement, or wires the check
+  // back in, these fail. That is the direction that matters - the failure we
+  // are guarding against is a machine with no graft failing its own
+  // selfcheck, which is what this used to cause.
+  //
+  // Why: measured. 1 graft call in 40,467 recorded tool calls, 0 in PowerShell
+  // history, 0 telemetry events in 25 days, and 1,437 cards built and never
+  // opened again. The CLI was real and good at search (98% smaller than
+  // reading whole files) and useless at navigation, which is 83% of what this
+  // work does: ls beat graft repo-map 317 bytes to 5,185 at 3,557 files.
   {
-    const p = mcpConfig("mcp-ok", { graft: { type: "local", command: [process.execPath, fakeMcp] } });
-    const r = runSelfcheck(["--mcp-config", p]);
-    report("completing handshake PASSes", r.line(/^PASS\s+mcp: graft handshake/) !== "", r.line(/mcp: graft handshake/));
-    report("verdict carries the server version from the wire", /0\.18\.0/.test(r.line(/mcp: graft handshake/)), r.line(/mcp: graft handshake/));
+    const r = runSelfcheck([]);
+    report(
+      "selfcheck emits no graft requirement at all",
+      !/graft/i.test(r.out),
+      (r.line(/graft/i) || "(no graft line in the selfcheck output)"),
+    );
   }
-  // 12. A config with no graft server must FAIL. This is the case the doc used
-  //     to claim was covered while it only ran `graft --version`.
+  // The CLI-presence row went with it: a machine without graft must not be
+  // told it is missing something.
   {
-    const p = mcpConfig("mcp-absent", { somethingelse: { type: "local", command: [process.execPath, fakeMcp] } });
-    const r = runSelfcheck(["--mcp-config", p]);
-    report("absent server FAILs", r.line(/^FAIL\s+mcp: graft handshake/) !== "", r.line(/mcp: graft handshake/));
-  }
-  // 13. A disabled server must FAIL: a server nobody can reach is not healthy.
-  {
-    const p = mcpConfig("mcp-disabled", { graft: { type: "local", command: [process.execPath, fakeMcp], enabled: false } });
-    const r = runSelfcheck(["--mcp-config", p]);
-    report("disabled server FAILs", r.line(/^FAIL\s+mcp: graft handshake/) !== "", r.line(/mcp: graft handshake/));
-    report("disabled failure says it is disabled", /disabl/i.test(r.line(/mcp: graft handshake/)), r.line(/mcp: graft handshake/));
-  }
-  // 14. A command that cannot spawn must FAIL rather than reading as healthy.
-  {
-    const p = mcpConfig("mcp-unspawnable", { graft: { type: "local", command: ["definitely-not-a-real-binary-xyz", "serve"] } });
-    const r = runSelfcheck(["--mcp-config", p]);
-    report("unspawnable command FAILs", r.line(/^FAIL\s+mcp: graft handshake/) !== "", r.line(/mcp: graft handshake/));
-  }
-  // 15. The failure must name the fix, or a person hits it with no next step.
-  {
-    const p = mcpConfig("mcp-fix", { graft: { type: "local", command: ["definitely-not-a-real-binary-xyz", "serve"] } });
-    const r = runSelfcheck(["--mcp-config", p]);
-    report("handshake failure names the fix", /install\.(ps1|sh)/.test(r.out), r.line(/mcp: graft handshake/));
-  }
-  // 16. An unreadable config must FAIL, and must not crash the whole selfcheck
-  //     (the shape-not-flag lesson from the mandatory-skills check).
-  {
-    const r = runSelfcheck(["--mcp-config", state("mcp-broken", "{ not json")]);
-    report("unreadable config FAILs without crashing", r.line(/^FAIL\s+mcp: graft handshake/) !== "" && !/TypeError|Cannot read/.test(r.out), r.line(/mcp: graft handshake/));
+    const r = runSelfcheck([]);
+    report(
+      "a machine with no graft is not failed for having no graft",
+      !/FAIL[^\n]*graft/i.test(r.out),
+      (r.line(/FAIL[^\n]*graft/i) || "(no graft failure)"),
+    );
   }
 
   console.log("live machine sanity");
@@ -317,6 +424,237 @@ try {
     const crashed = /Error:|throw|Cannot read/.test(r.out);
     report("live run emits a dcp verdict", hasVerdict && !crashed, r.line(/dcp: pruning active/) || "(no dcp dir yet)");
   }
+// The install manifest is the check that answers "is this run measuring current
+  // code?". It had NO test at all, and its pass->fail->pass was proved against a
+  // hand-written fixture rather than against the code - which is exactly how the
+  // installer and the reader ended up disagreeing about the path without anything
+  // failing. The drift assertions below exercise the reader; the seam assertions at
+  // the end read the installer's own source, because the two halves cannot be
+  // exercised together without running a real install.
+  {
+    const home = join(tmp, "home-manifest");
+    const dir = join(home, ".agents", "skills", "factory");
+    mkdirSync(join(dir, "docs"), { recursive: true });
+    mkdirSync(join(dir, "scripts"), { recursive: true });
+    mkdirSync(join(dir, "skills"), { recursive: true });
+    writeFileSync(join(dir, "SKILL.md"), "---\nname: factory\n---\n", "utf8");
+    for (const d of ["conductor.md", "how-factory-works.md", "plan-format.md", "discovery.md", "mcp-judging.md"]) {
+      writeFileSync(join(dir, "docs", d), "# fixture\n", "utf8");
+    }
+    for (const f of ["factory-phase.mjs", "factory-mcp.mjs", "factory-plan.mjs", "factory-skills.mjs", "factory-selfcheck.mjs", "platform.mjs"]) {
+      copyFileSync(join(BUNDLE, "scripts", f), join(dir, "scripts", f));
+    }
+    copyFileSync(join(BUNDLE, "skills", "catalog.yaml"), join(dir, "skills", "catalog.yaml"));
+
+    // Keys are paths relative to the skills root, which is the shape the installer
+    // writes. The reader resolves each key against factorySkillDir/.. , so a fixture
+    // using a different shape would compare files that do not exist.
+    const hashOf = (rel) =>
+      createHash("sha256")
+        .update(readFileSync(join(home, ".agents", "skills", rel)))
+        .digest("hex")
+        .toUpperCase();
+    // A bundle on disk for the reader to compare against. Without it the check
+    // cannot tell "the install is current" from "nothing was compared" - and
+    // reporting those two the same way is the entire defect this fixes.
+    const bundleDir = join(tmp, "bundle-src");
+    mkdirSync(join(bundleDir, "scripts"), { recursive: true });
+    mkdirSync(join(bundleDir, "skills", "factory"), { recursive: true });
+    const bundleHas = (rel, from = rel) =>
+      writeFileSync(join(bundleDir, rel), readFileSync(join(dir, from.replace("/", "\\"))));
+    // The installed copy and the bundle copy of SKILL.md live at different paths:
+    // <skill>/SKILL.md here, skills/<skill>/SKILL.md in the bundle. The manifest
+    // records the bundle one, so the fixture has to write it where the manifest
+    // says - otherwise the reader compares against a file nobody created and the
+    // check refuses to certify, which is right, and the fixture looks broken.
+    bundleHas("skills/factory/SKILL.md", "SKILL.md");
+    bundleHas("scripts/factory-phase.mjs");
+    // The installer strips the leading <skill>/ segment to find the same file in
+    // the bundle, and special-cases SKILL.md, which the bundle keeps under
+    // skills/<skill>/. The fixture states the mapping rather than re-deriving it, so
+    // a change to the installer's rule shows up here as a failure to compare.
+    const manifestFor = () => ({
+      installed_at: new Date().toISOString(),
+      bundle_commit: "fixture",
+      bundle_path: bundleDir,
+      files: {
+        "factory/SKILL.md": { hash: hashOf("factory/SKILL.md"), src: "skills/factory/SKILL.md" },
+        "factory/scripts/factory-phase.mjs": {
+          hash: hashOf("factory/scripts/factory-phase.mjs"),
+          src: "scripts/factory-phase.mjs",
+        },
+      },
+    });
+    const manifestPath = join(dir, "install-manifest.json");
+    const inHome = { env: { USERPROFILE: home, HOME: home } };
+
+    // 1. Absent. The message must point at the SKILL directory: the bug was a reader
+    // that looked one level up, in the shared root, where it found nothing - or worse,
+    // something a probe had left behind.
+    const none = runSelfcheck([], inHome);
+    report(
+      "a missing manifest WARNs instead of passing silently",
+      none.line(/^WARN\s+install manifest/) !== "",
+      none.line(/install manifest/) || "(no verdict)",
+    );
+    report(
+      "and it names the manifest inside the skill directory",
+      none.out.includes("factory") && none.out.includes("install-manifest.json"),
+      none.line(/install manifest/) || "(no verdict)",
+    );
+
+    // 2. Matching hashes -> current. This is the state a real install is in.
+    writeFileSync(manifestPath, JSON.stringify(manifestFor(), null, 2), "utf8");
+    const ok = runSelfcheck([], inHome);
+    report(
+      "a manifest matching the files on disk reports the install current",
+      ok.line(/install current as of/) !== "",
+      ok.line(/install current/) || "(no verdict)",
+    );
+
+    // 3. Drift. This is the whole reason the check exists.
+    // Keep the original so the next case starts from a clean install. Leaking the
+    // drift into case 4 made a correct reader look broken: it reported drift,
+    // which is true, so the BOM case failed for a reason that had nothing to do
+    // with a BOM. A test that does not restore what it changed is testing its own
+    // leftovers.
+    const installedPhase = readFileSync(join(dir, "scripts", "factory-phase.mjs"));
+    appendFileSync(join(dir, "scripts", "factory-phase.mjs"), "// edited after install\n");
+    const drifted = runSelfcheck([], inHome);
+    report(
+      "an edited installed script is reported as drifted",
+      drifted.line(/^WARN\s+installed scripts have changed since install/) !== "",
+      drifted.line(/changed since install/) || "(no verdict)",
+    );
+    report(
+      "the drift warning names the file and says the run is measuring stale code",
+      /factory\/scripts\/factory-phase\.mjs/.test(drifted.out) &&
+        /not the current bundle/.test(drifted.out),
+      drifted.line(/changed since install/) || "(no verdict)",
+    );
+
+    writeFileSync(join(dir, "scripts", "factory-phase.mjs"), installedPhase);
+
+    // 4. A BOM is not corruption. PowerShell 5.1 writes one, and a human editing the
+    // file in an editor can add one. Reading either as "unreadable" would send an
+    // operator to re-run an installer that already did its job.
+    writeFileSync(manifestPath, "﻿" + JSON.stringify(manifestFor()), "utf8");
+    const bom = runSelfcheck([], inHome);
+    report(
+      "a manifest written with a BOM still reads (stripped, not called corrupt)",
+      bom.line(/install current as of/) !== "",
+      bom.line(/install manifest|install current/) || "(no verdict)",
+    );
+
+    // 4b. THE DIRECTION THAT WAS INVISIBLE. Nothing on disk changed here: the
+    // install still matches the manifest exactly. Only the bundle moved. Before
+    // this fix that printed "install current" - the sentence that let a real run
+    // measure four-commit-old code, print a green line, and start.
+    writeFileSync(manifestPath, JSON.stringify(manifestFor(), null, 2), "utf8");
+    appendFileSync(join(bundleDir, "scripts", "factory-phase.mjs"), "// the bundle moved on\n");
+    const behind = runSelfcheck([], inHome);
+    report(
+      "a bundle that has moved ahead is reported, not called current",
+      behind.line(/^WARN\s+the bundle has moved ahead of the install/) !== "" &&
+        behind.line(/install current as of/) === "",
+      behind.line(/bundle has moved ahead|install current/) || "(no verdict)",
+    );
+    report(
+      "and that warning names the file and says the run is measuring stale code",
+      /factory\/scripts\/factory-phase\.mjs/.test(behind.out) && /not the current bundle/.test(behind.out),
+      behind.line(/bundle has moved ahead/) || "(no verdict)",
+    );
+    bundleHas("scripts/factory-phase.mjs"); // back in step, for the cases below
+
+    // 4c. A manifest that does not say where the bundle was cannot answer the
+    // question at all. The old fixtures were exactly this shape, and they said
+    // "current" - which is why the bundle moving ahead went unseen.
+    writeFileSync(
+      manifestPath,
+      JSON.stringify({
+        installed_at: new Date().toISOString(),
+        bundle_commit: "fixture",
+        files: { "factory/SKILL.md": hashOf("factory/SKILL.md") },
+      }),
+      "utf8",
+    );
+    const noPath = runSelfcheck([], inHome);
+    report(
+      "a manifest with no bundle_path does NOT report the install current",
+      noPath.line(/^WARN\s+install currency not established/) !== "" &&
+        noPath.line(/install current as of/) === "",
+      noPath.line(/currency not established|install current/) || "(no verdict)",
+    );
+    report(
+      "and it says the installer is what would establish it",
+      /Re-run the installer/.test(noPath.out),
+      noPath.line(/currency not established/) || "(no verdict)",
+    );
+
+    // 4d. The bundle moved away - a different clone, a rename, a different laptop.
+    // The honest answer is "cannot tell". Anything else is a guess wearing a
+    // green line.
+    writeFileSync(
+      manifestPath,
+      JSON.stringify({ ...manifestFor(), bundle_path: join(tmp, "gone-bundle") }),
+      "utf8",
+    );
+    const gone = runSelfcheck([], inHome);
+    report(
+      "a bundle that is no longer there refuses to certify the install current",
+      gone.line(/^WARN\s+install currency not established/) !== "" &&
+        gone.line(/install current as of/) === "",
+      gone.line(/currency not established|install current/) || "(no verdict)",
+    );
+    report(
+      "and it names the path it could not find",
+      /gone-bundle/.test(gone.out),
+      gone.line(/currency not established/) || "(no verdict)",
+    );
+    writeFileSync(manifestPath, JSON.stringify(manifestFor(), null, 2), "utf8");
+
+    // 5. Genuinely corrupt is reported, not crashed on.
+    writeFileSync(manifestPath, "{ this is not json", "utf8");
+    const bad = runSelfcheck([], inHome);
+    report(
+      "a corrupt manifest warns and the selfcheck still finishes",
+      bad.line(/unreadable or has no file list/) !== "" && !/SyntaxError/.test(bad.out),
+      bad.line(/install manifest/) || "(no verdict)",
+    );
+
+    // ---- the seam ----
+    // Structural, not behavioural: these read the installer's own source, because
+    // proving the two halves agree by running a real install is not something this
+    // suite can do. Asserting them is still worth far more than nothing - the
+    // mismatch that shipped was four characters wide and nothing noticed it.
+    const installerSrc = readFileSync(join(BUNDLE, "install.ps1"), "utf8");
+    const selfcheckSrc = readFileSync(join(BUNDLE, "scripts", "factory-selfcheck.mjs"), "utf8");
+    const instLine = (installerSrc.match(/\$manifestPath\s*=.*/) || [""])[0];
+    const selfLine = (selfcheckSrc.match(/const manifestPath\s*=.*/) || [""])[0];
+    report(
+      "the installer records where the bundle was, without which currentness is unknowable",
+      /bundle_path\s*=\s*\$bundle/.test(installerSrc),
+      (installerSrc.match(/.*bundle_path.*/) || [""])[0].trim() || "(no bundle_path in install.ps1)",
+    );
+    report(
+      "the installer writes the manifest beside the files it describes (not above the skill dir)",
+      /Join-Path\s*\(Split-Path\s+\$dstSk\)/.test(instLine),
+      instLine || "(no manifest write found in install.ps1)",
+    );
+    report(
+      "and the selfcheck reads it from that same skill directory, not one level up",
+      /join\(factorySkillDir,\s*"install-manifest\.json"\)/.test(selfLine) &&
+        !/factorySkillDir,\s*"\.\."/.test(selfLine),
+      selfLine || "(no manifest read found in factory-selfcheck.mjs)",
+    );
+    report(
+      "and the installer writes it without a BOM (PowerShell 5.1 Set-Content adds one)",
+      !/Set-Content[^\r\n]*\$manifestPath/.test(installerSrc) &&
+        /UTF8Encoding\s+\$false/.test(installerSrc),
+      "install.ps1 manifest write",
+    );
+  }
+
 } finally {
   // A locked temp dir is a cleanup inconvenience, not a test result; retry and
   // never let it turn a green suite red.
@@ -327,7 +665,70 @@ try {
   }
 }
 
-console.log(`\n${ran - failures}/${ran} selfcheck tests passed.`);
+// A cited commit hash that no longer resolves is a claim pointing at nothing.
+// Amending a commit is normal practice here and silently invalidates every doc
+// naming the old hash - which is exactly what happened to the Grounded Claims
+// entry in docs/negative-results.md, when amending 2c55650 into 9462f67 left
+// the entry citing a commit reachable from no ref.
+//
+// The rule is per PARAGRAPH, not per hash. A sentence saying a rewrite "moved
+// its hash from `old` to `new`" cites `old` on purpose, so a paragraph is only
+// a defect when NO hash in it is reachable from HEAD. Paragraph, not line,
+// because markdown wraps: this very entry reads "moved its hash from `2c55650`
+// to" on one line and "`9462f67`, and this pointer" on the next, so judging one
+// line at a time reported a healthy citation as a dead pointer - the check
+// accusing the doc for doing the thing the doc describes. Reachability is
+// merge-base --is-ancestor: cat-file -e answers whether an object exists in the
+// store, which is true for unreachable commits, and would pass for the wrong
+// reason.
+{
+  let gitOk = true;
+  try {
+    execFileSync("git", ["rev-parse", "HEAD"], { cwd: BUNDLE, stdio: "ignore" });
+  } catch {
+    gitOk = false;
+  }
+  const docsDir = join(BUNDLE, "docs");
+  const deadBlocks = [];
+  let cited = 0;
+  if (gitOk) {
+    const live = (h) => {
+      try {
+        execFileSync("git", ["merge-base", "--is-ancestor", h, "HEAD"], { cwd: BUNDLE, stdio: "ignore" });
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    for (const f of readdirSync(docsDir).filter((n) => n.endsWith(".md"))) {
+      const lines = readFileSync(join(docsDir, f), "utf8").split(/\r?\n/);
+      // A blank line ends a paragraph; consecutive non-blank lines are one.
+      let block = [];
+      const flush = () => {
+        const hashes = [...block.map((b) => b.line).join("\n").matchAll(/`([0-9a-f]{7})`/g)].map((m) => m[1]);
+        const at = block[0]?.at;
+        block = [];
+        if (!hashes.length) return;
+        cited += hashes.length;
+        if (!hashes.some(live)) deadBlocks.push(`${f}:${at} (${[...new Set(hashes)].join(", ")})`);
+      };
+      lines.forEach((line, i) => {
+        if (line.trim() === "") return flush();
+        block.push({ at: i + 1, line });
+      });
+      flush();
+    }
+  }
+  report(
+    "a commit hash cited in docs resolves from HEAD, or its paragraph names one that does",
+    gitOk ? deadBlocks.length === 0 : null,
+    !gitOk
+      ? "not a git checkout, so there is no HEAD to resolve against - nothing to verify here, not nothing wrong"
+      : `${cited} cited across docs/*.md` + (deadBlocks.length ? `; unreachable with no live sibling in ${deadBlocks.length} paragraph(s): ${deadBlocks.join("; ")}` : "; all resolve, or sit in a paragraph with one that does")
+  );
+}
+
+console.log(`\n${ran - failures}/${ran} selfcheck tests passed.` + (skipped ? ` (${skipped} could not be evaluated here)` : ""));
 if (failures) {
   console.error(`${failures} test(s) failed.`);
   process.exit(1);

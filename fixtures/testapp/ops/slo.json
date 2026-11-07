@@ -1,0 +1,16 @@
+{
+  "service": "testapp",
+  "window": "28d",
+  "objectives": [
+    {
+      "name": "availability",
+      "target": 0.999,
+      "indicator": "successful page loads / all page loads"
+    },
+    {
+      "name": "capture-success",
+      "target": 0.99,
+      "indicator": "capture runs with 16 artifacts / all capture runs"
+    }
+  ]
+}

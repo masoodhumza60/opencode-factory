@@ -17,7 +17,7 @@ Four layers, each with one clear job:
 | **Conductor** | `factory` skill (thin) | Phase machine + gates + skill enforcement |
 | **Phase engines** | superpowers skills (reused) | Phase procedures (brainstorm, plan, TDD, debug, verify, review, ship) |
 | **State** | beads (`bd` CLI + Dolt DB) | One issue per feature; phase stored on the issue; audit log; durable across sessions/devices |
-| **Context** | graft (MCP, code graph) | Fast navigation during plan/implement/debug |
+| **Context** | none (no MCP required) | The bundle depends on no MCP server; a bundle that needs nothing must leave the operator's servers untouched |
 
 Role boundaries:
 
@@ -26,8 +26,10 @@ Role boundaries:
 - beads is the **source of truth for phase state**, not a to-do list — one
   issue per feature, `phase:<name>` stored on the issue, `bd prime` output
   pushed into every model call by the opencode-beads plugin.
-- graft never reads markdown/skills; its job is code structure (stack
-  detection, navigation) only.
+- the bundle declares **no** MCP requirement. `config/mcp-requirements.json` is
+  empty on purpose: an empty list means *need nothing*, never *disable
+  everything*. `scope` with no `--allow` and an empty declaration leaves every
+  configured server exactly as the operator has it.
 
 ## The pipeline (spec §5.1)
 
@@ -48,6 +50,35 @@ Role boundaries:
 the debug phase with `systematic-debugging` before fixes are allowed (no
 ad-hoc fixes).
 
+### Bounded work still writes a spec - a short one
+
+The `brainstorming` skill says bounded work gets "the in-chat design/probe"
+and "no spec file". This pipeline says phase 2 always produces one, and the
+phase machine **refuses** to enter phase 2 without it. Both are right about
+different things, and an agent left to work that out mid-phase will guess.
+
+- **The conductor and the phase machine own the pipeline.** A spec artifact is
+  required to enter phase 2. That is machine-enforced, not a matter of taste:
+  `ARTIFACTS` refuses the entry and names the file and directory it looked in.
+- **The skill owns the conversation.** It decides how much design happens
+  before anything gets written down.
+
+So classify out loud, and let the classification change the spec's **length**,
+never its existence.
+
+- **Architectural** - the full written spec, reviewed at Gate A, as the skill
+  describes.
+- **Bounded** - discuss the short design in chat, get the human's approval
+  there, then write a brief spec recording what was agreed: the behaviour, the
+  decisions, and the shape of the tests. If that is under a page, that is
+  correct output, not a spec that failed to get written.
+
+A phase-2 agent in a real run resolved this by inventing the phrase "bounded
+in substance, spec in form" and reporting it in its reply instead of writing
+it down, so the next agent has to re-derive it. That is the cost of leaving
+the contradiction in place: it is not wrong enough to fail a check, which is
+exactly why nothing caught it.
+
 ## Journey (spec §5.3)
 
 ```
@@ -58,7 +89,7 @@ factory <feature-name>            # create beads issue, start phase 1
   → 3 plan                         # writing-plans → plan doc + task breakdown
                                    #   + <plan>.plan.json (the machine graph)
   → GATE B                         # human approves plan + execution method ── STOP, wait
-  → 4 implement                    # TDD; beads-task-agent subagents; graft navigation
+  → 4 implement                    # TDD; beads-task-agent subagents
   → 4' debug (routed on failure)   # systematic-debugging
   → 5 verify                       # verification-before-completion (evidence gate)
   → 6 review                       # requesting/receiving code review
@@ -160,6 +191,19 @@ Seven properties worth relying on:
   as standing state after the run has returned to implement. It is reported as
   incoherent rather than cleared, and it does not block anything.
 
+- **An unfinished ship phase still offers the repair detour.** Verify and
+  review are branching phases: they exist to find defects, so they must have
+  somewhere to go and fix them. Ship was deliberately left out of that set,
+  because a shipped run has nothing left to reject - a completed phase 7 offers
+  no detour, and that is intended. But the gate at ship is *machine-enforced*:
+  resolving Gate C unblocks `complete 7`, so a human who rejects the work at
+  Gate C is left with exactly two moves - ship the thing they just rejected, or
+  go nowhere. Found by a real run where the reviewer found a defect, the human
+  ruled "do not ship, fix it", and `enter <bead> 4p` was refused as an illegal
+  transition. Phase 7 while *incomplete* now offers the detour alongside the
+  blocked advance, and `next` reports both facts at once: the advance is
+  blocked, and the detour is available. Walking back out costs 4 -> 5 -> 6 -> 7,
+  so a rejection costs a re-run rather than a bypass.
 If the script refuses you, that is the gate working, not a bug to route
 around. Fix the state or ask the human — do not start writing files anyway.
 
@@ -167,7 +211,13 @@ around. Fix the state or ask the human — do not start writing files anyway.
 
 Every number this factory produces is a comparison, and a comparison needs
 both sides. The historical baseline was one run of this factory; the current
-one is `testapps/orderboard`, seeded by `scripts/seed-testapp.mjs`.
+one is `testapps/orderboard`, seeded from the factory repository by its
+seed script. That script and the template it copies are repository tooling and
+are **not** in an install. Naming them here as installed paths was a defect the
+selfcheck could not see; the installed-doc check added on 2026-10-11 now
+fails on any script an installed doc names that the install does not carry, so
+the fix is to stop writing them as paths rather than to teach the check to
+ignore the sentence that says they are absent.
 
 Use the same app each time. A different app each time measures the app, not
 the factory. Its feature is absent by construction - the seed refuses if the
@@ -198,6 +248,67 @@ Two traps worth naming, because both cost real time:
   defect you meant. Write fixtures with the same tool that reads them.
 - **Assert the verdict, not the exit code.** A suite's exit code is global and
   contaminated by unrelated checks; the line you are testing is the verdict.
+
+## Which servers this project runs
+
+On **start** and on **resume**, before anything else, run `scope` with
+every server this kind of app needs kept on:
+
+    node <bundle>/scripts/factory-mcp.mjs scope --allow <server>[,<more>]
+
+**Decide that allowlist now, not when a later phase needs it.** `/mcps` connects a
+server live but does not persist it; the config write is what survives a
+restart. Whether the *running* session picks up a config edit without one is
+not documented either way, so `enable` reports `liveReload: "unverified"`
+rather than telling you either "fine" or "restart". If a turn-on appears to do
+nothing, restart and try again. Ask what kind of app this is first, then:
+
+| This project has | Keep |
+|---|---|
+| a web page a person uses | `--allow chrome-devtools` |
+| an HTTP API or a CLI only | `--allow` (nothing) |
+
+**Run `scope` with no `--allow` only when the project genuinely needs no MCP
+server.** That is a real case, and it is the one this bundle is in: it declares
+nothing, so with no `--allow` it touches nothing. The moment you pass any
+server, the allowlist becomes the whole truth — every server you did not name
+is switched off for this project. That asymmetry has already cost a run its
+verification path: a project with a web page named an allowlist, the start
+step turned off `chrome-devtools`, and phase 5 found it disabled three phases
+later. The agent built a fallback driver instead, and the fallback worked, so
+the run read clean. Nothing failed - the run was quietly half verified.
+
+It turns off every other configured MCP server for **this project only** and
+records the ones you keep, so the set is stated rather than inherited. Run it
+again when the project gains a server you want, or drops one.
+
+Why per-project rather than per-machine: a global MCP toggle changes every
+project on the laptop, including the ones you are not working on. This writes
+`opencode.json` in the project root - opencode merges project config over
+global, so the override wins here and nowhere else. The global file is never
+read for writing and never touched.
+
+**When the work genuinely needs a server, turn it on for this project:**
+
+    node <bundle>/scripts/factory-mcp.mjs enable <server>
+
+`enable` and `disable` are the ONLY sanctioned way to change MCP state. Never
+hand-edit a config file to do it. That is not a style rule: hand-editing the
+global file once turned on three servers across two unrelated sessions that
+were open at the time, and the undo was a manual restore of a file I had just
+made worse. `enable` refuses rather than guess, writes an override rather than a
+definition, reads the file back, and rolls back if it cannot confirm what it
+wrote.
+
+`scope` records the servers it keeps as well as the ones it turns off, so the
+project's server set is stated rather than inherited from whatever global
+happens to say today - a global change cannot silently change this project.
+A typo in `--allow` is a refusal, because the quiet failure is that it disables
+the very server the flag was meant to protect.
+
+Note the limit honestly: this is scoped per **directory**, not per session. Two
+sessions in the same project share the override. Different projects are fully
+isolated.
 
 ## Cost discipline — the three rules that keep a session affordable
 
@@ -338,6 +449,58 @@ approval; a resolved gate is.
   `finishing-a-development-branch`, and the commits were made with
   `commit-work` — and the human approves the ship.
 
+### What the human must actually see at a gate
+
+`--booted` proves the app answered once. `verify-app` makes that claim
+re-checkable. Neither proves **a human looked at it and was satisfied** — so
+without the rule below a gate is satisfied by the machine's evidence while the
+human's attention is spent somewhere else entirely.
+
+**Present the artifact inline, at every gate, before asking for approval:**
+
+1. **What it says** — the decisions themselves, in prose, not a file listing.
+2. **What it commits the project to** — stack, shape and scope, in words the
+   human can disagree with.
+3. **What it leaves open** — every question it did not answer, named out loud.
+
+Then give the path. **Never request approval of a path alone.** An approval
+given without having seen the content is not an approval — record it in the run
+report as what it was, never as "Gate A satisfied".
+
+The state layer cannot enforce any of this; it can only check that a gate was
+resolved. That gap is deliberate and it is yours to close with your attention,
+which is the entire reason a human stands at this gate. A gate nobody read is a
+gate that was never really there.
+
+### Gate C also rules on the running app
+
+Green tests are not evidence the product is finished. They are evidence the
+claims made in code hold, which is a strictly smaller claim. Before Gate C can
+resolve, for anything with a user-facing surface:
+
+1. **Run it, and say how** — report the URL and the exact command.
+2. **Show it** — screenshots of the real thing at real viewport sizes, not a
+   description of what it does.
+3. **Answer two questions in prose first.** These are the questions a checklist
+   cannot hold, which is exactly why they belong here and not in the ledger:
+   - *"If a user opened this for the first time and left inside ten seconds,
+     what did they think it was?"*
+   - *"What would you do differently with two more days, and what would each
+     of those changes be worth to a user?"*
+
+   Neither has a verifiable answer. An agent that answers either with a spec
+   reference, a task count or a test count has not answered it.
+4. **Then ask the human to rule on what they saw.**
+
+**Measured, in the `bio-link` run.** Every gate passed and the suite was green
+— 72 commits, 41 test files — while the app shipped a stock framework palette,
+hand-rolled inputs sitting beside Nuxt UI buttons, and an exception thrown every
+time the landing page embedded the demo. Three of the seven questions the agent
+asked the human were things this file should have answered, one of them *"What
+should this factory run actually produce by Gate C?"* A green run that nobody
+looked at is not a finished product, and no quantity of machine evidence says
+otherwise.
+
 **No implementation files before spec AND plan approval.** Gates A and B are
 hard human gates before any implementation; the plan is shared mutable state
 between human and agent.
@@ -430,6 +593,28 @@ Phase 1 runs two tracks that feed each other:
   focused question at a time draws out the feature's purpose, who it serves, and
   what success looks like. The answers become the design brief. The cadence
   stays exactly one question per message.
+- **The first question is a WHY question (hard rule).** Before *any* how-question
+  — no "which database", no "how do we handle X", no "is this in scope" — phase 1
+  must ask and **record the answer to** the question a senior engineer asks
+  first: *"what is this for, and who is it for?"* Both halves are required:
+  the audience named concretely (not "users"), and the specific thing this does
+  that the alternative does not.
+
+  This is not a style preference. A run of the factory asked four scope
+  questions in its first brainstorm — how are profiles addressed, are social
+  icons in scope, what theming, where does it deploy — and answered all four
+  well. **All four were how-questions.** Nothing asked why the thing existed,
+  so nothing noticed it was a faithful reproduction of a product that already
+  ships, and four days of correct work went into it. A brief the human issued
+  while still exploring ("reverse engineer X") is a *hypothesis*, not a spec.
+  Treating it as a specification is the failure this rule exists to stop.
+
+  **A question is a why-question when it can change whether the feature is
+  built at all.** If the answer would be the same either way, it is a how-question
+  and it comes second.
+
+  The answer is recorded verbatim in the brainstorm record, above any
+  decomposition. It may be short. It may be revised later — but it must exist.
 - **Autonomous research** — the system researches on its own, before and during
   the questions: web/technology search and fetch (official docs, ecosystem and
   similar projects, alternatives, prior art, current version landscape), plus
@@ -488,24 +673,46 @@ and kept with the design brief for the spec phase.
 - The conductor reads phase state from beads (`bd show <id>`) at every entry,
   so a restarted session or a different device resumes where it left off.
 
-## Graft context freshness (enforced)
+## Code navigation (no MCP required)
 
-Graft is the code-structure context for phases 4 (implement) and 4' (debug).
-A stale or empty graph is never trusted silently:
+This bundle used to require `graft`, a code-graph MCP server, and to carry a
+whole freshness protocol for it. **That requirement is gone.** The bundle
+declares no MCP server, and nothing in the factory calls one.
 
-1. On entry to phase 4 or 4': **check freshness first** — `graft_check_freshness`
-   when the MCP tool is available; otherwise compare the graph's build time
-   against the newest file mtime, or treat a missing/empty graph as stale.
-2. Graph empty or stale → run `graft build`, then record:
-   `bd update <id> --append-notes "graft: rebuilt (N nodes)"`.
-3. Graph fresh → record: `bd update <id> --append-notes "graft: fresh"`.
-4. Rebuild fails → **degrade loudly, never silently**: record
-   `bd update <id> --append-notes "graft: degraded <reason>"`, fall back to
-   direct file navigation for that phase, and surface the note at the next gate.
-   An empty graph is never treated as "no context needed".
+It was removed because three independent instruments measured it as
+generated-once-never-read, not because it was judged useless in principle:
 
-Selfcheck warns on an empty graph (`WARN graft graph has 0 nodes`), so the gap
-is visible in the repo before a phase relies on it.
+- **Tool-call history**: across 40,467 recorded calls there was **one** graft
+  call ever, and it was in a project the factory never touched.
+- **Telemetry**: 16 events, all from a single day, with a first run 25 days
+  before and nothing in between.
+- **On-disk output**: a 1,437-card index built and last touched two seconds
+  apart, then untouched for 17 days.
+
+It was genuinely good at one thing — "where is X used?", measured at 98%
+smaller than reading the files whole — and worse than `ls` at the other
+("what files exist here?": 556 bytes versus 2,773, and the gap widens as a
+repo grows). Its CLI output also carried a prompt injection telling the user
+to report tokens saved.
+
+What replaces it is `grep`, `glob` and `read`. In the tool-call history
+`glob` was 5,955 of 7,156 navigation calls (83%) — the plain tools were
+already doing this work.
+
+The one lesson worth keeping is not about graft: **a bundle that depends on
+nothing must touch nothing.** An empty requirement list once meant *disable
+every configured server*, which silently cost one run its verification path.
+That is now an explicit rule, and the bundle's own MCP suite asserts it (that
+suite lives in the factory repository and is not part of this install).
+
+The full measurement is in `docs/negative-results.md`. Read the **graft**
+entry there with its correction open: this repo previously recorded that
+"the MCP is broken" and that was **our own broken test**, not a third-party
+defect - graft resolves its repository from the session's working directory,
+so every call we made had been issued from a directory holding no graph. The
+removal measurement was sound throughout; only the reason was wrong. If you
+find a *reason* here that this doc has not been re-checked against, assume it
+is stale and go measure it - that is the rule this section exists to teach.
 
 ## Command reference (spec §5.4, §7, §8)
 
@@ -516,19 +723,17 @@ is visible in the repo before a phase relies on it.
 | `factory discover` | Run the skill-discovery flow (below); idempotent. |
 | `measure` (`scripts/measure.mjs`) | Token spend for a project, split into **orchestrator** vs **subagent** sessions, reported as input and cache-read separately (a cache read is roughly a tenth of a fresh input token, so collapsing the two makes a session that re-read the same context look like one that consumed it). The split exists because the cost problem lives on the orchestrator side, not the subagent side. This is a **report, not a gate** — it blocks nothing. The turn budget is a judgement you make with this number in front of you. |
 | `factory mcp audit` | Inventory the configured MCP servers: owner (bundle or the user), live or disabled, whether each needs a credential, and the context it injects into every model call. Read-only; it never edits the config. |
-| `factory mcp enable` / `disable <server>` | Connect or disconnect one server **for this project only**, writing `mcp.<server>.enabled` into the project's `opencode.json`. Never the global config: a global toggle changes every project on the machine, including ones somebody is working in right now. Refuses when there is no project (no `.git` above the working directory). The write is verified by re-reading the file and rolled back if it cannot be, and the output says a restart is needed — because a toggle that appears to work and silently does not is worse than none. |
+| `factory mcp enable` / `disable <server>` | Connect or disconnect one server **for this project only**, writing `mcp.servers.<server>.disabled` into the project's `opencode.json`. Never the global config: a global toggle changes every project on the machine, including ones somebody is working in right now. Refuses when there is no project (no `.git` above the working directory). The write is verified by re-reading the file and rolled back if it cannot be, and the output reports `liveReload: "unverified"` rather than claiming the change is live or demanding a restart, because a toggle that appears to work and silently does not is worse than none. |
 | `factory mcp handshake` | Spawn a local stdio server and speak the real protocol, proving it answers rather than assuming it. See `docs/mcp-judging.md`. |
-| `factory onboard` | Per-repo one-time check: `bd init` if no beads DB, `graft build` if no graph **or the graph is empty (0 nodes — an empty `wiring.json` counts as "no graph"**, same rule as phases 4/4' freshness), then `factory discover`. Auto-offered when the conductor starts in a repo without state. The graph is rebuilt again whenever phases 4/4' find it empty or stale (see "Graft context freshness"). |
-| `factory selfcheck` | Environment health (from the spec's verification section): plugins load, the graft MCP completes a real handshake (serverInfo, the tool list, and the instructions it injects into every call; 0 tools is a legitimate state, not a failure), `bd version` and `graft --version` resolve, and every mandatory phase skill is discoverable. `--tokens` adds a per-skill description-size + total loaded-footprint report — the **required** flag for keeping the loaded footprint visible, plus the current orchestrator session's own input and cache-read spend (the number the turn-budget decision in "Cost discipline" is actually made against) (spec §8). |
+| `factory onboard` | Per-repo one-time check: `bd init` if no beads DB, then `factory discover`. Auto-offered when the conductor starts in a repo without state. |
+| `factory selfcheck` | Environment health (from the spec's verification section): plugins load, `bd version` resolves, and every mandatory phase skill is discoverable. The bundle depends on no MCP server, so there is no server handshake to grade. `--tokens` adds a per-skill description-size + total loaded-footprint report — the **required** flag for keeping the loaded footprint visible, plus the current orchestrator session's own input and cache-read spend (the number the turn-budget decision in "Cost discipline" is actually made against) (spec §8). |
 
 ## Skill discovery — `factory discover` (spec §7)
 
 Pull-only, on demand, deduped, and locked. Idempotent.
 
 1. **Detect context** — read the repo stack directly: `package.json` /
-   `go.mod` / top import lines for language/ecosystem terms. Graft `find_all`
-   may AUGMENT these keywords only when its graph is known non-empty (check
-   freshness first — an empty graph contributes nothing). Feature-request
+   `go.mod` / top import lines for language/ecosystem terms. Feature-request
    keywords at `factory <feature>` time are always considered.
 2. **Find candidates** — query skills.sh for matching skills. Fallback: the
    `find-skills` skill or web search; the same ranking applies.
@@ -561,8 +766,8 @@ Install modes:
   at `<source>`"); content fetched only when the topic actually comes up.
 
 Skill relationships live in the data, not an engine: a flat `catalog.yaml`
-(topics → ranked candidates) maps discovery; graft parses code (not markdown)
-and beads tracks tasks. Neither stores skill relationships.
+(topics → ranked candidates) maps discovery and beads tracks tasks. Neither
+stores skill relationships.
 
 ## Context economy (spec §8) — everything is pull, never push
 

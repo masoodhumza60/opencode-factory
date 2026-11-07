@@ -1,0 +1,10 @@
+:root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+body { margin: 0; padding: 2rem; }
+h1 { font-size: 1.25rem; margin: 0 0 1rem; }
+.card { display: flex; gap: .5rem; align-items: center; margin-bottom: 1.5rem; }
+table { border-collapse: collapse; width: 100%; max-width: 60rem; }
+th, td { text-align: left; padding: .4rem .6rem; border-bottom: 1px solid rgba(128,128,128,.35); }
+td:last-child, th:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+.muted { color: #777; }
+.error { color: #b00; }
+button, select { font: inherit; padding: .3rem .6rem; }

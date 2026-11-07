@@ -1,0 +1,12 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "metadata": {
+    "component": { "type": "application", "name": "testapp", "version": "1.0.0" }
+  },
+  "components": [
+    { "type": "library", "name": "playwright", "version": "1.64.1" },
+    { "type": "library", "name": "@axe-core/playwright", "version": "4.14.0" }
+  ]
+}

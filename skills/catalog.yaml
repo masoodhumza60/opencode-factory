@@ -14,6 +14,16 @@
 # optimistically is a config file that silently does the wrong thing.
 version: 2
 
+# profiles: the vocabulary of project profiles that skill resolution knows.
+#            `factory-skills.mjs resolve` refuses an unknown profile with this
+#            list, and a skill entry may declare `profiles:` (which profiles may
+#            pull it), `stacks:` (which stack tokens may pull it) and
+#            `version:` (the pin). An entry that declares none of those applies
+#            to every stack and profile. An api profile project therefore never
+#            resolves a skill tagged `profiles: web` - including the framework
+#            skill itself.
+profiles: web, mobile, desktop, api, cli, library, infra, embedded, game, data-ml
+
 mandatory:
   - name: commit-work
     source: softaworks/agent-toolkit
@@ -51,3 +61,10 @@ topics:
       rank: 1
       official: true
       why: 'also a topic candidate - grading third-party skill quality on evidence'
+  design-judgment:
+    - name: design-judgment
+      source: factory/human-surfaces
+      rank: 1
+      official: false
+      profiles: web, mobile, desktop, game
+      why: 'a human surface is for a person - name the user, the journey and two or three real directions with critiques before the spec. Reject at G1: adjectives with no mechanism, a direction with no same-material critique, and a chosen direction with no rejection.'

@@ -51,6 +51,40 @@ Answer from the codebase. Ask the user only what cannot be observed.
    Only after both passes, a generic recipe — browser/CDP for web and Electron,
    tmux/PTY for CLI-TUI, plain HTTP for services.
 
+   **If nothing above supplied a harness, do not improvise silently.** Reaching
+   for a generic recipe is the expected outcome, not a fallback of last resort,
+   and an agent that hand-writes a browser driver without saying so has produced
+   an unreviewed harness that a later reader will assume was designed. Write the
+   recipe into the generated skill and record in the Drive section which pass
+   supplied it.
+
+   For a **web surface with no browser tooling at all**, the zero-dependency
+   route below is enough for most UI checks. It needs a Chrome or Edge already
+   installed and Node 22+ (for the global `WebSocket`) — nothing else, and
+   crucially **no `npm install`**, which a verify run should never require.
+
+   1. Launch the browser yourself with a debugging port and a throwaway profile:
+      `<chrome> --remote-debugging-port=9222 --user-data-dir=<temp> --headless=new`
+      Never attach to a browser the human is using.
+   2. Prove it before trusting anything: `GET http://127.0.0.1:9222/json/version`
+      returns a `Browser` and a `webSocketDebuggerUrl`.
+   3. Open the page with `PUT /json/new?<url>` (or navigate over the websocket),
+      then drive `Input.dispatchMouseEvent` for real clicks and
+      `Input.dispatchKeyEvent` for typing. Coordinates are a last resort; query
+      the DOM and click the element you actually found.
+   4. **React and friends only see changes they are told about.** Setting
+      `input.value` directly fires nothing. Use the prototype value setter and
+      dispatch `input` and `change`, which is the path a real keystroke takes.
+   5. Capture downloads with `Browser.setDownloadBehavior` and then read the
+      file's **bytes**. Asserting on a screenshot proves a button was clicked;
+      asserting on the downloaded bytes proves the feature works. When the
+      feature produces a file, that assertion is the one worth writing.
+   6. Tear the browser down by the process that owns the debug port, not by
+      process name — the name will match the human's other windows.
+
+   Record the recipe in the generated skill's Drive section, including the port
+   and the `User-Agent` you saw. The next run should not have to rediscover it.
+
    Record which pass supplied the harness in the Drive section, so a later reader
    knows whether the choice was made or just inherited.
 4. **Observe** — what evidence can be captured? Screenshots, terminal

@@ -52,9 +52,12 @@ for.
   `pyproject.toml` / `Cargo.toml` / `*.csproj`, plus the real import lines
   (top 200 lines is plenty). Apply the usage-evidence table above to each
   candidate ecosystem term.
-- Graft may **augment** these terms — `graft find_all "<keywords>"` — but only
-  when its graph is known non-empty. Check freshness first: an empty graph
-  contributes nothing and is treated as no graph, not as "no context needed".
+- A code-graph index may **augment** these terms, but only when it is known
+  non-empty — an empty index contributes nothing and is treated as no index, not as
+  "no context needed". The factory ships no such index (see
+  `docs/negative-results.md`), so this step is normally skipped; `grep -l`
+  over the manifest files above answers the same question with nothing to
+  build first.
 - Add keywords from the feature request itself. Those are the thing being
   searched for, not the thing being detected.
 
@@ -228,7 +231,7 @@ so they get audited in the same sub-step, and the asymmetry is the point:
 
 ```bash
 node scripts/factory-mcp.mjs audit                    # what is configured, and what it costs
-node scripts/factory-mcp.mjs handshake --name graft   # does it actually answer?
+node scripts/factory-mcp.mjs handshake --name <server> # does it actually answer?
 ```
 
 A skill costs context when it is triggered. An **enabled MCP server costs
@@ -239,8 +242,9 @@ misconfigured one a failure that is invisible until a feature needs it. So:
 - Report every configured server: owner (bundle or the user), live or disabled,
   whether it needs a credential, and the instructions it injects per call.
 - A server the feature depends on must have **completed a handshake**, not
-  merely appear in the config. The selfcheck does this for graft; a
-  feature-specific server is handshaked on demand.
+  merely appear in the config. With an empty `required` list the selfcheck
+  has no server to shake hands with; a feature-specific server is
+  handshaked on demand, by name, as above.
 - If a *new* server looks like the answer, judge it against
   `docs/mcp-judging.md` and record the verdict, rejections included.
 - **Never install one automatically.** It edits the user's global

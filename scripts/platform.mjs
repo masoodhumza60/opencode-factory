@@ -17,6 +17,25 @@ import { homedir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { existsSync } from "node:fs";
 
+// ONE home for the whole bundle, resolved once.
+//
+// os.homedir() reads USERPROFILE on Windows and HOME elsewhere. Every
+// accessor below used to call it for itself, which meant a caller could
+// point one lookup somewhere else and leave the rest behind - and then a
+// check reported on an installation it had never read. Five call sites
+// were five chances to disagree with the installer.
+//
+// --home names the home to use. Without it this is homedir() exactly as
+// before, deliberately unchanged, so nothing that worked yesterday moves.
+// What made the installer agree with its own selfcheck was export
+// USERPROFILE="$HOME" in install.sh, which makes homedir() itself answer
+// for the redirected home; --home is for a caller that cannot set env.
+export function resolveHome(argv = process.argv) {
+  const i = argv.indexOf("--home");
+  return (i !== -1 && argv[i + 1]) || homedir();
+}
+const HOME = resolveHome();
+
 // Each profile answers four questions and nothing else:
 //   config      - where this harness keeps its user-level config file
 //   configDir   - the directory that config lives in (for tools that write siblings)
@@ -31,23 +50,37 @@ export const PROFILES = {
     // a different vocabulary from the config layout, which is exactly why it
     // belongs in the profile rather than beside the install call site.
     skillAgent: "opencode",
-    config: () => join(homedir(), ".config", "opencode", "opencode.json"),
-    configDir: () => join(homedir(), ".config", "opencode"),
+    config: () => join(HOME, ".config", "opencode", "opencode.json"),
+    configDir: () => join(HOME, ".config", "opencode"),
     // Harness STATE, which is not config: the run log, the session DB, and the
     // plugin's own storage. A second harness stores these somewhere else again,
     // so they get their own accessor rather than being folded into configDir() -
     // guessing one path for both is how a bundle ends up reading a file that was
     // never written.
     state: {
-      log: () => join(homedir(), ".local", "share", "opencode", "log", "opencode.log"),
-      db: () => join(homedir(), ".local", "share", "opencode", "opencode.db"),
-      pluginData: (name) => join(homedir(), ".local", "share", "opencode", "storage", "plugin", name),
+      log: () => join(HOME, ".local", "share", "opencode", "log", "opencode.log"),
+      db: () => join(HOME, ".local", "share", "opencode", "opencode.db"),
+      pluginData: (name) => join(HOME, ".local", "share", "opencode", "storage", "plugin", name),
     },
-    // OpenCode reads config once at startup; a config edit cannot reach the
-    // running process. Every script that writes config says this out loud,
-    // because a toggle that appears to work and silently does not is the worst
-    // outcome available.
-    reloadHint: (p) => `restart OpenCode for this to take effect (it reads ${p} at startup)`,
+    // What we know, and what we do not.
+    //
+    // KNOWN: this file is the config, so a write is persistent and survives a
+    // restart.
+    // NOT KNOWN: whether the running process picks the write up without one.
+    // The V2 docs document that `/mcps` connects and disconnects
+    // a server live with no restart, and they never say a config edit reloads
+    // live - but they never say it does not either. This bundle asserted a
+    // restart was required, and never tested it. The assertion sat in three
+    // payloads and one shared hint, seven test assertions enforced it, and a
+    // doc section was written on top of it as if it were a finding. A guess
+    // printed in a payload becomes a premise nobody re-checks.
+    //
+    // So the hint states the known half and gives the unknown half as advice
+    // rather than as fact: a toggle that appears to work and silently does not
+    // is the worst outcome available, and "restart if nothing changes" is true
+    // advice whether or not the restart was ever necessary.
+    reloadHint: (p) =>
+      `wrote ${p} - persistent, so it survives a restart. Whether this session picks it up without one is unverified: if nothing changes, restart`,
   },
 };
 

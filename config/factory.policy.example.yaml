@@ -1,0 +1,246 @@
+# factory.policy.example.yaml - an EXAMPLE policy, not an active one.
+#
+# This file does nothing where it sits. To make the factory enforce it, copy it
+# to config/factory.policy.yaml. THIS REPOSITORY SHIPS NO ACTIVE POLICY ON
+# PURPOSE: with no config/factory.policy.yaml, `complete` falls back to the M0
+# evidence predicate and an unconfigured repo behaves exactly as it did before
+# attestation existed. Copy this file only when the operator has decided which
+# tier the project itself runs at.
+#
+# The parser is a strict YAML subset: two-space indentation, inline [a, b]
+# lists, plain scalars, nested blocks for mappings. No tabs, no {}, no quotes,
+# no |, >, & or *. Anything outside the subset is refused with a file:line.
+
+version: 1
+
+# The default tier and profile for every bead. A bead may override either in
+# its own metadata (`tier`, `profile`); the bead wins over this file.
+tier: prototype
+profile: web
+
+# Four tiers, cheapest first. A prototype proves three things; a regulated
+# payment path proves twenty. Both lists come from this one file.
+tiers:
+  prototype:
+    checks: [tests, run, review]
+  internal:
+    checks: [tests, run, review, lint, types, contract]
+  public:
+    checks: [tests, run, review, lint, types, contract, a11y, axe, perf, security, migration, rollback, observability, privacy, sbom, runbook, slo]
+  regulated:
+    checks: [tests, run, review, lint, types, contract, a11y, perf, security, migration, rollback, observability, privacy, audit, retention, incident, dr, segregation, training, attestation]
+
+# A profile adds the checks its surface needs on top of its tier; the union of
+# the two lists is the effective set the bead must produce, and every id a
+# profile names must also be declared under checks below.
+profiles:
+  web:
+    checks: [a11y, perf, visual, directions, threat-model, traceability]
+  api:
+    checks: [contract, authz, load]
+  cli:
+    checks: [golden, tty]
+  library:
+    checks: [api-diff, consumer-build]
+  infra:
+    checks: [plan-diff, policy-check, rollback]
+  mobile:
+    checks: [a11y, device, perf]
+  desktop:
+    checks: [a11y, signing, update]
+  embedded:
+    checks: [watchdog, recovery]
+  game:
+    checks: [frame, input]
+  data-ml:
+    checks: [eval, data-quality]
+
+# Every check id above is declared here with the phase it gates, the artifact
+# kind the manifest must record, and the command that produces it. `command`
+# is optional: null means no single command produced the artifact.
+checks:
+  tests:
+    phase: 2
+    kind: check-output
+    command: npm test
+  run:
+    phase: 5
+    kind: transcript
+    command: npm run dev
+  review:
+    phase: 6
+    kind: prr
+    command: null
+  lint:
+    phase: 2
+    kind: check-output
+    command: npm run lint
+  types:
+    phase: 2
+    kind: check-output
+    command: npm run typecheck
+  contract:
+    phase: 6
+    kind: api-diff
+    command: npm run contract
+  a11y:
+    phase: 7
+    kind: check-output
+    command: npm run a11y
+  axe:
+    phase: 7
+    kind: axe
+    command: node scripts/factory-capture.mjs --fixture fixtures/testapp
+  perf:
+    phase: 7
+    kind: check-output
+    command: npm run perf
+  security:
+    phase: 7
+    kind: check-output
+    command: npm run security
+  migration:
+    phase: 7
+    kind: plan
+    command: null
+  rollback:
+    phase: 7
+    kind: plan
+    command: null
+  observability:
+    phase: 7
+    kind: plan
+    command: null
+  privacy:
+    phase: 7
+    kind: plan
+    command: null
+  audit:
+    phase: 7
+    kind: plan
+    command: null
+  retention:
+    phase: 7
+    kind: plan
+    command: null
+  incident:
+    phase: 7
+    kind: plan
+    command: null
+  dr:
+    phase: 7
+    kind: plan
+    command: null
+  segregation:
+    phase: 7
+    kind: plan
+    command: null
+  training:
+    phase: 7
+    kind: plan
+    command: null
+  attestation:
+    phase: 7
+    kind: plan
+    command: null
+  directions:
+    phase: 1
+    kind: directions
+    command: node scripts/factory-design.mjs check $bead .factory/$bead/design/directions.md
+  visual:
+    phase: 5
+    kind: screenshot
+    command: npm run visual
+  authz:
+    phase: 5
+    kind: authz
+    command: npm run authz
+  load:
+    phase: 5
+    kind: load
+    command: npm run load
+  golden:
+    phase: 5
+    kind: golden
+    command: npm run golden
+  tty:
+    phase: 5
+    kind: tty
+    command: npm run tty
+  api-diff:
+    phase: 5
+    kind: api-diff
+    command: npm run api-diff
+  consumer-build:
+    phase: 5
+    kind: consumer-build
+    command: npm run consumer-build
+  plan-diff:
+    phase: 5
+    kind: plan-diff
+    command: null
+  policy-check:
+    phase: 5
+    kind: policy-check
+    command: npm run policy-check
+  device:
+    phase: 5
+    kind: device
+    command: npm run device
+  # signing and update gate 7 (ship), not 5 (verify): they are
+  # release-integrity evidence - the operator's signed tag, the update channel
+  # actually upgraded - not per-run evidence the verify phase proves.
+  signing:
+    phase: 7
+    kind: signing
+    command: null
+  update:
+    phase: 7
+    kind: update
+    command: null
+  watchdog:
+    phase: 5
+    kind: watchdog
+    command: npm run watchdog
+  recovery:
+    phase: 5
+    kind: recovery
+    command: npm run recovery
+  frame:
+    phase: 5
+    kind: frame
+    command: npm run frame
+  input:
+    phase: 5
+    kind: input
+    command: npm run input
+  eval:
+    phase: 5
+    kind: eval
+    command: npm run eval
+  data-quality:
+    phase: 5
+    kind: data-quality
+    command: npm run data-quality
+  # M2c: security, QA and SRE are shaped evidence. These commands check the
+  # artifact's structure; they do not run a scanner or judge adequacy.
+  threat-model:
+    phase: 1
+    kind: threat-model
+    command: node scripts/factory-compliance.mjs check threat-model $bead .factory/$bead/security/threat-model.md
+  traceability:
+    phase: 6
+    kind: traceability
+    command: node scripts/factory-compliance.mjs check traceability $bead .factory/$bead/qa/traceability.json
+  sbom:
+    phase: 7
+    kind: sbom
+    command: node scripts/factory-compliance.mjs check sbom $bead out/sbom.json
+  runbook:
+    phase: 7
+    kind: runbook
+    command: node scripts/factory-compliance.mjs check runbook $bead .factory/$bead/ops/runbook.md
+  slo:
+    phase: 7
+    kind: slo
+    command: node scripts/factory-compliance.mjs check slo $bead .factory/$bead/ops/slo.json

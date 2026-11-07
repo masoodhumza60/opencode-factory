@@ -1,0 +1,16 @@
+{
+  "name": "orderboard-api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Orders dashboard: an HTTP API over SQLite with a thin admin page on top.",
+  "engines": {
+    "node": ">=22.5"
+  },
+  "scripts": {
+    "start": "node scripts/start.js",
+    "migrate": "node scripts/start.js --migrate-only",
+    "seed": "node scripts/seed.js",
+    "test": "node --test test/api.test.js test/db.test.js"
+  }
+}

@@ -1,14 +1,12 @@
 #Requires -Version 5.1
 # opencode-factory machine install (Windows).
-# Usage: powershell -ExecutionPolicy Bypass -File install.ps1 [-SkipBd] [-SkipGraft] [-DryRun]
+# Usage: powershell -ExecutionPolicy Bypass -File install.ps1 [-SkipBd] [-DryRun]
 # -SkipBd   : do not install/verify the beads CLI
-# -SkipGraft: do not install/patch the graft CLI (plugins+config may still be merged)
 # -DryRun   : print every step without changing anything (exits 0)
 [CmdletBinding()]
 param(
     [switch]$SkipBd,
-    [switch]$SkipGraft,
-    [switch]$DryRun
+        [switch]$DryRun
 )
 
 $ErrorActionPreference = 'Stop'
@@ -24,11 +22,15 @@ if ((& node -p "process.versions.node.split('.')[0]*1 >= 20") -ne 'true') {
 }
 
 $bundle       = $PSScriptRoot
+# One home, not two. install.sh pins USERPROFILE to HOME; this is its mirror. It
+# has to happen BEFORE anything below is derived from USERPROFILE, or the paths
+# we write to and the home node reports would still be two different folders -
+# which is the exact defect this line exists to remove.
+$env:USERPROFILE = $HOME
 $ocConfig     = Join-Path $env:USERPROFILE ".config\opencode"
 $agentsSkills = Join-Path $env:USERPROFILE ".agents\skills"
 $projectSkills = Join-Path $bundle ".agents\skills"
 $script:NodePath = ((node --print process.execPath | Out-String).Trim()).Replace('\','/')
-$script:GraftPkg  = $null
 
 function Say([string]$msg)                { Write-Host $msg }
 function SayErr([string]$msg)             { Write-Host $msg -ForegroundColor Yellow }
@@ -48,56 +50,6 @@ function Ensure-Dirs {
     }
 }
 
-function Find-GraftRoot {
-    # Manager global-root probe order pnpm -> bun -> npm. Returns the first root
-    # that actually contains a live graft package ('' when none do); a pure npm
-    # machine resolves here too because node >= 20 always ships npm.
-    foreach ($m in 'pnpm','bun','npm') {
-        if (-not (Get-Command $m -ErrorAction SilentlyContinue)) { continue }
-        $root = switch ($m) {
-            'pnpm' { & pnpm root -g 2>$null }
-            'bun'  { & bun pm root -g 2>$null }
-            'npm'  { & npm root -g 2>$null }
-        }
-        $root = ($root | Out-String).Trim()
-        if ($root -and (Test-Path (Join-Path $root '@nanonets\graft\dist\cli.js'))) {
-            return $root
-        }
-    }
-    # pnpm store fallback — virtual stores / junctions keep the real pkg deeper.
-    $candidates = Get-ChildItem "$env:LOCALAPPDATA\pnpm\global" -Directory -ErrorAction SilentlyContinue |
-        ForEach-Object { Get-ChildItem $_.FullName -Directory -ErrorAction SilentlyContinue } |
-        ForEach-Object { Get-ChildItem $_.FullName -Directory -ErrorAction SilentlyContinue } |
-        Where-Object { Test-Path (Join-Path $_.FullName '@nanonets\graft\dist\cli.js') }
-    if ($candidates) { return $candidates[0].FullName }
-    return ''
-}
-
-function Find-GraftDir {
-    # true -> a live graft cli.js exists; outputs its package dir (or '' when absent).
-    $root = Find-GraftRoot
-    if ($root) { return Join-Path $root '@nanonets\graft' }
-    return ''
-}
-
-function Select-GraftManager {
-    # Order pnpm -> bun -> npm (npm ships with node >= 20, so the last is a given).
-    foreach ($m in 'pnpm','bun','npm') {
-        if (Get-Command $m -ErrorAction SilentlyContinue) { return $m }
-    }
-    return ''
-}
-
-function Resolve-GraftDir {
-    # Mirrors scripts/graft-patch-store.ps1: pnpm/bun/npm global root, else the
-    # pnpm store scan. Returns the graft package dir (junctions ok).
-    $found = Find-GraftDir
-    if (-not $found) {
-        throw 'graft CLI not found. Run install (without -SkipGraft) or install @nanonets/graft@0.18.0 (npm i -g / pnpm add -g / bun add -g) first.'
-    }
-    return $found
-}
-
 function Install-Bd {
     $bdScript = Join-Path $bundle 'executables\install-bd.ps1'
     if ($DryRun) {
@@ -113,54 +65,6 @@ function Install-Bd {
     Say "bd ready ($bdExe)."
 }
 
-function Install-Graft {
-    $found = Find-GraftDir
-    if ($DryRun) {
-        if ($found) { Say '[dry-run] graft already installed locally; skipping install' }
-        else {
-            $m = Select-GraftManager
-            if (-not $m) { $m = 'npm' }
-            $cmd = if ($m -eq 'npm') { 'npm install -g @nanonets/graft@0.18.0' } else { "$m add -g @nanonets/graft@0.18.0" }
-            Say "[dry-run] $cmd  (auto-select pnpm/bun/npm; npm default)"
-        }
-        $patchDir = if ($found) { $found } else { '<resolved-graft-dir>' }
-        Say "[dry-run] & node '$script:NodePath' '$bundle\scripts\graft-patch-extract.mjs' --dir '$patchDir'"
-        Say "[dry-run] powershell -NoProfile -ExecutionPolicy Bypass -File '$bundle\scripts\graft-patch-store.ps1' -PackageDir '$patchDir'"
-        Say '[dry-run] verify: graft --version'
-        $script:GraftPkg = $found   # may be '' when absent; Merge-Config handles it
-        return
-    }
-    if (-not $found) {
-        $m = Select-GraftManager
-        if (-not $m) {
-            throw 'No package manager found to install graft. Install node >= 20 from nodejs.org (it ships npm) and re-run.'
-        }
-        if ($m -eq 'npm') {
-            & npm install -g @nanonets/graft@0.18.0
-            if ($LASTEXITCODE -ne 0) { throw 'npm install -g @nanonets/graft@0.18.0 failed' }
-        }
-        else {
-            & $m add -g @nanonets/graft@0.18.0
-            if ($LASTEXITCODE -ne 0) { throw "$m add -g @nanonets/graft@0.18.0 failed" }
-            # Safety net: the chosen manager ran clean but the pkg dir still
-            # doesn't resolve -> redo through npm (always present via node).
-            if (-not (Find-GraftDir)) {
-                Say "graft not resolvable after $m install; retrying with npm..."
-                & npm install -g @nanonets/graft@0.18.0
-                if ($LASTEXITCODE -ne 0) { throw 'npm install -g @nanonets/graft@0.18.0 failed (fallback after non-npm manager)' }
-            }
-        }
-    }
-    $script:GraftPkg = Resolve-GraftDir   # re-resolve (after install, when it was absent)
-    & $script:NodePath "$bundle\scripts\graft-patch-extract.mjs" --dir $script:GraftPkg
-    if ($LASTEXITCODE -ne 0) { throw 'graft-patch-extract.mjs failed' }
-    & powershell -NoProfile -ExecutionPolicy Bypass -File "$bundle\scripts\graft-patch-store.ps1" -PackageDir $script:GraftPkg
-    if ($LASTEXITCODE -ne 0) { throw 'graft-patch-store.ps1 failed' }
-    & graft --version
-    if ($LASTEXITCODE -ne 0) { throw 'graft --version check failed' }
-    Say "graft ready ($(Join-Path $script:GraftPkg 'dist\cli.js'))."
-}
-
 function Install-Plugins {
     $beadsSrc = Join-Path $bundle 'plugins\opencode-beads.ts'
     $beadsDst = Join-Path $ocConfig 'plugins\opencode-beads.ts'
@@ -173,21 +77,47 @@ function Install-Plugins {
         Copy-Item $beadsSrc $beadsDst -Force
     }
 
+    # opencode-pty is a third-party optional plugin. Every way it can go wrong
+    # on someone else's machine - never installed, installed but unloadable - is a
+    # reason to skip its shim, not a reason to fail the install. What we must never
+    # do is leave a shim behind that claims to be a plugin and then fails every
+    # single session start.
     $ptyIndex = Get-ChildItem "$env:USERPROFILE\.cache\opencode\npm\opencode-pty@*\*\node_modules\opencode-pty\dist\src\v2\index.js" -ErrorAction SilentlyContinue |
         Sort-Object LastWriteTime -Descending | Select-Object -First 1
     if (-not $ptyIndex) {
-        if ($DryRun) { SayErr '[dry-run] warning: opencode-pty v2 index not found in cache; render would fail here' }
-        else { throw 'opencode-pty v2 index not found. Run `opencode` once so it installs opencode-pty, then re-run install.' }
+        SayErr 'warning: opencode-pty v2 index not found in cache; skipping its plugin shim.'
+        if (-not $DryRun) { Remove-Item $ptyDst -Force -ErrorAction SilentlyContinue }
+        return
     }
-    if ($ptyIndex) {
-        $barePath = $ptyIndex.FullName.Replace('\','/')
-        if ($DryRun) {
-            Say "[dry-run] render '$ptyTmpl' (substitute __OPENCODE_PTY_V2_INDEX__ = $barePath) -> '$ptyDst'"
-            Say "[dry-run]   export { default } from `"file:///$barePath`";"
-        } else {
-            $content = (Get-Content $ptyTmpl -Raw) -replace '__OPENCODE_PTY_V2_INDEX__', $barePath
-            [System.IO.File]::WriteAllText($ptyDst, $content, (New-Object System.Text.UTF8Encoding $false))
+
+    $barePath = $ptyIndex.FullName.Replace('\','/')
+
+    # Presence is not loadability. opencode-pty@0.4.0 ships TypeScript under
+    # node_modules (bun-pty/src/index.ts), which neither Node nor Bun will strip,
+    # so the import throws before the module can export anything. opencode then
+    # reports that as a schema error about a missing 'default' key - a shape error
+    # that is really an import error, which is why rewriting the shim's export
+    # shape could never have fixed it. Only a real import proves loadability, so
+    # ask Node the same question opencode will ask.
+    if ($DryRun) {
+        Say "[dry-run] node import probe of file:///$barePath (skipped in dry-run)"
+    } else {
+        $probe = & node --input-type=module -e "import('file:///$barePath').then(()=>process.exit(0),(e)=>{console.error((e&&e.message)||e);process.exit(1)})" 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            SayErr 'warning: opencode-pty is installed but will not load here; skipping its plugin shim.'
+            SayErr "         reason: $(($probe | Select-Object -First 1))"
+            SayErr '         a shim pointing at it would fail every session start.'
+            Remove-Item $ptyDst -Force -ErrorAction SilentlyContinue
+            return
         }
+    }
+
+    if ($DryRun) {
+        Say "[dry-run] render '$ptyTmpl' (substitute __OPENCODE_PTY_V2_INDEX__ = $barePath) -> '$ptyDst'"
+        Say "[dry-run]   import Plugin from `"file:///$barePath`";"
+    } else {
+        $content = (Get-Content $ptyTmpl -Raw) -replace '__OPENCODE_PTY_V2_INDEX__', $barePath
+        [System.IO.File]::WriteAllText($ptyDst, $content, (New-Object System.Text.UTF8Encoding $false))
     }
 }
 
@@ -214,19 +144,9 @@ function Install-Commands {
 function Merge-Config {
     $userCfg = Join-Path $ocConfig 'opencode.json'
     $pin = (Get-Content (Join-Path $bundle 'plugins\dcp.pin') -Raw).Trim()
-    # graft command needs the graft cli.js; resolve here unless Install-Graft already did.
-    if (-not $script:GraftPkg) {
-        try { $script:GraftPkg = Resolve-GraftDir }
-        catch {
-            if ($DryRun) { SayErr ('[dry-run] warning: ' + $_.Exception.Message) }
-            else { throw }
-        }
-    }
-    $graftCliJs = if ($script:GraftPkg) { (Join-Path $script:GraftPkg 'dist\cli.js').Replace('\','/') } else { '<resolved-graft-cli.js>' }
-
-    if ($DryRun) {
+      if ($DryRun) {
         Say "[dry-run] node --print process.execPath => $script:NodePath"
-        Say "[dry-run] write temp snippet: bundle snippet + mcp.servers.graft = {type:local, command:[$script:NodePath, $graftCliJs, mcp], disabled:false} + plugins += [$pin]"
+        Say "[dry-run] write temp snippet: bundle snippet + plugins += [$pin]"
         if (Test-Path $userCfg) { Say "[dry-run] user config: $userCfg (read-only; purely additive merge)" }
         else                    { Say "[dry-run] echo '{}' > '$userCfg'   (no existing config)" }
         Say "[dry-run] & node '$script:NodePath' '$bundle\scripts\merge-config.mjs' --snippet <resolved-snippet> --user '$userCfg' --out '$userCfg'"
@@ -240,11 +160,6 @@ function Merge-Config {
     try {
         $snip = Get-Content (Join-Path $bundle 'config\opencode.snippet.json') -Raw | ConvertFrom-Json
         $snip | Add-Member -NotePropertyName plugins -NotePropertyValue @($pin) -Force
-        $snip.mcp.servers | Add-Member -NotePropertyName graft -NotePropertyValue @{
-            type     = 'local'
-            command  = @($script:NodePath, $graftCliJs, 'mcp')
-            disabled = $false
-        } -Force
         $json = $snip | ConvertTo-Json -Depth 10
         [System.IO.File]::WriteAllText($snippetResolved, $json, (New-Object System.Text.UTF8Encoding $false))
         & $script:NodePath "$bundle\scripts\merge-config.mjs" --snippet $snippetResolved --user $userCfg --out $userCfg
@@ -266,6 +181,39 @@ function Install-Skills {
         (Join-Path $bundle 'docs\mcp-judging.md')
     )
     $dstDocs = Join-Path (Split-Path $dstSk) 'docs'
+    # The scripts the docs tell an agent to run must ship WITH the docs that
+    # reference them. An install of SKILL.md + docs alone was measured in a real
+    # run (2026-10-10, orderboard-a2o): phase 5's agent read conductor.md, was
+    # told to run factory-phase.mjs, and found nothing - the docs shipped
+    # without the machinery every one of them points at. selfcheck called that
+    # install healthy, which is the guard-present-effect-absent shape again.
+    #   - factory-mcp.mjs imports ./platform.mjs, so platform.mjs is not optional.
+    #   - factory-mcp.mjs also imports ./mcp-defmatch.mjs. It was added AFTER the
+    #     list above was written and never added to it, so the installer shipped a
+    #     script that threw ERR_MODULE_NOT_FOUND on first run. The list is the
+    #     thing that went stale, which is why the check below now walks imports
+    #     instead of trusting any hand-kept list.
+    #   - factory-selfcheck.mjs finds factory-skills.mjs and factory-mcp.mjs via
+    #     dirname(import.meta.url), so this set only works together.
+    #   - factory-skills.mjs resolves its default catalog to ../skills/catalog.yaml
+    #     relative to itself, so the catalog ships to <skill>/skills/catalog.yaml.
+    $runtimeScripts = @(
+        'factory-phase.mjs', 'factory-mcp.mjs', 'factory-plan.mjs',
+        'factory-skills.mjs', 'factory-selfcheck.mjs', 'platform.mjs',
+        'mcp-defmatch.mjs',
+'measure.mjs'
+    )
+    $srcScripts = $runtimeScripts | ForEach-Object { Join-Path $bundle "scripts\$_" }
+    $dstScripts = Join-Path (Split-Path $dstSk) 'scripts'
+    $srcCatalog = Join-Path $bundle 'skills\catalog.yaml'
+    $dstCatalog = Join-Path (Split-Path $dstSk) 'skills\catalog.yaml'
+    # factory-mcp.mjs reads the list of servers the factory depends on from
+    # ../config/mcp-requirements.json relative to itself. Without this file the
+    # installed script finds no declaration, so `scope` keeps nothing and
+    # `audit` labels every server as the user's - silently, and only on a
+    # machine whose server names differ from the bundle author's.
+    $srcReqs = Join-Path $bundle 'config\mcp-requirements.json'
+    $dstReqs = Join-Path (Split-Path $dstSk) 'config\mcp-requirements.json'
     # The verify-app generator ships beside the factory skill. It is what turns
     # the phase-5 --booted claim into something a later agent can re-check.
     $srcVerify = Join-Path $bundle 'skills\verify-app\SKILL.md'
@@ -274,6 +222,9 @@ function Install-Skills {
         Say "[dry-run] Copy-Item '$srcVerify' -> '$dstVerify'"
         Say "[dry-run] Copy-Item '$srcSk' -> '$dstSk'"
         Say "[dry-run] Copy-Item '$bundle\docs\conductor.md', '$bundle\docs\how-factory-works.md', '$bundle\docs\plan-format.md', '$bundle\docs\discovery.md', '$bundle\docs\mcp-judging.md' -> '$dstDocs'"
+        Say "[dry-run] Copy-Item $($runtimeScripts -join ', ') -> '$dstScripts'"
+        Say "[dry-run] Copy-Item '$srcCatalog' -> '$dstCatalog'"
+        Say "[dry-run] Copy-Item '$srcReqs' -> '$dstReqs'"
     }
     elseif (Test-Path $srcSk) {
         if (Test-Path $srcVerify) {
@@ -284,7 +235,92 @@ function Install-Skills {
         Copy-Item $srcSk $dstSk -Force
         New-Item -ItemType Directory -Force -Path $dstDocs | Out-Null
         Copy-Item $srcDocs $dstDocs -Force
-        Say "factory skill installed -> $dstSk (self-contained: docs/ ships conductor + how-factory-works)"
+        # scripts/ is not optional decoration. A doc that names a command the
+        # install does not contain is a broken install, so ship them or say so.
+        $absent = $srcScripts | Where-Object { -not (Test-Path $_) }
+        if ($absent.Count -gt 0) {
+            SayErr "warning: missing runtime script(s) in bundle: $($absent -join ', ')"
+            SayErr "         the installed docs will reference commands that do not exist there."
+        }
+        else {
+            New-Item -ItemType Directory -Force -Path $dstScripts | Out-Null
+            Copy-Item $srcScripts $dstScripts -Force
+            Say "factory runtime scripts installed -> $dstScripts ($($runtimeScripts.Count) files: phase, mcp, plan, skills, selfcheck, platform, defmatch, measure)"
+        }
+        if (Test-Path $srcCatalog) {
+            New-Item -ItemType Directory -Force -Path (Split-Path $dstCatalog) | Out-Null
+            Copy-Item $srcCatalog $dstCatalog -Force
+            Say "skills catalog installed -> $dstCatalog (factory-skills.mjs resolves ../skills/catalog.yaml)"
+        }
+        else { SayErr "warning: $srcCatalog missing - factory-skills.mjs check will not find its catalog." }
+        if (Test-Path $srcReqs) {
+            New-Item -ItemType Directory -Force -Path (Split-Path $dstReqs) | Out-Null
+            Copy-Item $srcReqs $dstReqs -Force
+            Say "mcp requirements installed -> $dstReqs (factory-mcp.mjs resolves ../config/mcp-requirements.json)"
+        }
+        else { SayErr "warning: $srcReqs missing - factory-mcp.mjs scope will keep no server and audit will label them all as the user's." }
+        Say "factory skill installed -> $dstSk (self-contained: docs/ ships conductor + how-factory-works; scripts/ ships what those docs name)"
+        # A manifest of what was actually installed, with a timestamp. Run 2 of
+        # the factory was run against a STALE install - the scripts on disk were
+        # a version behind the bundle - and every check passed, because every
+        # check asked whether a file existed and none asked whether it was
+        # current. Nothing in the system could tell a run that it was about to
+        # measure the wrong thing. This is the receipt for that: the install
+        # records what it wrote, and the run records when it was written.
+        $manifest = @{
+            installed_at = (Get-Date).ToUniversalTime().ToString('o')
+            bundle_commit = (git -C $bundle rev-parse --short HEAD 2>$null)
+            # Where the bundle was when this ran. Without it the check below can see a
+            # hand-edited install but is blind to the bundle moving ahead, which is the
+            # direction that actually runs the wrong code. Recorded, not derived, because
+            # a derived path is a rule that can be wrong without saying so.
+            bundle_path = $bundle
+            files = @{}
+        }
+        # The shared skills root - ONE level above the factory skill directory.
+        # Split-Path $dstSk is the factory skill dir itself, so keys written against
+        # it were off by a level and the reader resolved every one to a file that
+        # does not exist. Worse, the list below mixes $dstVerify, which lives in a
+        # SIBLING directory: substring-ing that against the factory dir did not
+        # fail, it silently produced the key app/SKILL.md. A manifest that mangles a
+        # key is worse than one that is short, so the guard refuses rather than truncates.
+        $skillsRoot = Split-Path (Split-Path $dstSk)
+        foreach ($f in @($dstSk, $dstVerify) + @(Get-ChildItem $dstDocs -File -ErrorAction SilentlyContinue).FullName + @(Get-ChildItem $dstScripts -File -ErrorAction SilentlyContinue).FullName + $dstCatalog + $dstReqs) {
+            if ($f -and (Test-Path $f)) {
+                # Keyed by path relative to the skills root, NOT by basename:
+                # SKILL.md exists under both factory/ and verify-app/, and a
+                # basename key collides - the second write silently overwrites the
+                # first and a later reader compares the wrong file.
+                if (-not $f.StartsWith($skillsRoot)) {
+                    SayErr "warning: $f is not under $skillsRoot - recorded by full path so the key cannot be silently mangled."
+                    $rel = $f.Replace('\', '/')
+                }
+                else { $rel = $f.Substring($skillsRoot.Length).TrimStart('\', '/').Replace('\', '/') }
+                # The same file inside the bundle, so the check can compare three ways
+                # instead of two: what was written, what is on disk, and what the bundle
+                # holds now. Keys are <skill>/<rest>, and the bundle keeps the same <rest>
+                # under skills/<skill>/ or at the bundle root - except SKILL.md, which the
+                # bundle holds under skills/<skill>/. Resolved here and STORED, so a wrong
+                # mapping is visible: the check reports the file as uncomp rather than
+                # quietly calling it current.
+                $rest = $rel.Substring($rel.IndexOf('/') + 1)
+                $srcRel = if ($rest -eq 'SKILL.md') { 'skills/' + $rel } else { $rest }
+                $srcAbs = Join-Path $bundle $srcRel
+                $manifest.files[$rel] = @{
+                    hash = (Get-FileHash $f -Algorithm SHA256).Hash
+                    src = if (Test-Path $srcAbs) { $srcRel } else { $null }
+                }
+            }
+        }
+        $manifestPath = Join-Path (Split-Path $dstSk) 'install-manifest.json'
+        # No BOM. `Set-Content -Encoding utf8` is PowerShell 5.1 and it emits a UTF-8
+        # BOM, which is not valid JSON - every strict reader fails on it, so a manifest
+        # written this way can only ever be read as unreadable. The same trap has bitten
+        # every other file this shell has written; here it would have silently turned the
+        # staleness check into a permanent false alarm.
+        $manifestJson = $manifest | ConvertTo-Json -Depth 4
+        [System.IO.File]::WriteAllText($manifestPath, $manifestJson, (New-Object System.Text.UTF8Encoding $false))
+        Say "install manifest written -> $manifestPath ($($manifest.files.Count) files, bundle $($manifest.bundle_commit) at $bundle)"
     }
     else { SayErr "warning: $srcSk not in bundle yet (conductor skill lands with the docs/discovery task); skip - re-run install once it is present." }
     # NOTE: .agents/skills/skills.lock.json is created by `factory discover`, not by install.
@@ -295,9 +331,8 @@ function Install-MandatorySkills {
     # This runs BEFORE the selfcheck on purpose - the selfcheck FAILs when a
     # mandatory skill is missing, so installing afterwards would guarantee a red
     # install on a fresh machine. A network failure is not hidden: the script
-    # prints the fix line and this throws, the same way a missing graft does,
-    # because a machine that reaches phase 7 with no commit-work to run has
-    # already failed quietly at install time.
+    # prints the fix line and this throws, because a machine that reaches phase
+    # 7 with no commit-work to run has already failed quietly at install time.
     $skillScript = Join-Path $bundle 'scripts\factory-skills.mjs'
     if ($DryRun) {
         Say "[dry-run] & node '$script:NodePath' '$skillScript' install --dry-run"
@@ -337,9 +372,10 @@ function Run-Tests {
         Say "[dry-run] & node '$script:NodePath' scripts/test-factory-plan.mjs"
         Say "[dry-run] & node '$script:NodePath' scripts/test-factory-skills.mjs"
         Say "[dry-run] & node '$script:NodePath' scripts/test-factory-mcp.mjs"
+        Say "[dry-run] & node '$script:NodePath' scripts/test-factory-app.mjs"
         return
     }
-    foreach ($t in @('test-selfcheck.mjs', 'test-install-idempotency.mjs', 'test-factory-phase.mjs', 'test-factory-plan.mjs', 'test-factory-skills.mjs', 'test-factory-mcp.mjs')) {
+    foreach ($t in @('test-selfcheck.mjs', 'test-install-idempotency.mjs', 'test-factory-phase.mjs', 'test-factory-plan.mjs', 'test-factory-skills.mjs', 'test-factory-mcp.mjs', 'test-factory-app.mjs')) {
         $path = Join-Path $bundle "scripts\$t"
         if (-not (Test-Path $path)) { SayErr "warning: $path not in bundle yet; skipping."; continue }
         # Capture rather than discard: a suite that fails without showing why is
@@ -350,8 +386,34 @@ function Run-Tests {
         # installer's error preferences, and the install dies on a passing suite.
         $log = Join-Path ([IO.Path]::GetTempPath()) "factory-test-$t.log"
         $errLog = "$log.err"
-        $proc = Start-Process -FilePath $script:NodePath -ArgumentList $path -NoNewWindow -Wait -PassThru `
+        # No -Wait, and a bounded wait instead. A suite that blocks forever used to
+        # hang the whole installer: `Start-Process -Wait` has no timeout of its own,
+        # so one stuck child (observed: a suite blocked inside bd behind a 19-day-
+        # stale beads lock, using 1.97s of CPU across 17 minutes) left the installer
+        # silent forever with no way to tell a slow suite from a dead one.
+        # 20 minutes is far longer than any suite legitimately needs (the phase
+        # suite is the slow one, at roughly 15) and still finite.
+        $suiteTimeoutSec = 1200
+        $proc = Start-Process -FilePath $script:NodePath -ArgumentList $path -NoNewWindow -PassThru `
             -RedirectStandardOutput $log -RedirectStandardError $errLog
+        $deadline = (Get-Date).AddSeconds($suiteTimeoutSec)
+        $timedOut = $false
+        while (-not $proc.HasExited) {
+            if ((Get-Date) -gt $deadline) { $timedOut = $true; break }
+            Start-Sleep -Seconds 2
+            $proc.Refresh()
+        }
+        if ($timedOut) {
+            # Kill the tree, not just the parent: these suites spawn children (the
+            # phase suite starts `factory-phase.mjs`, which runs bd). Killing only
+            # the parent orphans them and leaves the very lock files that caused the
+            # hang behind for the next run.
+            & taskkill /PID $proc.Id /T /F 2>&1 | Out-Null
+            Write-Host "--- $t exceeded ${suiteTimeoutSec}s; it was killed. Output so far: ---"
+            Get-Content $log, $errLog -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+            Remove-Item $log, $errLog -Force -ErrorAction SilentlyContinue
+            throw "$t did not finish within ${suiteTimeoutSec}s - the selfcheck cannot be trusted. Fix it before installing."
+        }
         if ($proc.ExitCode -ne 0) {
             Get-Content $log, $errLog -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
             Remove-Item $log, $errLog -Force -ErrorAction SilentlyContinue
@@ -381,7 +443,6 @@ function Run-Selfcheck {
 Say "opencode-factory install (bundle: $bundle)"
 Ensure-Dirs
 if (-not $SkipBd)     { Install-Bd }
-if (-not $SkipGraft)  { Install-Graft }
 Install-Plugins
 Install-Commands
 Merge-Config

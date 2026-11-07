@@ -10,6 +10,8 @@
 //
 //   node scripts/factory-skills.mjs check [--json] [--catalog <path>]
 //   node scripts/factory-skills.mjs install [--dry-run] [--catalog <path>]
+//   node scripts/factory-skills.mjs record [--json] [--dry-run] [--from <record.json>] [--out <path>]
+//   node scripts/factory-skills.mjs resolve [--profile <id>] [--stack <a,b>] [--catalog <path>] [--lock <path>] [--json] [--dry-run]
 //
 // Exit codes:
 //   0  every mandatory skill is present (or, for install, everything needed was installed)
@@ -65,7 +67,7 @@ function parseScalar(raw) {
   return unquote(s);
 }
 
-const TOP_LEVEL_KEYS = new Set(["version", "mandatory", "topics"]);
+const TOP_LEVEL_KEYS = new Set(["version", "mandatory", "topics", "profiles"]);
 // Only this schema version is understood. A future catalog that means
 // something different must be refused here, not read under these rules -
 // reading v3 with v2 assumptions is how a catalog silently stops saying what
@@ -336,9 +338,12 @@ function validateRecord(rec) {
 function recordCmd(args, { json, dryRun }) {
   const fi = args.indexOf("--from");
   const oi = args.indexOf("--out");
+  // Not skills.lock.json: that file is `resolve`'s pin, with a different shape.
+  // Two writers on one path means whichever runs second silently replaces the
+  // other's record with a schema the other command cannot read.
   const out = oi !== -1 && args[oi + 1]
     ? resolve(args[oi + 1])
-    : resolve(process.cwd(), ".agents", "skills", "skills.lock.json");
+    : resolve(process.cwd(), ".agents", "skills", "install-record.json");
 
   let raw;
   try {
@@ -391,6 +396,265 @@ function recordCmd(args, { json, dryRun }) {
   return 0;
 }
 
+// ---------------------------------------------------------------- resolve ---
+
+// `resolve` answers "which skills does THIS project need" from two local
+// sources and nothing else: the catalog (what skills exist, which stacks and
+// profiles may pull them, what version is pinned) and the project's own
+// declaration (--stack, --profile, or config/factory.policy.yaml). It never
+// touches the network and never installs; `install` remains the step that
+// copies. A skill the catalog does not list is a refusal, not a download -
+// the same catalog-local rule as `check` - and the resolved set is persisted
+// in .agents/skills/skills.lock.json instead of declared in a chat message,
+// because a set nobody can diff across runs is the same "nobody can read the
+// history" problem the decision record fixed.
+//
+// The two gates, both fail-closed:
+//   stacks    - an entry that tags `stacks:` only resolves when one of the
+//               project's stack tokens is on the tag. An untagged entry is
+//               stack-agnostic (process skills: discovery, commit discipline).
+//   profiles  - an entry that tags `profiles:` only resolves for one of those
+//               profiles. This is what keeps an api-only project from pulling
+//               nuxt, nuxt-ui or any design skill: those entries declare the
+//               profiles whose projects have a human interface, and the api
+//               profile is not one of them - deliberately including the
+//               framework skill itself, because nuxt beats a UI renderer but
+//               an api profile says the project ships none.
+// An entry tagged for neither gate applies everywhere; that is what makes the
+// catalog honest for skills like find-skills without a pile of boilerplate.
+
+// Sorted-key serialization. Deterministic bytes need the normalization in one
+// place: object keys sorted, two-space indent, trailing newline, and nothing
+// between machines in it (no timestamps, no absolute paths, no machine ids).
+function stable(v, indent = 0) {
+  if (Array.isArray(v)) {
+    if (v.length === 0) return "[]";
+    const padIn = "  ".repeat(indent + 1);
+    return `[\n${v.map((x) => `${padIn}${stable(x, indent + 1)}`).join(",\n")}\n${"  ".repeat(indent)}]`;
+  }
+  if (v && typeof v === "object") {
+    const keys = Object.keys(v).sort();
+    if (keys.length === 0) return "{}";
+    const padIn = "  ".repeat(indent + 1);
+    return `{\n${keys.map((k) => `${padIn}${JSON.stringify(k)}: ${stable(v[k], indent + 1)}`).join(",\n")}\n${"  ".repeat(indent)}}`;
+  }
+  return JSON.stringify(v);
+}
+
+// Comma- and bracket-tolerant tag splitting. Catalogs and the policy declare
+// these as plain scalars (`stacks: 'nuxt, vue'`) or inline lists
+// (`stacks: [nuxt, vue]`); both mean the same list.
+function tagsOf(v) {
+  if (v === null || v === undefined || v === "") return [];
+  return String(v).replace(/[[\]]/g, "").split(",").map((s) => s.trim()).filter(Boolean);
+}
+
+function flagValues(args, name) {
+  const out = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === name && args[i + 1] !== undefined) out.push(args[i + 1]);
+  }
+  return out;
+}
+
+// A deliberately minimal read of config/factory.policy.yaml. resolve needs
+// exactly three facts (`profile`, `stack`, and the profile keys under
+// `profiles:`), so that is all this reads. A top-level line this cannot make
+// sense of is a refusal rather than a guess: a policy read optimistically is
+// how a project ends up resolved against a profile nobody declared.
+function readPolicy(policyPath) {
+  let text;
+  try {
+    text = readFileSync(policyPath, "utf8");
+  } catch (e) {
+    if (e.code === "ENOENT") return null;
+    const f = new Error(`cannot read the file: ${e.message}`);
+    f.code = "POLICY_BAD";
+    throw f;
+  }
+  const out = { profile: null, stack: null, profiles: [] };
+  const lines = text.split(/\r?\n/);
+  let section = null;
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i];
+    const line = raw.replace(/\s+#.*$/, "").trimEnd();
+    if (line.trim() === "") continue;
+    const indent = raw.length - raw.trimStart().length;
+    const text2 = line.trim();
+    if (indent === 0) {
+      const m = /^([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$/.exec(text2);
+      if (!m) {
+        const f = new Error(`line ${i + 1}: cannot read top-level line "${text2}"`);
+        f.code = "POLICY_BAD";
+        throw f;
+      }
+      section = m[1];
+      if (m[2] !== "" && (section === "profile" || section === "tier" || section === "stack")) {
+        out[section] = parseScalar(m[2]);
+      }
+      continue;
+    }
+    // The one indented fact worth reading: the profile vocabulary as keys
+    // under `profiles:` (as the example policy declares it).
+    const child = section === "profiles" && indent === 2
+      ? /^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$/.exec(text2)
+      : null;
+    if (child && !child[2]) {
+      out.profiles.push(child[1]);
+    }
+  }
+  return out;
+}
+
+function resolveCmd(args, { json, dryRun, catalogPath }) {
+  const fail = (msg) => {
+    process.stderr.write(`ERROR: ${msg}\n`);
+    if (json) process.stdout.write(JSON.stringify({ ok: false, error: msg }) + "\n");
+    return 1;
+  };
+
+  let catalog;
+  try {
+    catalog = parseCatalog(readFileSync(catalogPath, "utf8"));
+  } catch (e) {
+    return fail(e.code === "ENOENT"
+      ? `catalog not found at ${catalogPath}`
+      : `catalog unreadable at ${catalogPath} - ${e.message}`);
+  }
+
+  const policyPath = resolve(process.cwd(), "config", "factory.policy.yaml");
+  let policy;
+  try {
+    policy = readPolicy(policyPath);
+  } catch (e) {
+    return fail(e.code === "POLICY_BAD"
+      ? `policy unreadable at ${policyPath} - ${e.message}`
+      : `policy not readable at ${policyPath} - ${e.message}`);
+  }
+
+  // profile: the flag wins, the policy's `profile:` scalar is the default.
+  // A null profile is allowed; entries that declare a profile requirement
+  // simply stay out until the project says which profile it is.
+  const pf = flagValues(args, "--profile");
+  const profileS = (pf[pf.length - 1] || "").trim()
+    || (policy && policy.profile != null && String(policy.profile).trim())
+    || null;
+  const known = new Set();
+  for (const p of tagsOf(catalog.profiles)) known.add(p);
+  for (const entries of Object.values(catalog.topics)) {
+    for (const e of entries) for (const p of tagsOf(e.profiles)) known.add(p);
+  }
+  for (const m of catalog.mandatory) for (const p of tagsOf(m.profiles)) known.add(p);
+  if (policy) {
+    for (const p of policy.profiles) known.add(p);
+    if (policy.profile != null && policy.profile !== "") known.add(String(policy.profile));
+  }
+  if (profileS && !known.has(profileS)) {
+    const list = [...known].sort().join(", ") || "(none declared)";
+    return fail(`unknown profile "${profileS}"; known profiles: ${list}`);
+  }
+
+  // stack tokens: the flag wins, the policy's `stack:` scalar is the default.
+  const sv = flagValues(args, "--stack");
+  const tokens = [];
+  for (const tk of tagsOf(sv.length ? sv.join(",") : (policy ? policy.stack : ""))) {
+    if (!tokens.includes(tk)) tokens.push(tk);
+  }
+  if (tokens.length === 0) {
+    return fail("no stack to resolve; pass --stack or add config/factory.policy.yaml");
+  }
+
+  // Every stack token must mean something to the catalog. An entry with no
+  // `stacks` tag applies to every stack, so on a catalog that tags nothing the
+  // token always matches; a fully-tagged catalog catches typos instead.
+  // Deliberately catalog-local: resolution discovers nothing.
+  const topicEntries = [];
+  for (const entries of Object.values(catalog.topics)) topicEntries.push(...entries);
+  for (const token of tokens) {
+    const match = topicEntries.some((e) => {
+      const t = tagsOf(e.stacks);
+      return t.length === 0 || t.includes(token);
+    });
+    if (!match) return fail(`no catalog entry for stack "${token}" in ${catalogPath}`);
+  }
+
+  const resolved = [];
+  const skipped = [];
+  const seen = new Set();
+
+  // Mandatory entries are machine-wide requirements, so every project gets
+  // them and the reason is the gate itself.
+  for (const m of catalog.mandatory) {
+    if (!seen.has(m.name)) {
+      resolved.push({ id: m.name, version: m.version != null ? String(m.version) : null, reason: "mandatory" });
+      seen.add(m.name);
+    }
+  }
+
+  for (const e of topicEntries) {
+    const id = e.name;
+    if (seen.has(id)) {
+      skipped.push({ id, why: "duplicate of an already-resolved entry" });
+      continue;
+    }
+    seen.add(id);
+    const eStacks = tagsOf(e.stacks);
+    const eProfiles = tagsOf(e.profiles);
+    if (eStacks.length && !tokens.some((tk) => eStacks.includes(tk))) {
+      skipped.push({ id, why: `stack (${tokens.join(", ")}) not tagged; entry applies to ${eStacks.join(", ")}` });
+      continue;
+    }
+    if (eProfiles.length && (!profileS || !eProfiles.includes(profileS))) {
+      skipped.push({ id, why: profileS
+        ? `profile "${profileS}" not in (${eProfiles.join(", ")})`
+        : `entry requires a profile (${eProfiles.join(", ")}); none was given` });
+      continue;
+    }
+    const reason = [];
+    if (eProfiles.length) reason.push(`profile=${profileS}`);
+    if (eStacks.length) reason.push(`stack=${tokens.filter((tk) => eStacks.includes(tk)).join(",")}`);
+    resolved.push({ id, version: e.version != null ? String(e.version) : null, reason: reason.length ? reason.join(", ") : "default" });
+  }
+
+  const byId = (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+  resolved.sort(byId);
+  skipped.sort(byId);
+
+  const li = flagValues(args, "--lock");
+  const lockPath = li.length
+    ? resolve(li[li.length - 1])
+    : resolve(process.cwd(), ".agents", "skills", "skills.lock.json");
+  const lock = {
+    version: 1,
+    generated_by: "factory-skills.mjs resolve",
+    profiles: profileS ? [profileS] : [],
+    stack: [...tokens].sort(),
+    skills: resolved.map((r) => ({ id: r.id, version: r.version, reason: r.reason })),
+  };
+  const body = stable(lock) + "\n";
+
+  if (!dryRun) {
+    mkdirSync(dirname(lockPath), { recursive: true });
+    writeFileSync(lockPath, body, "utf8");
+  }
+
+  if (json) {
+    process.stdout.write(JSON.stringify({ ok: true, lock: lockPath, written: !dryRun, dryRun, resolved, skipped }) + "\n");
+    return 0;
+  }
+  for (const r of resolved) {
+    process.stdout.write(`  + ${r.id.padEnd(16)} ${(r.version ? `v${r.version}` : "").padEnd(8)} ${r.reason}\n`);
+  }
+  for (const s of skipped) {
+    process.stdout.write(`  - ${s.id.padEnd(16)} ${"skipped".padEnd(8)} ${s.why}\n`);
+  }
+  if (dryRun) {
+    process.stdout.write(`  lock contents that would be written:\n${body.split("\n").map((l) => `    ${l}`).join("\n")}\n`);
+  }
+  process.stdout.write(`skills resolve: ${resolved.length} resolved, ${skipped.length} skipped -> ${lockPath}${dryRun ? " (dry-run - nothing written)" : ""}\n`);
+  return 0;
+}
+
 // ------------------------------------------------------------------- main ---
 
 function main(argv) {
@@ -402,9 +666,10 @@ function main(argv) {
   const catalogPath = ci !== -1 && args[ci + 1] ? resolve(args[ci + 1]) : DEFAULT_CATALOG;
 
   if (cmd === "record") return recordCmd(args, { json, dryRun });
+  if (cmd === "resolve") return resolveCmd(args, { json, dryRun, catalogPath });
 
   if (cmd !== "check" && cmd !== "install") {
-    process.stderr.write("usage: factory-skills.mjs check|install|record [--json] [--dry-run] [--catalog <path>] [--from <record.json>]\n");
+    process.stderr.write("usage: factory-skills.mjs check|install|record|resolve [--json] [--dry-run] [--catalog <path>] [--from <record.json>] [--profile <id>] [--stack <a,b>] [--lock <path>]\n");
     return 1;
   }
 

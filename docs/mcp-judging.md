@@ -25,7 +25,7 @@ Both live in the bundle and speak only to the config, never to the network.
 
 ```bash
 node scripts/factory-mcp.mjs audit                    # what is configured, and what it costs
-node scripts/factory-mcp.mjs handshake --name graft   # does it actually answer?
+node scripts/factory-mcp.mjs handshake --name <server> # does it actually answer?
 node scripts/factory-mcp.mjs enable  <server>         # connect it, for THIS project
 node scripts/factory-mcp.mjs disable <server>         # disconnect it, for THIS project
 ```
@@ -49,8 +49,11 @@ and read what it actually reports.
 
 Every write is followed by a re-read: if the file cannot be parsed back, or
 does not read back as the state requested, the original bytes are restored.
-OpenCode reads its config at startup, so both forms of output say a restart is
-required — and say *nothing* about restarting when nothing changed, because
+The write is persistent, so it survives a restart. Whether the running session
+picks it up without one is **unverified** — `/mcps` connects live but does not
+persist, and the docs are silent on the config-write path in both directions.
+So a real change reports `liveReload: "unverified"` rather than claiming
+either outcome, and says *nothing* about reload when nothing changed, because
 telling someone to reload for a no-op trains them to ignore the line.
 
 `audit` reports every configured server with its owner (bundle-owned or the
@@ -62,8 +65,9 @@ config has no business carrying secrets.
 `handshake` spawns a local stdio server and speaks the real protocol
 (`initialize`, then `tools/list`). It is the only way to know a server works
 rather than assumes it. `tools/list` returning zero tools is a **legitimate
-answer** and is never graded as a failure: graft defers its schemas until a
-graph exists, and a server may legitimately expose nothing in a given repo.
+answer** and is never graded as a failure: a server may expose schemas only
+once it has state to describe, and a healthy one can legitimately expose
+nothing in a given repo.
 
 ## Dimensions
 
@@ -90,7 +94,7 @@ more-starred third-party one at equal scores.
 ### MCP-specific dimensions
 
 **M1. Context cost, per call.** Measure it: `instructionsChars` plus the size
-of every tool schema. Report the number. graft's own instructions are ~950
+of every tool schema. Report the number. one server's own instructions are ~950
 characters before any tool is added, which is the floor to compare against, not
 the ceiling.
 

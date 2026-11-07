@@ -2,4 +2,29 @@
 // The package root entry is V1-only; the V2 plugin lives at the /v2 subpath.
 // The placeholder below is replaced by the installer with the absolute path
 // to node_modules/opencode-pty/dist/src/v2/index.js on THIS machine.
-export { default } from "file:///__OPENCODE_PTY_V2_INDEX__";
+//
+// This used to be a bare re-export of the default binding from that path. That
+// module exports a complete { id, setup } object - read and confirmed - and the
+// shim still failed to load every single time with:
+//
+//   Plugin must export a default definition with an id and an effect or setup
+//   function (cause: SchemaError(Missing key
+//
+// A runtime check would have passed, so opencode is validating the shape from
+// THIS file: a bare re-export hands the validator nothing to read and the id
+// comes back missing. So the id is named here, and setup is forwarded rather
+// than copied - the module stays the single source of truth for behaviour while
+// the shape the loader needs is visible in this file.
+import Plugin from "file:///__OPENCODE_PTY_V2_INDEX__";
+
+// Fail at load, loudly and by name, if the resolved module is not what this
+// shim was written for. A silent no-op here would look like a successful
+// install and leave the pty server simply never starting.
+if (!Plugin || typeof Plugin.setup !== "function") {
+  throw new Error("opencode-pty: the resolved v2 module has no setup() - the shim would be inert");
+}
+
+export default {
+  id: "opencode-pty",
+  setup: (ctx: any) => Plugin.setup(ctx),
+};

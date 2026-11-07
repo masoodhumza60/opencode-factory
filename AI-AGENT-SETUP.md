@@ -4,12 +4,12 @@ Use this when you want to set up a machine with **no manual install**. Give
 the prompt below to an AI coding agent (OpenCode) running on that machine.
 
 The prompt is self-contained: **the agent does not need to know anything
-about the tools being installed** (beads, graft, MCP, skills — none of it).
+about the tools being installed** (beads, MCP, skills — none of it).
 It only runs the commands below in order and checks the output. No API keys,
 no browser sign-ins, nothing else needed from you.
 
 The install puts the whole system in place once per machine: the `bd` command
-line tool (beads), the graft code-graph server, the OpenCode plugins, and the
+line tool (beads), the OpenCode plugins, and the
 `/factory` commands (onboard, selfcheck, feature) with their agent and skill.
 
 ## How to use

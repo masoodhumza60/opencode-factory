@@ -14,6 +14,7 @@ import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
+import { createHash } from "node:crypto";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = resolve(HERE, "factory-skills.mjs");
@@ -333,14 +334,14 @@ const RECORD = {
   }],
   rejected: [{ skill: "beta", reason: "duplicates what alpha already provides" }],
 };
-const recOut = (cwd) => join(cwd, ".agents", "skills", "skills.lock.json");
+const recOut = (cwd) => join(cwd, ".agents", "skills", "install-record.json");
 const readRec = (cwd) => JSON.parse(readFileSync(recOut(cwd), "utf8"));
 
 t("a complete record is written where the docs say it lives", () => {
   const env = freshEnv();
   const r = runRecord(["record"], JSON.stringify(RECORD), env);
   assert(r.code === 0, `expected exit 0, got ${r.code}: ${r.out}${r.err}`);
-  assert(existsSync(recOut(env.cwd)), "must write .agents/skills/skills.lock.json");
+  assert(existsSync(recOut(env.cwd)), "must write .agents/skills/install-record.json");
   const w = readRec(env.cwd);
   assert(Array.isArray(w.installed) && w.installed.length === 1, "one install recorded");
   for (const f of ["repo", "skill", "score", "rationale", "command"]) {
@@ -430,6 +431,261 @@ t("record needs no catalog, unlike check and install", () => {
   // if the catalog is the thing that is broken.
   const r = runRecord(["record"], JSON.stringify(RECORD), freshEnv());
   assert(r.code === 0, `record must not require a catalog, got ${r.code}: ${r.out}${r.err}`);
+});
+
+// ------------------------------------------------- resolve (M2a task 1) -----
+// `resolve` turns "what the catalog declares" plus "what this project is"
+// into a pinned, deterministic lock file. The tests below defend the four
+// properties the other waves will stand on: the profile gate is real (an
+// api-only project resolves zero UI skills, framework skill included), the
+// bytes are deterministic, refusals are refusals, and the two local input
+// files (flags, config/factory.policy.yaml) mean what they say.
+
+const RESOLVE_CATALOG = catalog("resolve", `version: 2
+profiles: web, mobile, desktop, api, cli, library
+mandatory:
+  - name: commit-work
+    source: owner/one
+    why: 'phase 7 ships as per-unit commits'
+topics:
+  framework:
+    - name: nuxt
+      source: nuxt/skills-pack
+      stacks: 'nuxt, vue'
+      profiles: 'web'
+      version: '3.14'
+      why: 'nuxt framework conventions'
+    - name: nuxt-ui
+      source: nuxt/ui-pack
+      stacks: 'nuxt, vue'
+      profiles: 'web'
+      version: '9.2'
+      why: 'nuxt ui component skills'
+  discovery:
+    - name: find-skills
+      source: vercel/skills
+      why: 'searches for candidate skills'
+`);
+
+// A catalog whose every topic entry is stack-tagged: the only shape in which
+// an unknown stack token CAN fail the token gate.
+const ALL_TAGGED_CATALOG = catalog("alltagged", `version: 2
+profiles: web, api
+mandatory:
+  - name: commit-work
+    source: owner/one
+    why: 'phase 7 ships as per-unit commits'
+topics:
+  framework:
+    - name: nuxt
+      source: nuxt/skills-pack
+      stacks: 'nuxt'
+      why: 'nuxt framework conventions'
+`);
+
+const resolveLock = (cwd) => join(cwd, ".agents", "skills", "skills.lock.json");
+const sha256 = (p) => createHash("sha256").update(readFileSync(p)).digest("hex");
+
+t("resolve: web+nuxt resolves the expected ids, pins and reasons", () => {
+  const env = freshEnv();
+  const r = run(["resolve", "--profile", "web", "--stack", "nuxt",
+    "--catalog", RESOLVE_CATALOG, "--lock", join(env.cwd, "custom.lock.json")], { fresh: env });
+  assert(r.code === 0, `expected exit 0, got ${r.code}\n${r.out}${r.err}`);
+  assert(existsSync(join(env.cwd, "custom.lock.json")), "--lock must be honoured");
+  assert(!existsSync(resolveLock(env.cwd)), "--lock means --lock; the default path must not also be written");
+  const lock = JSON.parse(readFileSync(join(env.cwd, "custom.lock.json"), "utf8"));
+  const ids = lock.skills.map((s) => s.id);
+  assert(ids.length === 4 && ids[0] === "commit-work" && ids[1] === "find-skills"
+    && ids[2] === "nuxt" && ids[3] === "nuxt-ui", `expected the four ids sorted by id, got ${ids}`);
+  const nuxt = lock.skills.find((s) => s.id === "nuxt");
+  assert(nuxt.version === "3.14", `the catalog's pin must reach the lock verbatim, got ${JSON.stringify(nuxt)}`);
+  assert(nuxt.reason.includes("profile=web") && nuxt.reason.includes("stack=nuxt"),
+    `reason must name what pulled the entry, got ${nuxt.reason}`);
+  assert(lock.skills.find((s) => s.id === "commit-work").reason === "mandatory",
+    "mandatory entries say so in the reason");
+  assert(lock.skills.find((s) => s.id === "find-skills").reason === "default",
+    "untagged entries say default in the reason");
+  assert(lock.profiles.length === 1 && lock.profiles[0] === "web", "lock must record the profile");
+  assert(lock.stack.length === 1 && lock.stack[0] === "nuxt", "lock must record the stack tokens");
+});
+
+t("resolve: api-only resolves zero UI skills, framework skill included", () => {
+  // The headline assertion. The stack IS nuxt here - the profile gate alone
+  // must keep nuxt, nuxt-ui and any UI-tagged skill out of the lock.
+  const env = freshEnv();
+  const r = run(["resolve", "--profile", "api", "--stack", "nuxt",
+    "--catalog", RESOLVE_CATALOG, "--json"], { fresh: env });
+  assert(r.code === 0, `expected exit 0, got ${r.code}\n${r.out}${r.err}`);
+  const j = JSON.parse(r.out);
+  const ids = j.resolved.map((x) => x.id);
+  assert(!ids.includes("nuxt") && !ids.includes("nuxt-ui"),
+    `api must not resolve UI skills, got ${ids}`);
+  const stuck = j.skipped.map((x) => x.id);
+  assert(stuck.includes("nuxt") && stuck.includes("nuxt-ui"),
+    `excluded UI skills must be visible in skipped with a why, got ${JSON.stringify(j.skipped)}`);
+  assert(j.skipped.find((x) => x.id === "nuxt").why.includes('profile "api"'),
+    `the skip reason must name the profile, got ${JSON.stringify(j.skipped)}`);
+  // The lock ON DISK is the thing other waves consume - assert it, not stdout.
+  const lock = JSON.parse(readFileSync(resolveLock(env.cwd), "utf8"));
+  assert(!lock.skills.some((s) => /nuxt/.test(s.id)),
+    `the written lock must contain no UI skill, got ${JSON.stringify(lock.skills.map((s) => s.id))}`);
+});
+
+t("resolve: same inputs produce byte-identical lock files", () => {
+  const a = freshEnv();
+  const b = freshEnv();
+  for (const env of [a, b]) {
+    const r = run(["resolve", "--profile", "web", "--stack", "nuxt", "--catalog", RESOLVE_CATALOG], { fresh: env });
+    assert(r.code === 0, `expected exit 0, got ${r.code}`);
+  }
+  const da = readFileSync(resolveLock(a.cwd), "utf8");
+  const db = readFileSync(resolveLock(b.cwd), "utf8");
+  assert(da === db, `bytes must match across runs:\n${da}\nvs\n${db}`);
+  assert(sha256(resolveLock(a.cwd)) === sha256(resolveLock(b.cwd)), "sha256 must agree");
+  assert(da.endsWith("\n"), "trailing newline, deterministic bytes");
+  assert(!/\d{4}-\d{2}-\d{2}/.test(da), "no timestamps in the lock");
+  assert(!da.includes(a.cwd) && !da.includes(b.cwd), "no absolute paths in the lock");
+  assert(!da.includes(process.env.USERPROFILE || "\u0000no-userprofile-in-fixture"), "no machine-specific paths in the lock");
+});
+
+t("resolve --dry-run prints what would be written and writes nothing", () => {
+  const env = freshEnv();
+  const r = run(["resolve", "--profile", "web", "--stack", "nuxt", "--catalog", RESOLVE_CATALOG, "--dry-run"], { fresh: env });
+  assert(r.code === 0, `expected exit 0, got ${r.code}\n${r.out}${r.err}`);
+  assert(r.out.includes("dry-run"), "dry run must say so");
+  assert(r.out.includes("nuxt"), "the preview must name what would resolve");
+  assert(!existsSync(join(env.cwd, ".agents", "skills", "skills.lock.json")),
+    "dry run must not write the lock");
+  assert(!existsSync(join(env.cwd, "custom.lock.json")), "dry run must not write anywhere");
+});
+
+t("resolve refusals are one ERROR line on stderr, exit 1, no stack trace", () => {
+  const env = freshEnv();
+  const r = run(["resolve", "--profile", "frobnicate", "--stack", "nuxt",
+    "--catalog", RESOLVE_CATALOG, "--dry-run"], { fresh: env });
+  assert(r.code === 1, `expected exit 1, got ${r.code}`);
+  assert(r.err.trim().startsWith("ERROR: "), `refusals print ERROR on stderr, got ${JSON.stringify(r.err)}`);
+  assert(r.err.trim().split("\n").length === 1, `exactly one line, got ${JSON.stringify(r.err)}`);
+  assert(!r.err.includes("    at ") && !r.err.startsWith("Error:"), "no stack trace on a refusal");
+  assert(r.err.includes('unknown profile "frobnicate"; known profiles:'),
+    `the refusal must give the known list verbatim, got ${r.err}`);
+  for (const p of ["api", "web", "cli", "library", "mobile", "desktop"]) {
+    assert(r.err.includes(p), `known profiles should include ${p}, got ${r.err}`);
+  }
+  assert(!existsSync(resolveLock(env.cwd)), "a refusal leaves no lock behind");
+});
+
+t("resolve refuses a stack token the catalog has no entry for, naming the catalog", () => {
+  const env = freshEnv();
+  const r = run(["resolve", "--profile", "web", "--stack", "cobol",
+    "--catalog", ALL_TAGGED_CATALOG, "--dry-run"], { fresh: env });
+  assert(r.code === 1, `expected exit 1, got ${r.code}`);
+  assert(r.err.trim().startsWith("ERROR: "), "refusals print ERROR on stderr");
+  assert(r.err.includes('no catalog entry for stack "cobol"'), `got ${r.err}`);
+  assert(r.err.includes(ALL_TAGGED_CATALOG), "the refusal must name the catalog path");
+  assert(!existsSync(resolveLock(env.cwd)), "a refusal leaves no lock behind");
+});
+
+t("resolve refuses to run with neither --stack nor a readable policy", () => {
+  const env = freshEnv();   // no config/factory.policy.yaml under this cwd
+  const r = run(["resolve", "--catalog", RESOLVE_CATALOG, "--dry-run"], { fresh: env });
+  assert(r.code === 1, `expected exit 1, got ${r.code}`);
+  assert(r.err.trim().startsWith("ERROR: "), "refusals print ERROR on stderr");
+  assert(r.err.includes("no stack to resolve; pass --stack or add config/factory.policy.yaml"),
+    `got ${r.err}`);
+});
+
+t("resolve refuses a missing and an unparseable catalog, naming the path and error", () => {
+  const env = freshEnv();
+  const missing = run(["resolve", "--profile", "web", "--stack", "nuxt",
+    "--catalog", join(TMP, "missing-catalog.yaml"), "--dry-run"], { fresh: env });
+  assert(missing.code === 1, `expected exit 1, got ${missing.code}`);
+  assert(missing.err.includes("missing-catalog.yaml") && missing.err.includes("catalog not found"),
+    `got ${missing.err}`);
+  assert(missing.err.trim().startsWith("ERROR: "), "refusals print ERROR on stderr");
+
+  const bad = catalog("resolve-bad", "version: 2\nmandatory:\n  - name: foo\n   source: a/b\n");
+  const unreadable = run(["resolve", "--profile", "web", "--stack", "nuxt",
+    "--catalog", bad, "--dry-run"], { fresh: env });
+  assert(unreadable.code === 1, `expected exit 1, got ${unreadable.code}`);
+  assert(unreadable.err.includes(bad) && unreadable.err.includes("catalog unreadable"),
+    `the refusal must name the path and say it is unreadable, got ${unreadable.err}`);
+});
+
+t("resolve reads profile and stack from config/factory.policy.yaml", () => {
+  const env = freshEnv();
+  mkdirSync(join(env.cwd, "config"), { recursive: true });
+  writeFileSync(join(env.cwd, "config", "factory.policy.yaml"),
+    "version: 1\nprofile: web\nstack: nuxt\n", "utf8");
+  const r = run(["resolve", "--catalog", RESOLVE_CATALOG, "--json"], { fresh: env });
+  assert(r.code === 0, `expected exit 0, got ${r.code}\n${r.out}${r.err}`);
+  const j = JSON.parse(r.out);
+  const ids = j.resolved.map((x) => x.id);
+  assert(ids.includes("nuxt") && ids.includes("nuxt-ui"),
+    `the policy's profile+stack must resolve the UI skills, got ${ids}`);
+  const lock = JSON.parse(readFileSync(resolveLock(env.cwd), "utf8"));
+  assert(lock.profiles[0] === "web", "the policy profile lands in the lock");
+});
+
+t("a flag beats the policy file", () => {
+  const env = freshEnv();
+  mkdirSync(join(env.cwd, "config"), { recursive: true });
+  writeFileSync(join(env.cwd, "config", "factory.policy.yaml"),
+    "version: 1\nprofile: web\nstack: nuxt\n", "utf8");
+  const r = run(["resolve", "--profile", "api", "--catalog", RESOLVE_CATALOG, "--json"], { fresh: env });
+  assert(r.code === 0, `expected exit 0, got ${r.code}\n${r.out}${r.err}`);
+  const j = JSON.parse(r.out);
+  assert(!j.resolved.map((x) => x.id).includes("nuxt-ui"),
+    "--profile api must win over the policy's web profile");
+});
+
+t("an unreadable policy file is refused, not silently ignored", () => {
+  const env = freshEnv();
+  mkdirSync(join(env.cwd, "config"), { recursive: true });
+  writeFileSync(join(env.cwd, "config", "factory.policy.yaml"),
+    "- a bare list item is not a policy\n", "utf8");
+  const r = run(["resolve", "--catalog", RESOLVE_CATALOG, "--stack", "nuxt", "--dry-run"], { fresh: env });
+  assert(r.code === 1, `expected exit 1, got ${r.code}`);
+  assert(r.err.trim().startsWith("ERROR: "), "refusals print ERROR on stderr");
+  assert(r.err.includes("factory.policy.yaml") && r.err.includes("policy unreadable"),
+    `the refusal must name the policy path, got ${r.err}`);
+});
+
+t("resolve --json parses and agrees with the lock on disk", () => {
+  const env = freshEnv();
+  const r = run(["resolve", "--profile", "web", "--stack", "nuxt", "--catalog", RESOLVE_CATALOG, "--json"], { fresh: env });
+  assert(r.code === 0, `expected exit 0, got ${r.code}`);
+  const j = JSON.parse(r.out);
+  assert(j.ok === true && j.written === true, "json must agree with what it did");
+  const lock = JSON.parse(readFileSync(join(env.cwd, ".agents", "skills", "skills.lock.json"), "utf8"));
+  // Compare structurally: bytes on disk are key-sorted, in-memory objects are not.
+  const shape = (xs) => xs.map((s) => `${s.id}|${s.version}|${s.reason}`).join("\n");
+  assert(shape(lock.skills) === shape(j.resolved),
+    "json resolved must equal the lock's skills");
+});
+
+t("the real catalog resolves design-judgment for web and not for api", () => {
+  const web = run(["resolve", "--profile", "web", "--stack", "nuxt", "--catalog", REAL_CATALOG, "--dry-run", "--json"]);
+  const api = run(["resolve", "--profile", "api", "--stack", "nuxt", "--catalog", REAL_CATALOG, "--dry-run", "--json"]);
+  assert(web.code === 0, `web resolve exited ${web.code}: ${web.err}`);
+  assert(api.code === 0, `api resolve exited ${api.code}: ${api.err}`);
+  const webIds = JSON.parse(web.out).resolved.map((r) => r.id);
+  const apiIds = JSON.parse(api.out).resolved.map((r) => r.id);
+  assert(webIds.includes("design-judgment"), `web resolved: ${webIds.join(", ")}`);
+  assert(!apiIds.includes("design-judgment"), `api resolved: ${apiIds.join(", ")}`);
+});
+
+t("check, install and record still pass after resolve landed", () => {
+  const c = catalog("resolve-regress", GOOD);
+  const env = freshEnv();
+  installFakeSkill(env.home, "alpha");
+  installFakeSkill(env.home, "beta");
+  const chk = run(["check", "--catalog", c], { fresh: env });
+  assert(chk.code === 0 && chk.out.includes("PASS mandatory skills"), `check regressed: ${chk.out}`);
+  const ins = run(["install", "--catalog", c, "--dry-run"], { fresh: env });
+  assert(ins.code === 0 && /already present/.test(ins.out), `install regressed: ${ins.out}`);
+  const rec = runRecord(["record"], JSON.stringify(RECORD), env);
+  assert(rec.code === 0, `record regressed: ${rec.out}${rec.err}`);
 });
 
 process.stdout.write(`\n${pass} passed, ${failed} failed\n`);
