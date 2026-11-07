@@ -26,7 +26,7 @@ tiers:
   internal:
     checks: [tests, run, review, lint, types, contract]
   public:
-    checks: [tests, run, review, lint, types, contract, a11y, axe, perf, security, migration, rollback, observability, privacy]
+    checks: [tests, run, review, lint, types, contract, a11y, axe, perf, security, migration, rollback, observability, privacy, sbom, runbook, slo]
   regulated:
     checks: [tests, run, review, lint, types, contract, a11y, perf, security, migration, rollback, observability, privacy, audit, retention, incident, dr, segregation, training, attestation]
 
@@ -35,7 +35,7 @@ tiers:
 # profile names must also be declared under checks below.
 profiles:
   web:
-    checks: [a11y, perf, visual, directions]
+    checks: [a11y, perf, visual, directions, threat-model, traceability]
   api:
     checks: [contract, authz, load]
   cli:
@@ -222,3 +222,25 @@ checks:
     phase: 5
     kind: data-quality
     command: npm run data-quality
+  # M2c: security, QA and SRE are shaped evidence. These commands check the
+  # artifact's structure; they do not run a scanner or judge adequacy.
+  threat-model:
+    phase: 1
+    kind: threat-model
+    command: node scripts/factory-compliance.mjs check threat-model $bead .factory/$bead/security/threat-model.md
+  traceability:
+    phase: 6
+    kind: traceability
+    command: node scripts/factory-compliance.mjs check traceability $bead .factory/$bead/qa/traceability.json
+  sbom:
+    phase: 7
+    kind: sbom
+    command: node scripts/factory-compliance.mjs check sbom $bead out/sbom.json
+  runbook:
+    phase: 7
+    kind: runbook
+    command: node scripts/factory-compliance.mjs check runbook $bead .factory/$bead/ops/runbook.md
+  slo:
+    phase: 7
+    kind: slo
+    command: node scripts/factory-compliance.mjs check slo $bead .factory/$bead/ops/slo.json

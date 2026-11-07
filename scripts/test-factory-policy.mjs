@@ -21,7 +21,7 @@ const policyPath = join(root, "config", "factory.policy.yaml");
 const TIER_CHECKS = {
   prototype: ["tests", "run", "review"],
   internal: ["tests", "run", "review", "lint", "types", "contract"],
-  public: ["tests", "run", "review", "lint", "types", "contract", "a11y", "axe", "perf", "security", "migration", "rollback", "observability", "privacy"],
+  public: ["tests", "run", "review", "lint", "types", "contract", "a11y", "axe", "perf", "security", "migration", "rollback", "observability", "privacy", "sbom", "runbook", "slo"],
   regulated: ["tests", "run", "review", "lint", "types", "contract", "a11y", "perf", "security", "migration", "rollback", "observability", "privacy", "audit", "retention", "incident", "dr", "segregation", "training", "attestation"],
 };
 const PROFILE_CHECKS = {
@@ -45,6 +45,7 @@ const KIND = {
   help: "help-snapshot", "api-diff": "api-diff", eval: "eval", "plan-diff": "plan",
   "device-capture": "device-capture",
   directions: "directions", axe: "axe",
+  sbom: "sbom", runbook: "runbook", slo: "slo",
 };
 
 let policyText = "version: 1\ntier: prototype\nprofile: web\n\ntiers:\n";
@@ -145,8 +146,8 @@ check("a directory at the policy path is refused as unreadable", (() => {
 
 console.log("\neffectiveChecks");
 const eff = effectiveChecks(policy, { tier: "public", profile: "web" });
-check("public+web dedupes a11y and perf", eff.checks.length === 14, String(eff.checks.length));
-check("tier ids come first", eff.checks[0] === "tests" && eff.checks.slice(0, 14).join(",") === TIER_CHECKS.public.join(","));
+check("public+web dedupes a11y and perf", eff.checks.length === 17, String(eff.checks.length));
+check("tier ids come first", eff.checks[0] === "tests" && eff.checks.slice(0, 17).join(",") === TIER_CHECKS.public.join(","));
 check("prototype+web is five", effectiveChecks(policy, { tier: "prototype", profile: "web" }).checks.length === 5);
 check("metadata tier beats the file default",
   effectiveChecks(policy, { tier: "regulated", profile: "api" }).tier === "regulated");
@@ -445,8 +446,9 @@ check("the example declares the two M2b kinds at the phases the spec names",
   JSON.stringify({ directions: example.checks.directions, axe: example.checks.axe }));
 
 const exWeb = effectiveChecks(example, { tier: "prototype", profile: "web" });
-check("prototype+web unions to exactly seven unique ids (3 tier + 4 profile, no overlap)",
-  exWeb.checks.length === 7 && exWeb.checks.join(",") === "tests,run,review,a11y,perf,visual,directions",
+check("prototype+web unions to exactly nine unique ids (3 tier + 6 profile, no overlap)",
+  exWeb.checks.length === 9 &&
+  exWeb.checks.join(",") === "tests,run,review,a11y,perf,visual,directions,threat-model,traceability",
   JSON.stringify(exWeb.checks));
 const exApi = effectiveChecks(example, { tier: "prototype", profile: "api" });
 check("prototype+api unions to exactly six unique ids (contract is profile-only at this tier)",
@@ -458,13 +460,21 @@ check("prototype+infra unions to exactly six unique ids (rollback is not in prot
   JSON.stringify(exInfra.checks));
 const exPublic = effectiveChecks(example, { tier: "public", profile: "web" });
 check("public+web unions without duplicates (length equals the distinct-id count)",
-  exPublic.checks.length === 16 &&
+  exPublic.checks.length === 21 &&
   JSON.stringify([...new Set(exPublic.checks)]) === JSON.stringify(exPublic.checks),
   `${exPublic.checks.length} total, ${new Set(exPublic.checks).size} distinct`);
 check("the dedupe keeps tier ids first and appends only web's new ids, in profile order",
-  exPublic.checks.slice(0, 14).join(",") === TIER_CHECKS.public.join(",") &&
-  exPublic.checks[14] === "visual" && exPublic.checks[15] === "directions",
+  exPublic.checks.slice(0, 17).join(",") === TIER_CHECKS.public.join(",") &&
+  exPublic.checks.slice(17).join(",") === "visual,directions,threat-model,traceability",
   JSON.stringify(exPublic.checks));
+check("the example declares the five M2c kinds at the phases the spec names",
+  example !== null &&
+  example.checks["threat-model"]?.phase === 1 && example.checks["threat-model"].kind === "threat-model" &&
+  example.checks.traceability?.phase === 6 && example.checks.traceability.kind === "traceability" &&
+  example.checks.sbom?.phase === 7 && example.checks.sbom.kind === "sbom" &&
+  example.checks.runbook?.phase === 7 && example.checks.runbook.kind === "runbook" &&
+  example.checks.slo?.phase === 7 && example.checks.slo.kind === "slo",
+  JSON.stringify({ threat: example?.checks["threat-model"], trace: example?.checks.traceability }));
 
 rmSync(root, { recursive: true, force: true });
 rmSync(bare, { recursive: true, force: true });
