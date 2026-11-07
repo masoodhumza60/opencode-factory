@@ -1,0 +1,22 @@
+{
+  "criteria": [
+    {
+      "id": "AC-1",
+      "description": "The default state lists three tasks.",
+      "evidence": [
+        { "kind": "screenshot", "ref": "out/capture/default-1440.png" },
+        { "kind": "axe", "ref": "out/axe.json" }
+      ]
+    },
+    {
+      "id": "AC-2",
+      "description": "The error state is announced with role=alert.",
+      "evidence": [{ "kind": "screenshot", "ref": "out/capture/error-1440.png" }]
+    },
+    {
+      "id": "AC-3",
+      "description": "Loading, empty and disabled states render at all three widths.",
+      "evidence": [{ "kind": "screenshot", "ref": "out/capture/loading-390.png" }]
+    }
+  ]
+}

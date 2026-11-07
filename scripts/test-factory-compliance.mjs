@@ -273,6 +273,22 @@ check("an empty objectives array is refused",
   !noObjectives.ok && noObjectives.problems.some((p) => p.includes("objectives")),
   JSON.stringify(noObjectives.problems));
 
+console.log("\nfactory-compliance: proof fixtures");
+
+const FIXTURE = join(HERE, "..", "fixtures", "testapp");
+const FIXTURES = {
+  "threat-model": join(FIXTURE, "security", "threat-model.md"),
+  sbom: join(FIXTURE, "security", "sbom.cdx.json"),
+  traceability: join(FIXTURE, "qa", "traceability.json"),
+  runbook: join(FIXTURE, "ops", "runbook.md"),
+  slo: join(FIXTURE, "ops", "slo.json"),
+};
+for (const [type, path] of Object.entries(FIXTURES)) {
+  const r = run(["check", type, "b-proof", path]);
+  check(`the checked-in ${type} fixture passes the real CLI`,
+    r.code === 0 && r.out.includes(`compliance ok -> ${path}`), `${r.code}\n${r.out}`);
+}
+
 rmSync(SANDBOX, { recursive: true, force: true });
 console.log(`\n${pass}/${pass + fail} compliance tests passed.`);
 process.exit(fail ? 1 : 0);
