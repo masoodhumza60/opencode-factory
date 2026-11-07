@@ -2,7 +2,7 @@
   "version": 1,
   "files": {
     "scripts/factory-attest.mjs": "1786686f3839d926d9d83a58b58956f21ae8c1eee9ddf8277b80aa3392a58af2",
-    "scripts/factory-policy.mjs": "18e5eefb2a59457e2b2764cf3e3d84fcbeae227c10dc3e8bf3a0542e4d5c07ab",
+    "scripts/factory-policy.mjs": "6008a05fd7c83253bf8c230ed23813bcb6475a4e2b3bbbb4f171b4e237ca7b66",
     "scripts/factory-manifest.mjs": "03e307eecec8de7d971fb39bb6d12f62e70522428ecbb9c33c15ddbd2b5de5c2",
     "scripts/factory-phase.mjs": "2ffd532862307caaa881a9667dba717b48c979f11770a21d50e0a77938a75a88",
     "scripts/factory-review.mjs": "bc74c29073c904c0e140412b177aad8d5391f215c048f4c4f607d7205142613b"

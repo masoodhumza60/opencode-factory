@@ -34,7 +34,7 @@ const REFUSED = ["{", "}", "|", ">", "&", "*", "'", '"'];
 // only the orchestrator writes (see factory-attest's KINDS). Keeping the list
 // here - in the file that judges declarations - means attest cannot drift from
 // the policy, and a kind a profile names is always a kind an artifact can carry.
-// Thirty-four kinds. docs/factory-domain-profiles.md lists the same set for readers.
+// Thirty-nine kinds. docs/factory-domain-profiles.md lists the same set for readers.
 export const DECLARABLE_KINDS = [
   "screenshot", "transcript", "contract", "api-diff", "plan", "eval",
   "hil-log", "prr", "exit-code-matrix", "golden-file", "help-snapshot",
@@ -45,6 +45,8 @@ export const DECLARABLE_KINDS = [
   "watchdog", "recovery", "frame", "input", "data-quality",
   // M2b: design judgment and accessibility are evidence kinds now, not prose.
   "directions", "axe",
+  // M2c: security, QA and SRE artifacts are named evidence, checked for shape.
+  "threat-model", "sbom", "traceability", "runbook", "slo",
 ];
 
 const KINDS = new Set(DECLARABLE_KINDS);

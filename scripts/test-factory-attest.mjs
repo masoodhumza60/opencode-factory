@@ -37,6 +37,7 @@ const KINDS = [
   "plan-diff", "policy-check", "device", "signing", "update",
   "watchdog", "recovery", "frame", "input", "data-quality",
   "directions", "axe",
+  "threat-model", "sbom", "traceability", "runbook", "slo",
   "hidden-tests",
 ];
 
