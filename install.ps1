@@ -102,8 +102,19 @@ function Install-Plugins {
     if ($DryRun) {
         Say "[dry-run] node import probe of file:///$barePath (skipped in dry-run)"
     } else {
-        $probe = & node --input-type=module -e "import('file:///$barePath').then(()=>process.exit(0),(e)=>{console.error((e&&e.message)||e);process.exit(1)})" 2>&1
-        if ($LASTEXITCODE -ne 0) {
+        # The probe's stderr IS the signal, and Windows PowerShell under
+        # $ErrorActionPreference='Stop' turns a native command's stderr into a
+        # terminating NativeCommandError. Capture both failure shapes in the
+        # probe variable so the unloadable-plugin branch runs below, instead of
+        # aborting the whole install on an optional shim.
+        try {
+            $probe = & node --input-type=module -e "import('file:///$barePath').then(()=>process.exit(0),(e)=>{console.error((e&&e.message)||e);process.exit(1)})" 2>&1
+            $probeExit = $LASTEXITCODE
+        } catch {
+            $probe = "$_"
+            $probeExit = 1
+        }
+        if ($probeExit -ne 0) {
             SayErr 'warning: opencode-pty is installed but will not load here; skipping its plugin shim.'
             SayErr "         reason: $(($probe | Select-Object -First 1))"
             SayErr '         a shim pointing at it would fail every session start.'
