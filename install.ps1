@@ -102,8 +102,19 @@ function Install-Plugins {
     if ($DryRun) {
         Say "[dry-run] node import probe of file:///$barePath (skipped in dry-run)"
     } else {
-        $probe = & node --input-type=module -e "import('file:///$barePath').then(()=>process.exit(0),(e)=>{console.error((e&&e.message)||e);process.exit(1)})" 2>&1
-        if ($LASTEXITCODE -ne 0) {
+        # The probe's stderr IS the signal, and Windows PowerShell under
+        # $ErrorActionPreference='Stop' turns a native command's stderr into a
+        # terminating NativeCommandError. Capture both failure shapes in the
+        # probe variable so the unloadable-plugin branch runs below, instead of
+        # aborting the whole install on an optional shim.
+        try {
+            $probe = & node --input-type=module -e "import('file:///$barePath').then(()=>process.exit(0),(e)=>{console.error((e&&e.message)||e);process.exit(1)})" 2>&1
+            $probeExit = $LASTEXITCODE
+        } catch {
+            $probe = "$_"
+            $probeExit = 1
+        }
+        if ($probeExit -ne 0) {
             SayErr 'warning: opencode-pty is installed but will not load here; skipping its plugin shim.'
             SayErr "         reason: $(($probe | Select-Object -First 1))"
             SayErr '         a shim pointing at it would fail every session start.'
@@ -195,13 +206,19 @@ function Install-Skills {
     #     instead of trusting any hand-kept list.
     #   - factory-selfcheck.mjs finds factory-skills.mjs and factory-mcp.mjs via
     #     dirname(import.meta.url), so this set only works together.
+    #   - factory-phase.mjs statically imports ./factory-manifest.mjs,
+    #     ./factory-policy.mjs, ./factory-attest.mjs and ./factory-review.mjs, so
+    #     those four are the rest of its closure. Without them the installed phase
+    #     machine exits ERR_MODULE_NOT_FOUND on load, which is the failure the
+    #     "installed phase machine runs" selfcheck check exists to catch.
     #   - factory-skills.mjs resolves its default catalog to ../skills/catalog.yaml
     #     relative to itself, so the catalog ships to <skill>/skills/catalog.yaml.
     $runtimeScripts = @(
         'factory-phase.mjs', 'factory-mcp.mjs', 'factory-plan.mjs',
         'factory-skills.mjs', 'factory-selfcheck.mjs', 'platform.mjs',
         'mcp-defmatch.mjs',
-'measure.mjs'
+'measure.mjs',
+        'factory-manifest.mjs', 'factory-policy.mjs', 'factory-attest.mjs', 'factory-review.mjs'
     )
     $srcScripts = $runtimeScripts | ForEach-Object { Join-Path $bundle "scripts\$_" }
     $dstScripts = Join-Path (Split-Path $dstSk) 'scripts'
@@ -245,7 +262,7 @@ function Install-Skills {
         else {
             New-Item -ItemType Directory -Force -Path $dstScripts | Out-Null
             Copy-Item $srcScripts $dstScripts -Force
-            Say "factory runtime scripts installed -> $dstScripts ($($runtimeScripts.Count) files: phase, mcp, plan, skills, selfcheck, platform, defmatch, measure)"
+            Say "factory runtime scripts installed -> $dstScripts ($($runtimeScripts.Count) files: phase, mcp, plan, skills, selfcheck, platform, defmatch, measure, manifest, policy, attest, review)"
         }
         if (Test-Path $srcCatalog) {
             New-Item -ItemType Directory -Force -Path (Split-Path $dstCatalog) | Out-Null
@@ -379,47 +396,59 @@ function Run-Tests {
         $path = Join-Path $bundle "scripts\$t"
         if (-not (Test-Path $path)) { SayErr "warning: $path not in bundle yet; skipping."; continue }
         # Capture rather than discard: a suite that fails without showing why is
-        # almost as useless as one that cannot fail at all. Start-Process with real
-        # file redirection, because these suites run bd, and bd writes ordinary
-        # warnings to stderr - merging that into a PowerShell stream (2>&1 or *>)
-        # turns a "not a git repository" notice into a terminating error under this
-        # installer's error preferences, and the install dies on a passing suite.
-        $log = Join-Path ([IO.Path]::GetTempPath()) "factory-test-$t.log"
-        $errLog = "$log.err"
+        # almost as useless as one that cannot fail at all. bd writes ordinary
+        # warnings to stderr; inside a PowerShell job a native child's merged
+        # stderr stays data, never a terminating error record.
+        # A bounded wait stands instead of Start-Process -Wait, which hangs forever.
         # No -Wait, and a bounded wait instead. A suite that blocks forever used to
         # hang the whole installer: `Start-Process -Wait` has no timeout of its own,
         # so one stuck child (observed: a suite blocked inside bd behind a 19-day-
         # stale beads lock, using 1.97s of CPU across 17 minutes) left the installer
         # silent forever with no way to tell a slow suite from a dead one.
-        # 20 minutes is far longer than any suite legitimately needs (the phase
-        # suite is the slow one, at roughly 15) and still finite.
-        $suiteTimeoutSec = 1200
-        $proc = Start-Process -FilePath $script:NodePath -ArgumentList $path -NoNewWindow -PassThru `
-            -RedirectStandardOutput $log -RedirectStandardError $errLog
-        $deadline = (Get-Date).AddSeconds($suiteTimeoutSec)
-        $timedOut = $false
-        while (-not $proc.HasExited) {
-            if ((Get-Date) -gt $deadline) { $timedOut = $true; break }
-            Start-Sleep -Seconds 2
-            $proc.Refresh()
+        # 60 minutes is far longer than any suite legitimately needs (the phase
+        # suite is the slow one and this machine has taken longer than the old
+        # 20-minute cap to get through it) and still finite.
+        $suiteTimeoutSec = 3600
+        # Run the suite inside a PowerShell job and read the job's transcript.
+        # Windows PowerShell 5.1 mishandles a native child with both redirected
+        # streams: handler-based reads collect nothing, and an ExitCode read
+        # afterward is empty — and the parameterless WaitForExit() that was
+        # meant to flush the readers hard-terminates the host with no output
+        # at all (the installer exits with no diagnostics whatsoever). The job
+        # runspace is the supported wrapper for all three: it carries a timeout,
+        # captures stdout+stderr verbatim (including "2>&1"), and forwards the
+        # child's exit code via a sentinel line. Cost if a suite truly hangs: the
+        # job is stopped and its orphaned node child may linger (Stop-Job cannot
+        # reap a native grandchild); the alternative was the whole installer
+        # hanging forever, so the bound stands.
+        $suiteScript = {
+            param($NodePath, $SuitePath)
+            & $NodePath $SuitePath 2>&1 | Out-String
+            "__EXITCODE__=$LASTEXITCODE"
         }
-        if ($timedOut) {
-            # Kill the tree, not just the parent: these suites spawn children (the
-            # phase suite starts `factory-phase.mjs`, which runs bd). Killing only
-            # the parent orphans them and leaves the very lock files that caused the
-            # hang behind for the next run.
-            & taskkill /PID $proc.Id /T /F 2>&1 | Out-Null
-            Write-Host "--- $t exceeded ${suiteTimeoutSec}s; it was killed. Output so far: ---"
-            Get-Content $log, $errLog -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
-            Remove-Item $log, $errLog -Force -ErrorAction SilentlyContinue
+        $job = Start-Job -ScriptBlock $suiteScript -ArgumentList $script:NodePath, $path
+        $done = Wait-Job -Job $job -Timeout $suiteTimeoutSec
+        if (-not $done) {
+            Stop-Job -Job $job
+            $raw = Receive-Job -Job $job | Out-String
+            Remove-Job -Job $job -Force
+            Write-Host "--- $t exceeded ${suiteTimeoutSec}s; its job was stopped. Output so far: ---"
+            Write-Host $raw
             throw "$t did not finish within ${suiteTimeoutSec}s - the selfcheck cannot be trusted. Fix it before installing."
         }
-        if ($proc.ExitCode -ne 0) {
-            Get-Content $log, $errLog -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
-            Remove-Item $log, $errLog -Force -ErrorAction SilentlyContinue
-            throw "$t failed (exit $($proc.ExitCode)) - the selfcheck cannot be trusted. Fix it before installing."
+        $raw = Receive-Job -Job $job | Out-String
+        Remove-Job -Job $job -Force
+        if ($raw -match "(?m)^__EXITCODE__=(\d+)\s*$") {
+            $suiteExit = [int]$Matches[1]
+            $suiteOut = $raw -replace "(?m)^__EXITCODE__=\d+\s*$", ""
+        } else {
+            Write-Host $raw
+            throw "$t did not report an exit code - the selfcheck cannot be trusted. Fix it before installing."
         }
-        Remove-Item $log, $errLog -Force -ErrorAction SilentlyContinue
+        if ($suiteExit -ne 0) {
+            Write-Host $suiteOut
+            throw "$t failed (exit $suiteExit) - the selfcheck cannot be trusted. Fix it before installing."
+        }
     }
     Say 'selfcheck tests: OK (every check proven able to fail)'
 }

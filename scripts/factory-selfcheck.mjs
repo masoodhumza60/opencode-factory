@@ -174,6 +174,8 @@ ok(
 const requiredScripts = [
   "factory-phase.mjs", "factory-mcp.mjs", "factory-plan.mjs",
   "factory-skills.mjs", "factory-selfcheck.mjs", "platform.mjs",
+  "factory-manifest.mjs", "factory-policy.mjs", "factory-attest.mjs",
+  "factory-review.mjs",
 ];
 const missingScripts = requiredScripts.filter((s) => !existsSync(join(factorySkillDir, "scripts", s)));
 ok(
@@ -424,10 +426,13 @@ if (missingScripts.length === 0) {
     ? spawnSync("node " + runArgs.join(" "), { shell: true, timeout: 30000, encoding: "utf8" })
     : spawnSync("node", runArgs, { timeout: 30000, encoding: "utf8" });
   const out = `${r.stdout || ""}${r.stderr || ""}`;
-  // Exit 1 with a usage line is the healthy answer here: the script parsed, ran,
-  // and refused to guess. A syntax error or a missing import does not look
-  // like that, so the check reads the output rather than only the exit code.
-  const usable = r.status !== 0 && /usage/i.test(out) && !/SyntaxError|Cannot find module|ERR_MODULE_NOT_FOUND/.test(out);
+  // Exit 1 with a refusal to guess is the healthy answer here: the script parsed,
+  // ran, and refused for the right reason - a usage line naming the commands, or
+  // the workspace refusal (there is no .beads here or in any parent, which is the
+  // normal state of a fixture and of a live install alike). A syntax error or a
+  // missing import does not look like either, so the check reads the output rather
+  // than only the exit code.
+  const usable = r.status !== 0 && /usage|no beads workspace/i.test(out) && !/SyntaxError|Cannot find module|ERR_MODULE_NOT_FOUND/.test(out);
   ok(
     "installed phase machine runs",
     usable,

@@ -90,12 +90,13 @@ wrote; `skills.lock.json` is what this project decided it needs.
 
 ## Design judgment and runtime evidence
 
-Human surfaces can now produce two separate pieces of evidence:
+Human surfaces can now produce two separate pieces of evidence. The checkers
+for them are factory-repository tooling — the installed bundle does not carry
+them, so these commands are run from the factory repository's root (the
+repository carries these scripts; the install does not), not from an install:
 
-```
-node scripts/factory-design.mjs check <bead> .factory/<bead>/design/directions.md
-node scripts/factory-capture.mjs --fixture fixtures/testapp
-```
+    node scripts/factory-design.mjs check <bead> .factory/<bead>/design/directions.md
+    node scripts/factory-capture.mjs --fixture fixtures/testapp
 
 `factory-design` checks the **shape** of a directions artifact: it refuses a
 file with no user, no journey, fewer than two named directions, no critique or
@@ -109,7 +110,8 @@ a console error or an unreadable fixture, and it never attests. The two are
 separate because capture must be able to fail without leaving something behind
 that looks like evidence but proves nothing.
 
-`factory-compliance` is the M2c shape checker. `node scripts/factory-compliance.mjs
+`factory-compliance` is the M2c shape checker. From the factory repository's root:
+`node scripts/factory-compliance.mjs
 check <threat-model|sbom|traceability|runbook|slo> <bead> <path>` refuses a report
 with a missing or empty required section/field. It does not run a scanner, score
 severity, or decide whether a threat model, trace, runbook or SLO is adequate.

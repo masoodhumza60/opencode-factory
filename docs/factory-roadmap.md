@@ -111,11 +111,12 @@ node scripts/test-factory-policy.mjs    # 77/77 policy tests passed.
 node scripts/test-factory-attest.mjs    # 112/112 attest tests passed.
 node scripts/test-factory-review.mjs    # 83/83 review tests passed.
 node scripts/test-factory-protect.mjs   # 17/17 protect tests passed.
+node scripts/test-factory-delivery.mjs   # delivery tests passed.
 ```
 
 The capture suite prints `SKIPPED: no browser` and exits 1 if no browser is available; a skip is not a pass.
 
-The counts are kept current with the last shipped milestone (M2c); each suite's
+The counts are kept current with the last shipped milestone (M3); each suite's
 number only ever grows, so a stale count here is a doc bug, not a weaker claim.
 
 ### M1b — review and independence (shipped)
@@ -296,28 +297,53 @@ quarantine, load/rollback/restore drill, SLSA/signing, or live alert firing is c
 checks are shape gates; reviewers judge content. The example policy is data only, no profile is
 promoted to `enforced`, and no `config/factory.policy.yaml` ships here.
 
-### M3 - Real delivery (1 week)
+### M3 - Real delivery: the bundle drill (shipped)
 
-This is the milestone that separates the factory from a demo generator.
+The factory is a local, single-operator OpenCode bundle; it has no hosted
+service to deploy and no product URL to smoke-test. Real delivery therefore
+means the bundle itself delivers, as a scripted drill - backup, install,
+verify, rollback, verify, transcript - with `scripts/factory-delivery.mjs` as
+the spine:
 
-A product with several surfaces ships them in a **defined order**, not all at once. The release
-record carries a compatibility matrix: each surface, its version, the oldest contract it can still
-talk to, and whether it is live, in review or phased. Additive changes ship server-first; a
-breaking contract change needs a dated migration window agreed at G2. Mobile and desktop lag on
-purpose (store review, staged rollout, users who never update), so the API must support the oldest
-client still in the field. Rollback is per surface: redeploy, traffic shift, halt rollout, previous
-installer, revert plan.
+1. **Backup.** `HEAD` is recorded; `~/.config/opencode` and `~/.agents/skills`
+   are copied into `<backup>/opencode/` and `<backup>/agents-skills/`, with a
+   SHA256 manifest of every file at `<backup>/manifest.json`.
+2. **Install.** `install.ps1` re-installs the bundle from this repo.
+3. **Verify install.** `factory-selfcheck.mjs` must exit 0, and the installed
+   `install-manifest.json` must name this repo's HEAD as its `bundle_commit`
+   and hash-match every file it lists.
+4. **Rollback.** Every backed-up file is restored byte-identically; files not
+   in the backup manifest (install artifacts) are deleted.
+5. **Verify rollback.** Every live file is re-hashed against the backup
+   manifest and must match exactly.
+6. **Transcript.** The run writes `out/delivery/<timestamp>-drill.md`, and any
+   failure before the rollback completes restores the machine automatically
+   unless `--no-auto-rollback` was passed.
 
-1. A deploy step with a real target: environment, secrets, migrations, post-deploy smoke test against
-   the deployed URL.
-2. Rollback exercised at least once per run, not documented.
-3. Feature flags for risky changes; migration backout tested.
-4. Observability wired: structured logs, a metric, a trace, one dashboard, one alert that fires in a
-   drill.
-5. Support handoff: known-failure list and a support playbook.
+See `docs/factory-delivery.md` for how to run it and the honest ceiling.
 
-**Exit:** the ship gate requires a deployed URL and a rollback record. "It builds" is no longer
-sufficient to ship.
+- The drill proves byte-equality of two trees and the installer's own
+  invariants (`install-manifest` bundle_commit and hashes) plus a green
+  `factory-selfcheck.mjs`.
+- It changes nothing about gates, kinds, or other projects; it is a local
+  delivery drill, not a deployment pipeline.
+- The docs are never attested as evidence; the transcript is the record.
+
+**Exit:** the drill, run on this machine, prints `delivery ok` and leaves the
+machine restored to the pre-drill state. One machine, one moment - the floor,
+not the ceiling. What M3 does not prove: any other machine, any other operator,
+any cloud target, or the quality of software the factory builds.
+
+**Product projection, not the bundle, and not built.** The deploy step with a
+real target (environment, secrets, migrations, post-deploy smoke test against a
+deployed URL), rollback exercised per run, feature flags for risky changes with
+migration backout tested, observability wired (structured logs, a metric, a
+trace, one dashboard, one alert that fires in a drill), a support handoff with a
+known-failure list and playbook, and a compatibility matrix across a product's
+surfaces with per-surface rollback move with the *target product*, not with this
+bundle. They are the product projection of this milestone, not the bundle, and
+they are not built. The ship gate does not require a deployed URL; it requires
+nothing new from M3.
 
 ### M4 - Make it learn (2 weeks)
 
@@ -359,7 +385,7 @@ pointer. Anything else is deleted.
 | M1a Mechanical attestation | M0 | 4–5 d | Gives the later disciplines something to attach evidence to |
 | M1b Review and independence | M1a | 1–1.5 wk | The generator cannot grade itself |
 | M2 Disciplines | M1, project skill resolution first | 2-3 wk | The actual gap: design, security, accessibility, performance, QA, SRE |
-| M3 Real delivery | M2 (partly parallel) | 1 wk | Converts "it builds" into "it runs and can be undone" |
+| M3 Real delivery (bundle drill, shipped) | M2 (partly parallel) | 1 wk | The bundle itself delivers: backup, install, verify, rollback — one machine, one moment |
 | M4 Learning loop | M1, M3 | 2 wk | Makes the factory improve rather than repeat |
 | M5 Distribution | M0-M1 | 1 wk, parallel | Without it there is no second user |
 | M6 Conductor cut | M2 | 3 d | Subtracts only after the checks exist elsewhere |

@@ -95,9 +95,11 @@ Both installers run the same steps in the same order:
 6. **Install the factory skill** — copy `skills/factory/SKILL.md` to
    `~/.agents/skills/factory/`, plus `docs/conductor.md`,
    `docs/how-factory-works.md`, `docs/plan-format.md` and `docs/discovery.md`
-   to `~/.agents/skills/factory/docs/`, plus the six runtime scripts
-   (`factory-phase.mjs`, `factory-mcp.mjs`, `factory-plan.mjs`,
-   `factory-skills.mjs`, `factory-selfcheck.mjs`, `platform.mjs`) to
+    to `~/.agents/skills/factory/docs/`, plus the twelve runtime scripts
+    (`factory-phase.mjs`, `factory-mcp.mjs`, `factory-plan.mjs`,
+    `factory-skills.mjs`, `factory-selfcheck.mjs`, `platform.mjs`,
+    `mcp-defmatch.mjs`, `measure.mjs`, `factory-manifest.mjs`,
+    `factory-policy.mjs`, `factory-attest.mjs`, `factory-review.mjs`) to
    `~/.agents/skills/factory/scripts/` and `skills/catalog.yaml` to
    `~/.agents/skills/factory/skills/catalog.yaml`. The installed skill is
    self-contained: its `docs/` subdir ships every document the conductor and the
@@ -299,6 +301,32 @@ Failure output says `N check(s) failed. Re-run install.ps1/install.sh.`
 | `factory runtime scripts deployed` FAILs | The installed docs name commands the install does not contain. Re-run the installer. This check exists because the absence was invisible: the old install shipped `SKILL.md` + `docs/` only, and every one of those documents tells the agent to run `factory-phase.mjs`. |
 | `skills catalog deployed` FAILs | `~/.agents/skills/factory/skills/catalog.yaml` is absent. `factory-skills.mjs` resolves its default catalog to `../skills/catalog.yaml` relative to itself, so it must sit beside `scripts/`, not inside it. Re-run the installer. |
 | `installed phase machine runs` FAILs | The scripts are present but did not execute — a truncated copy, a syntax error, or a missing sibling import. The check runs the **installed** copy rather than trusting its presence, so a file that landed broken is caught here instead of at phase 1. |
+
+## Rollback / re-installing the factory
+
+The installer overwrites files in `~/.config/opencode` and `~/.agents/skills`,
+and there is no uninstaller — restore from a backup instead.
+
+- **Before re-installing**, back up `~/.config/opencode` and `~/.agents/skills`.
+  The drill does this for you: given `--backup <dir>` it copies
+  `.config/opencode` to `<dir>/opencode/` and `.agents/skills` to
+  `<dir>/agents-skills/`, and writes `<dir>/manifest.json` — a SHA256 + size
+  entry per file, keyed by root-relative path (`opencode/<path>`,
+  `agents-skills/<path>`), plus the repo HEAD that was backed up.
+- The repository has a scripted drill that takes the backup, re-installs,
+  verifies (selfcheck + install-manifest), then restores the backup and
+  verifies byte-equality: `node scripts/factory-delivery.mjs drill --backup <dir>`.
+  See `docs/factory-delivery.md`.
+- **Manual restore**: stop OpenCode sessions, copy `<dir>/opencode/` back over
+  `~/.config/opencode` and `<dir>/agents-skills/` back over `~/.agents/skills`,
+  and remove any live files under those two roots that are not in
+  `<dir>/manifest.json` — those were created by the install. Empty directories
+  left behind can be pruned; the roots themselves stay.
+- **Check your work**: `verifyRollback(home, backup)` in
+  `scripts/factory-delivery.mjs` re-hashes every live file against the backup
+  manifest and reports anything missing, modified, or not in the manifest.
+  The drill runs it for you; it is exported so a manual restore can be checked
+  the same way.
 
 ## Reference — paths
 

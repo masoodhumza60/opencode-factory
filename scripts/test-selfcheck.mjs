@@ -270,7 +270,7 @@ try {
     // Now a complete install: the real scripts, so the phase machine can run.
     mkdirSync(join(dir, "scripts"), { recursive: true });
     mkdirSync(join(dir, "skills"), { recursive: true });
-    const RUNTIME = ["factory-phase.mjs", "factory-mcp.mjs", "factory-plan.mjs", "factory-skills.mjs", "factory-selfcheck.mjs", "platform.mjs"];
+    const RUNTIME = ["factory-phase.mjs", "factory-mcp.mjs", "factory-plan.mjs", "factory-skills.mjs", "factory-selfcheck.mjs", "platform.mjs", "factory-manifest.mjs", "factory-policy.mjs", "factory-attest.mjs", "factory-review.mjs"];
     for (const s of RUNTIME) copyFileSync(join(BUNDLE, "scripts", s), join(dir, "scripts", s));
     copyFileSync(join(BUNDLE, "skills", "catalog.yaml"), join(dir, "skills", "catalog.yaml"));
     const complete = runSelfcheck([], { env: { USERPROFILE: home, HOME: home } });
@@ -441,7 +441,7 @@ try {
     for (const d of ["conductor.md", "how-factory-works.md", "plan-format.md", "discovery.md", "mcp-judging.md"]) {
       writeFileSync(join(dir, "docs", d), "# fixture\n", "utf8");
     }
-    for (const f of ["factory-phase.mjs", "factory-mcp.mjs", "factory-plan.mjs", "factory-skills.mjs", "factory-selfcheck.mjs", "platform.mjs"]) {
+    for (const f of ["factory-phase.mjs", "factory-mcp.mjs", "factory-plan.mjs", "factory-skills.mjs", "factory-selfcheck.mjs", "platform.mjs", "factory-manifest.mjs", "factory-policy.mjs", "factory-attest.mjs", "factory-review.mjs"]) {
       copyFileSync(join(BUNDLE, "scripts", f), join(dir, "scripts", f));
     }
     copyFileSync(join(BUNDLE, "skills", "catalog.yaml"), join(dir, "skills", "catalog.yaml"));
