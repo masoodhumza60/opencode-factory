@@ -151,6 +151,38 @@ console.log("\ninstall verification");
   check("a manifest hash mismatch refuses", !v4.ok && v4.problems.some(p => /SKILL\.md/i.test(p)));
 }
 
+// -- default selfcheck (runs the installed copy, not the repo's) --------------
+console.log("\ndefault selfcheck");
+{
+  const home = fakeHome({
+    opencode: { "opencode.json": "{}" },
+    skills: {
+      "factory/SKILL.md": "skill",
+      "factory/scripts/factory-selfcheck.mjs": "process.exit(1);",
+      "factory/install-manifest.json": JSON.stringify({ bundle_commit: "abc1234", files: {} }),
+    },
+  });
+  const m = backupRoots(home, fakeBackupDir(), "abc1234");
+  const v = verifyInstall(home, m); // no selfcheck param — must run the installed copy
+  check("the default selfcheck runs the installed copy and refuses on non-zero",
+    !v.ok && v.problems.some(p => /selfcheck|exited 1/i.test(p)),
+    v.problems.join(" | "));
+  // fresh home for the exit-0 state
+  const home2 = fakeHome({
+    opencode: { "opencode.json": "{}" },
+    skills: {
+      "factory/SKILL.md": "skill",
+      "factory/scripts/factory-selfcheck.mjs": "process.exit(0);",
+      "factory/install-manifest.json": JSON.stringify({ bundle_commit: "abc1234", files: {} }),
+    },
+  });
+  const m2 = backupRoots(home2, fakeBackupDir(), "abc1234");
+  const v2 = verifyInstall(home2, m2);
+  check("the default selfcheck passes on exit 0",
+    v2.ok && !v2.problems.some(p => /factory-selfcheck|failed to run/i.test(p)),
+    v2.problems.join(" | "));
+}
+
 // -- the drill end to end (sandboxed) ---------------------------------------
 console.log("\ndrill end to end");
 {

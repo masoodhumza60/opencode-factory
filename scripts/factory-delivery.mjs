@@ -71,10 +71,15 @@ export function readManifest(backup) {
   return JSON.parse(readFileSync(p, "utf8"));
 }
 
-export function verifyInstall(home, manifest, { selfcheck = runSelfcheck } = {}) {
+export function verifyInstall(home, manifest, { selfcheck } = {}) {
   const problems = [];
-  const code = selfcheck();
-  if (code !== 0) problems.push(`factory-selfcheck.mjs exited ${code}: the install is not healthy`);
+  const run = selfcheck ?? (() => runSelfcheck(home));
+  try {
+    const code = run();
+    if (code !== 0) problems.push(`factory-selfcheck.mjs exited ${code}: the install is not healthy`);
+  } catch (e) {
+    problems.push(`factory-selfcheck.mjs failed to run: ${e.message}`);
+  }
   const mPath = join(home, ".agents", "skills", "factory", "install-manifest.json");
   if (!existsSync(mPath)) {
     problems.push(`${mPath} does not exist: the installer did not write an install manifest`);
@@ -99,9 +104,11 @@ export function verifyInstall(home, manifest, { selfcheck = runSelfcheck } = {})
   return { ok: problems.length === 0, problems };
 }
 
-function runSelfcheck() {
-  const r = spawnSync(process.execPath, [join(REPO_ROOT, "scripts", "factory-selfcheck.mjs")],
-    { cwd: REPO_ROOT, encoding: "utf8", timeout: 20 * 60 * 1000 });
+function runSelfcheck(home) {
+  const p = join(home, ".agents", "skills", "factory", "scripts", "factory-selfcheck.mjs");
+  if (!existsSync(p)) throw new Error(`${p} does not exist: the installed bundle is missing scripts/factory-selfcheck.mjs`);
+  const r = spawnSync(process.execPath, [p, "--home", home],
+    { cwd: home, encoding: "utf8", timeout: 20 * 60 * 1000 });
   return r.status ?? 1;
 }
 
