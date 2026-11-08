@@ -4,7 +4,7 @@
 // this repo, proves the install, and rolls the machine back either way. It is
 // unpinned on purpose: it orchestrates, it does not grade. It never attests.
 import { existsSync, statSync, mkdirSync, cpSync, readdirSync, readFileSync, createReadStream, writeFileSync, rmSync, truncateSync } from "node:fs";
-import { join, relative, dirname } from "node:path";
+import { join, relative, dirname, isAbsolute } from "node:path";
 import { createHash } from "node:crypto";
 import { homedir, userInfo } from "node:os";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -36,7 +36,70 @@ function walkFiles(root) {
   return out;
 }
 
+// Every directory under root (never root itself), as absolute paths.
+function walkDirs(root) {
+  if (!existsSync(root)) return [];
+  const out = [];
+  const stack = [root];
+  while (stack.length) {
+    const dir = stack.pop();
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const full = join(dir, entry.name);
+      out.push(full);
+      stack.push(full);
+    }
+  }
+  return out;
+}
+
+// true when child is inside parent, or the two are the same path — resolved,
+// separator-aware, not a string prefix match.
+function isInsideOrEqual(child, parent) {
+  const rel = relative(parent, child);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+// Pre-flight guard for --backup. Pure: touches nothing on disk. Returns the
+// resolved absolute backup path so the caller can use it for everything else.
+export function checkBackupPlacement(home, backup) {
+  const homeAbs = resolve(home);
+  const backupAbs = resolve(backup);
+  const problems = [];
+  for (const root of ROOTS) {
+    const rootAbs = resolve(join(homeAbs, root));
+    if (isInsideOrEqual(backupAbs, rootAbs)) {
+      problems.push(`backup directory ${backupAbs} is inside or equal to ${rootAbs}: choose a directory outside the install roots`);
+    }
+  }
+  if (isInsideOrEqual(backupAbs, homeAbs) && problems.length === 0) {
+    problems.push(`backup directory ${backupAbs} is inside the home being drilled (${homeAbs}): choose a directory outside the home`);
+  }
+  if (isInsideOrEqual(homeAbs, backupAbs)) {
+    problems.push(`the home being drilled (${homeAbs}) is inside the backup directory (${backupAbs}): choose a backup directory outside the home`);
+  }
+  if (existsSync(backupAbs)) {
+    const st = statSync(backupAbs);
+    if (!st.isDirectory()) {
+      problems.push(`backup path ${backupAbs} exists and is not a directory: choose an empty or non-existent backup directory`);
+    } else {
+      const entries = readdirSync(backupAbs);
+      if (entries.length > 0) {
+        const shown = entries.slice(0, 12).join(", ");
+        const more = entries.length - 12;
+        problems.push(`backup directory ${backupAbs} is not empty: found ${shown}${more > 0 ? `, … and ${more} more` : ""}: a reused backup would manifest stale files into the live home — choose an empty or non-existent directory`);
+      }
+    }
+  }
+  return { ok: problems.length === 0, problems, backupAbs };
+}
+
 export function backupRoots(home, backup, head = gitHead()) {
+  // Refuse before touching anything if the backup is badly placed or reused —
+  // a reused backup would manifest stale files into the live home.
+  const placement = checkBackupPlacement(home, backup);
+  if (!placement.ok) throw new Error(placement.problems.join(" | "));
+  backup = placement.backupAbs;
   // Refuse before touching anything if a root is missing — an empty backup is not a backup.
   for (const root of ROOTS) {
     const src = join(home, root);
@@ -46,6 +109,16 @@ export function backupRoots(home, backup, head = gitHead()) {
   }
   mkdirSync(backup, { recursive: true });
   const files = {};
+  // Record the empty directories that already exist under the two roots. The
+  // rollback may prune only directories it emptied or the install created —
+  // never a pre-existing empty directory.
+  const dirs = [];
+  for (const root of ROOTS) {
+    const src = join(home, root);
+    for (const d of walkDirs(src)) {
+      try { if (readdirSync(d).length === 0) dirs.push(resolve(d)); } catch { /* unreadable dir: not ours to judge */ }
+    }
+  }
   for (const root of ROOTS) {
     const src = join(home, root);
     const dst = join(backup, ROOT_PREFIX[root]);
@@ -55,7 +128,7 @@ export function backupRoots(home, backup, head = gitHead()) {
       files[rel] = { sha256: sha256File(f), size: statSync(f).size };
     }
   }
-  const manifest = { head, created_at: new Date().toISOString(), home, roots: ROOTS, files };
+  const manifest = { head, created_at: new Date().toISOString(), home, roots: ROOTS, files, dirs };
   writeFileSync(join(backup, "manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
   return manifest;
 }
@@ -117,6 +190,8 @@ function runSelfcheck(home) {
 export function restoreBackup(home, backup) {
   const manifest = readManifest(backup);
   let restored = 0, removed = 0, pruned = 0;
+  // Directories that were already empty before the drill ran: never pruned.
+  const preExistingEmpty = new Set((manifest.dirs ?? []).map((d) => resolve(d)));
   // 1) every backed-up file goes back, overwriting whatever is there now
   for (const rel of Object.keys(manifest.files)) {
     const src = join(backup, rel);
@@ -134,19 +209,19 @@ export function restoreBackup(home, backup) {
         : `agents-skills/${relative(liveRoot, f).replace(/\\/g, "/")}`;
       if (!manifest.files[rel]) { rmSync(f, { force: true }); removed += 1; }
     }
-    pruned += pruneEmptyDirs(liveRoot);
+    pruned += pruneEmptyDirs(liveRoot, preExistingEmpty);
   }
   return { restored, removed, pruned };
 }
 
-function pruneEmptyDirs(root) {
+function pruneEmptyDirs(root, keep = new Set()) {
   let count = 0;
   const walk = (dir) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       if (entry.isDirectory()) {
         const full = join(dir, entry.name);
         walk(full);
-        if (readdirSync(full).length === 0) { rmSync(full, { recursive: true, force: true }); count += 1; }
+        if (readdirSync(full).length === 0 && !keep.has(resolve(full))) { rmSync(full, { recursive: true, force: true }); count += 1; }
       }
     }
   };
@@ -178,9 +253,9 @@ export function drill({ home = homedir(), backup, noAutoRollback = false, selfch
   const transcriptPath = join(REPO_ROOT, "out", "delivery", transcriptName);
   const lines = [];
   const log = (line) => { lines.push(line); console.log(line); };
-  mkdirSync(dirname(transcriptPath), { recursive: true });
   const finish = (ok, code, extra = []) => {
     lines.push("", ...extra);
+    mkdirSync(dirname(transcriptPath), { recursive: true });
     writeFileSync(transcriptPath, lines.join("\n") + "\n", "utf8");
     return { ok, code, transcript: transcriptPath };
   };
@@ -197,6 +272,16 @@ export function drill({ home = homedir(), backup, noAutoRollback = false, selfch
     }
   };
   if (!backup) return finish(false, 1, ["usage: no --backup directory given"]);
+  // Pre-flight: refuse a badly placed or reused backup before writing anything
+  // — no transcript, no directory, no mutation.
+  const placement = checkBackupPlacement(home, backup);
+  if (!placement.ok) {
+    const msg = `refusing to run: ${placement.problems.join(" | ")}`;
+    console.error(msg);
+    return { ok: false, code: 1, transcript: null, problems: placement.problems };
+  }
+  backup = placement.backupAbs;
+  home = resolve(home);
   try {
     const resolvedHead = head ?? gitHead();
     log(`# factory delivery drill — ${new Date().toISOString()}`);

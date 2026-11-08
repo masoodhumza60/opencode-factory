@@ -2,13 +2,13 @@
 // The drill must be proven on a sandbox, never on the real machine. This suite
 // creates a fake $HOME, runs every step against it, forces failures, and checks
 // that the fake home is byte-identical afterwards.
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, copyFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, copyFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative, dirname } from "node:path";
+import { join, relative, dirname, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
-  drill, backupRoots, verifyInstall, restoreBackup, verifyRollback,
+  drill, backupRoots, verifyInstall, restoreBackup, verifyRollback, checkBackupPlacement,
 } from "./factory-delivery.mjs";
 
 let pass = 0, fail = 0;
@@ -73,6 +73,41 @@ console.log("backup and manifest");
   try { backupRoots(home, backup, "head"); } catch (e) { threw = /\.config[\/\\]opencode|missing/i.test(String(e.message)); }
   check("a missing .config/opencode root refuses by name", threw);
   check("the refusal wrote no manifest", !existsSync(join(backup, "manifest.json")));
+}
+
+// -- pre-existing empty directories are recorded, never pruned --------------
+console.log("\npre-existing empty directories");
+{
+  const home = fakeHome({ opencode: { "opencode.json": "{}" }, skills: { "factory/SKILL.md": "skill" } });
+  mkdirSync(join(home, ".agents", "skills", "preexisting-empty", "nested"), { recursive: true });
+  mkdirSync(join(home, ".config", "opencode", "plugins-empty"), { recursive: true });
+  const m = backupRoots(home, fakeBackupDir(), "head");
+  check("the backup manifest records pre-existing empty dirs, resolved absolute",
+    Array.isArray(m.dirs)
+      && m.dirs.includes(resolve(join(home, ".agents", "skills", "preexisting-empty", "nested")))
+      && m.dirs.includes(resolve(join(home, ".config", "opencode", "plugins-empty"))),
+    JSON.stringify(m.dirs));
+  check("a non-empty pre-existing dir is NOT recorded as an empty one",
+    Array.isArray(m.dirs) && !m.dirs.includes(resolve(join(home, ".agents", "skills", "preexisting-empty"))),
+    JSON.stringify(m.dirs));
+  check("non-empty directories are not recorded as pre-existing empties",
+    Array.isArray(m.dirs) && !m.dirs.includes(resolve(join(home, ".agents", "skills"))));
+
+  // a full drill: the install creates an empty dir; rollback must prune it and keep ours
+  const home2 = fakeHome({
+    opencode: { "opencode.json": "{}" },
+    skills: {
+      "factory/SKILL.md": "skill",
+      "factory/install-manifest.json": JSON.stringify({ bundle_commit: "abc1234", files: {} }),
+    },
+  });
+  mkdirSync(join(home2, ".agents", "skills", "preexisting-empty", "nested"), { recursive: true });
+  const installCreatesEmptyDir = () => { mkdirSync(join(home2, ".agents", "skills", "install-created-empty"), { recursive: true }); };
+  const r = drill({ home: home2, backup: fakeBackupDir(), selfcheck: () => 0, install: installCreatesEmptyDir, head: "abc1234" });
+  check("the drill passes with pre-existing empty dirs in the home", r.ok && r.code === 0, JSON.stringify(r));
+  check("pre-existing empty dir survives rollback", existsSync(join(home2, ".agents", "skills", "preexisting-empty")));
+  check("pre-existing nested empty dir survives rollback", existsSync(join(home2, ".agents", "skills", "preexisting-empty", "nested")));
+  check("install-created empty dir is pruned by rollback", !existsSync(join(home2, ".agents", "skills", "install-created-empty")));
 }
 
 // -- rollback restore --------------------------------------------------------
@@ -241,6 +276,116 @@ console.log("\ndrill end to end");
   check("an auto-rollback failure exits non-zero", !r5.ok && r5.code === 1);
   check("the transcript names the restore failure",
     readFileSync(r5.transcript, "utf8").includes("AUTO-ROLLBACK FAILED"));
+}
+
+// -- backup placement refusals -----------------------------------------------
+console.log("\nbackup placement refusals");
+{
+  // fresh empty backup OK to proceed
+  const home = fakeHome({ opencode: { "opencode.json": "{}" }, skills: { "factory/SKILL.md": "skill" } });
+  const emptyBackup = fakeBackupDir(); // exists, empty
+  let installRan = false;
+  const okDrill = drill({
+    home,
+    backup: emptyBackup,
+    selfcheck: () => 0,
+    install: () => { installRan = true;
+      writeFileSync(join(home, ".agents", "skills", "factory", "install-manifest.json"), JSON.stringify({ bundle_commit: "abc1234", files: {} })); },
+    head: "abc1234",
+  });
+  check("a fresh empty backup directory proceeds", okDrill.ok && okDrill.code === 0 && installRan, JSON.stringify(okDrill));
+  check("the empty-backup run wrote a manifest into the backup", existsSync(join(emptyBackup, "manifest.json")));
+
+  // a string-prefix sibling of the home is NOT nested and must be allowed
+  const p = checkBackupPlacement(home, join(SANDBOX, "home-evil-sibling"));
+  check("a backup whose name merely shares a prefix with home is not refused", p.ok, p.problems.join(" | "));
+
+  // nested under .config/opencode (empty, non-existent) — refused, not created
+  const nestedBackup = join(home, ".config", "opencode", "drill-backup");
+  installRan = false;
+  const r1 = drill({ home, backup: nestedBackup, selfcheck: () => 0, install: () => { installRan = true; }, head: "abc1234" });
+  check("a backup nested under .config/opencode is refused (exit 1)", !r1.ok && r1.code === 1, JSON.stringify({ ok: r1.ok, code: r1.code }));
+  check("the nested refusal names the root it collides with", (r1.problems ?? []).some(x => /inside or equal/.test(x) && x.includes(".config")), JSON.stringify(r1.problems));
+  check("the nested refusal created nothing and ran no install", !existsSync(nestedBackup) && !installRan);
+
+  // nested deep under .agents/skills, path does not exist yet — still refused
+  const deepNested = join(home, ".agents", "skills", "a", "b");
+  const r2 = drill({ home, backup: deepNested, selfcheck: () => 0, install: () => {}, head: "abc1234" });
+  check("a deep non-existent backup nested under .agents/skills is refused", r2.code === 1 && (r2.problems ?? []).some(x => /inside or equal/.test(x)), JSON.stringify(r2.problems));
+  check("the deep nested refusal created nothing", !existsSync(deepNested));
+
+  // backup equal to a root — refused
+  const r3 = drill({ home, backup: join(home, ".agents", "skills"), selfcheck: () => 0, install: () => {}, head: "abc1234" });
+  check("a backup equal to an install root is refused", r3.code === 1 && (r3.problems ?? []).some(x => /inside or equal/.test(x)), JSON.stringify(r3.problems));
+
+  // backup under home but outside the two roots — refused (backup inside the tree it snapshots)
+  const underHome = join(home, "my-backup");
+  const r4 = drill({ home, backup: underHome, selfcheck: () => 0, install: () => {}, head: "abc1234" });
+  check("a backup inside the home being drilled is refused", r4.code === 1 && (r4.problems ?? []).some(x => /inside the home/.test(x)), JSON.stringify(r4.problems));
+  check("the under-home refusal created nothing", !existsSync(underHome));
+
+  // the home inside the backup dir — refused
+  const bigBackup = join(SANDBOX, "big-backup");
+  const nestedHome = join(bigBackup, "home");
+  mkdirSync(join(nestedHome, ".config", "opencode"), { recursive: true });
+  mkdirSync(join(nestedHome, ".agents", "skills"), { recursive: true });
+  writeFileSync(join(nestedHome, ".config", "opencode", "opencode.json"), "{}");
+  const r5 = drill({ home: nestedHome, backup: bigBackup, selfcheck: () => 0, install: () => {}, head: "abc1234" });
+  check("a home nested inside the backup dir is refused", r5.code === 1 && (r5.problems ?? []).some(x => /inside the backup directory/.test(x)), JSON.stringify(r5.problems));
+  check("the home-inside-backup refusal created no backup", !existsSync(join(bigBackup, "manifest.json")) && readdirSync(bigBackup).length === 1);
+
+  // non-empty reuse refused, listing what was found — stale files must not be re-manifested
+  const reused = fakeBackupDir();
+  writeFileSync(join(reused, "stale.txt"), "stale");
+  const home3 = fakeHome({ opencode: { "opencode.json": "{}" }, skills: { "factory/SKILL.md": "skill" } });
+  installRan = false;
+  const r6 = drill({ home: home3, backup: reused, selfcheck: () => 0, install: () => { installRan = true; }, head: "abc1234" });
+  check("a non-empty existing backup directory is refused (exit 1)", !r6.ok && r6.code === 1, JSON.stringify({ ok: r6.ok, code: r6.code }));
+  check("the non-empty refusal lists what was found", (r6.problems ?? []).some(x => /not empty/.test(x) && x.includes("stale.txt")), JSON.stringify(r6.problems));
+  check("the non-empty refusal touched neither home nor backup", !installRan && existsSync(join(reused, "stale.txt")) && readFileSync(join(home3, ".config", "opencode", "opencode.json"), "utf8") === "{}");
+  let threw = null;
+  try { backupRoots(home3, reused, "abc1234"); } catch (e) { threw = String(e.message); }
+  check("backupRoots also refuses the reused backup directory directly", !!threw && /not empty/.test(threw), String(threw));
+
+  // backup path exists as a file — refused
+  const fileBackup = join(SANDBOX, "backup-as-file");
+  writeFileSync(fileBackup, "x");
+  const r7 = drill({ home: home3, backup: fileBackup, selfcheck: () => 0, install: () => {}, head: "abc1234" });
+  check("a backup path that is a file is refused", r7.code === 1 && (r7.problems ?? []).some(x => /not a directory/.test(x)), JSON.stringify(r7.problems));
+
+  // CLI: nested backup exits 1 and says why on stderr
+  const home4b = fakeHome({ opencode: { "opencode.json": "{}" }, skills: { "factory/SKILL.md": "skill" } });
+  const nestedCli = join(home4b, ".config", "opencode", "cli-backup");
+  const CLI = join(dirname(fileURLToPath(import.meta.url)), "factory-delivery.mjs");
+  const cli = spawnSync(process.execPath, [CLI, "drill", "--home", home4b, "--backup", nestedCli], { encoding: "utf8" });
+  check("CLI refuses a nested backup with exit 1 and a clear message",
+    cli.status === 1 && /refusing to run/.test(cli.stderr) && /inside or equal/.test(cli.stderr),
+    `status=${cli.status} stderr=${cli.stderr}`);
+  check("the CLI refusal created nothing", !existsSync(nestedCli));
+}
+
+// -- install exits 0 but fails verification: drill must roll back -----------
+console.log("\ninstall exits 0 but verification fails");
+{
+  const home = fakeHome({
+    opencode: { "opencode.json": "{}" },
+    skills: { "factory/SKILL.md": "skill" },
+  });
+  const backup = fakeBackupDir();
+  // a fake "successful" install: exits 0, but records a WRONG bundle_commit
+  const fakeInstall = () => {
+    writeFileSync(join(home, ".config", "opencode", "opencode.json"), '{"plugins":["x"]}\n');
+    writeFileSync(join(home, ".agents", "skills", "factory", "install-manifest.json"),
+      JSON.stringify({ bundle_commit: "0000000", files: {} }));
+  };
+  const r = drill({ home, backup, selfcheck: () => 0, install: fakeInstall, head: "abc1234" });
+  check("install exits 0 but records the wrong bundle_commit -> drill fails", !r.ok && r.code === 1, JSON.stringify(r));
+  check("the transcript names the bundle_commit mismatch",
+    typeof r.transcript === "string" && readFileSync(r.transcript, "utf8").includes("bundle_commit"));
+  const m = verifyRollback(home, backup);
+  check("auto-rollback restored the fake home", m.ok, m.problems.join(" | "));
+  check("the fake home is byte-identical after the failed drill",
+    readFileSync(join(home, ".config", "opencode", "opencode.json"), "utf8") === "{}");
 }
 
 // -- CLI ---------------------------------------------------------------------
