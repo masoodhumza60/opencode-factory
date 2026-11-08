@@ -322,11 +322,12 @@ and there is no uninstaller — restore from a backup instead.
   and remove any live files under those two roots that are not in
   `<dir>/manifest.json` — those were created by the install. Empty directories
   left behind can be pruned; the roots themselves stay.
-- **Check your work**: `verifyRollback(home, backup)` in
-  `scripts/factory-delivery.mjs` re-hashes every live file against the backup
-  manifest and reports anything missing, modified, or not in the manifest.
-  The drill runs it for you; it is exported so a manual restore can be checked
-  the same way.
+- **Check your work**: the drill's last step verifies the restore by hashing
+  every backed-up file, checking sizes, and reporting any live file the backup
+  manifest does not name (`verifyRollback` in `scripts/factory-delivery.mjs`).
+  It is a library export the drill calls, not a command you can run — there is
+  deliberately no CLI for it. After a manual restore there is no automated
+  check; `<dir>/manifest.json` is the reference to compare against by hand.
 
 ## Reference — paths
 

@@ -189,11 +189,26 @@ console.log("\ninstall verification");
 // -- default selfcheck (runs the installed copy, not the repo's) --------------
 console.log("\ndefault selfcheck");
 {
+  // The fake installed selfcheck records how it was spawned (argv, cwd), so
+  // the default path is proven, not assumed: the wrong script or a dropped
+  // --home would still "pass on exit 0" without this.
+  const spawnRecorder = (code) => `
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+const i = process.argv.indexOf("--home");
+const home = process.argv[i + 1];
+writeFileSync(join(home, "selfcheck-spawn.json"), JSON.stringify({
+  script: process.argv[1],
+  args: process.argv.slice(2),
+  cwd: process.cwd(),
+}));
+process.exit(${code});
+`;
   const home = fakeHome({
     opencode: { "opencode.json": "{}" },
     skills: {
       "factory/SKILL.md": "skill",
-      "factory/scripts/factory-selfcheck.mjs": "process.exit(1);",
+      "factory/scripts/factory-selfcheck.mjs": spawnRecorder(1),
       "factory/install-manifest.json": JSON.stringify({ bundle_commit: "abc1234", files: {} }),
     },
   });
@@ -202,12 +217,19 @@ console.log("\ndefault selfcheck");
   check("the default selfcheck runs the installed copy and refuses on non-zero",
     !v.ok && v.problems.some(p => /selfcheck|exited 1/i.test(p)),
     v.problems.join(" | "));
+  const spawn = JSON.parse(readFileSync(join(home, "selfcheck-spawn.json"), "utf8"));
+  check("the default selfcheck spawned the INSTALLED copy, not the repo's",
+    spawn.script === join(home, ".agents", "skills", "factory", "scripts", "factory-selfcheck.mjs"),
+    `script: ${spawn.script}`);
+  check("the default selfcheck passed --home <home> and ran with cwd = home",
+    spawn.args.join(" ") === `--home ${home}` && spawn.cwd === home,
+    `args: ${spawn.args.join(" ")}; cwd: ${spawn.cwd}`);
   // fresh home for the exit-0 state
   const home2 = fakeHome({
     opencode: { "opencode.json": "{}" },
     skills: {
       "factory/SKILL.md": "skill",
-      "factory/scripts/factory-selfcheck.mjs": "process.exit(0);",
+      "factory/scripts/factory-selfcheck.mjs": spawnRecorder(0),
       "factory/install-manifest.json": JSON.stringify({ bundle_commit: "abc1234", files: {} }),
     },
   });
@@ -216,6 +238,32 @@ console.log("\ndefault selfcheck");
   check("the default selfcheck passes on exit 0",
     v2.ok && !v2.problems.some(p => /factory-selfcheck|failed to run/i.test(p)),
     v2.problems.join(" | "));
+  // a home with no installed selfcheck at all refuses, naming the missing script
+  const home3 = fakeHome({
+    opencode: { "opencode.json": "{}" },
+    skills: {
+      "factory/SKILL.md": "skill",
+      "factory/install-manifest.json": JSON.stringify({ bundle_commit: "abc1234", files: {} }),
+    },
+  });
+  const m3 = backupRoots(home3, fakeBackupDir(), "abc1234");
+  const v3 = verifyInstall(home3, m3);
+  check("a home with no installed selfcheck refuses naming the missing script",
+    !v3.ok && v3.problems.some(p => /failed to run/i.test(p) && /does not exist/i.test(p)),
+    v3.problems.join(" | "));
+  // an injected selfcheck that throws is a refusal, not a crash
+  const home4x = fakeHome({
+    opencode: { "opencode.json": "{}" },
+    skills: {
+      "factory/SKILL.md": "skill",
+      "factory/install-manifest.json": JSON.stringify({ bundle_commit: "abc1234", files: {} }),
+    },
+  });
+  const m4x = backupRoots(home4x, fakeBackupDir(), "abc1234");
+  const v4x = verifyInstall(home4x, m4x, { selfcheck: () => { throw new Error("boom"); } });
+  check("an injected selfcheck that throws refuses as failed-to-run",
+    !v4x.ok && v4x.problems.some(p => /failed to run/i.test(p) && /boom/.test(p)),
+    v4x.problems.join(" | "));
 }
 
 // -- the drill end to end (sandboxed) ---------------------------------------
@@ -225,6 +273,7 @@ console.log("\ndrill end to end");
     opencode: { "opencode.json": "{}" },
     skills: {
       "factory/SKILL.md": "skill",
+      "factory/scripts/factory-selfcheck.mjs": "process.exit(0);",
       "factory/install-manifest.json": JSON.stringify({
         bundle_commit: "abc1234",
         files: { "factory/SKILL.md": { hash: "", src: "skills/factory/SKILL.md" } },
@@ -238,7 +287,8 @@ console.log("\ndrill end to end");
     writeFileSync(join(home, ".agents", "skills", "factory", "install-manifest.json"),
       JSON.stringify({ bundle_commit: "abc1234", files: {} }));
   };
-  const r = drill({ home, backup, selfcheck: () => 0, install: fakeInstall, head: "abc1234" });
+  // no selfcheck injection: the drill must exercise the default installed-selfcheck path
+  const r = drill({ home, backup, install: fakeInstall, head: "abc1234" });
   check("a passing drill exits ok", r.ok && r.code === 0, JSON.stringify(r));
   check("the drill wrote a transcript", existsSync(r.transcript));
   const m = verifyRollback(home, backup);
@@ -386,6 +436,22 @@ console.log("\ninstall exits 0 but verification fails");
   check("auto-rollback restored the fake home", m.ok, m.problems.join(" | "));
   check("the fake home is byte-identical after the failed drill",
     readFileSync(join(home, ".config", "opencode", "opencode.json"), "utf8") === "{}");
+}
+
+// -- a drill that dies before any backup is written ---------------------------
+console.log("\na drill that dies inside backupRoots");
+{
+  const home = join(SANDBOX, "broken-empty-home"); // exists, but no .config/opencode
+  rmSync(home, { recursive: true, force: true });
+  mkdirSync(home, { recursive: true });
+  let installRan = false;
+  const r = drill({ home, backup: fakeBackupDir(), selfcheck: () => 0,
+    install: () => { installRan = true; }, head: "abc1234" });
+  check("the drill exits non-zero and never runs the install", !r.ok && r.code === 1 && !installRan);
+  const t = readFileSync(r.transcript, "utf8");
+  check("the transcript says no backup was written, never 'half-restored'",
+    t.includes("no backup was written") && !t.includes("half-restored") && !t.includes("AUTO-ROLLBACK FAILED"),
+    t);
 }
 
 // -- CLI ---------------------------------------------------------------------

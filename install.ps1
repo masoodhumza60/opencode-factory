@@ -438,8 +438,12 @@ function Run-Tests {
         }
         $raw = Receive-Job -Job $job | Out-String
         Remove-Job -Job $job -Force
-        if ($raw -match "(?m)^__EXITCODE__=(\d+)\s*$") {
-            $suiteExit = [int]$Matches[1]
+        # The suite's own output can contain a line starting with the sentinel
+        # prefix (a fixture printing it, a log line echoing it). The job writes
+        # its sentinel LAST, so the exit code is the LAST match, not the first.
+        $exitMatches = [regex]::Matches($raw, '(?m)^__EXITCODE__=(\d+)\s*$')
+        if ($exitMatches.Count -gt 0) {
+            $suiteExit = [int]$exitMatches[$exitMatches.Count - 1].Groups[1].Value
             $suiteOut = $raw -replace "(?m)^__EXITCODE__=\d+\s*$", ""
         } else {
             Write-Host $raw
