@@ -397,10 +397,8 @@ function Run-Tests {
         if (-not (Test-Path $path)) { SayErr "warning: $path not in bundle yet; skipping."; continue }
         # Capture rather than discard: a suite that fails without showing why is
         # almost as useless as one that cannot fail at all. bd writes ordinary
-        # warnings to stderr, and merging stderr into a PowerShell stream
-        # (2>&1 or *>) turns them into terminating errors under this installer's
-        # error preferences, so the suites are run with redirected streams the
-        # installer reads itself, never through PowerShell's streams.
+        # warnings to stderr; inside a PowerShell job a native child's merged
+        # stderr stays data, never a terminating error record.
         # A bounded wait stands instead of Start-Process -Wait, which hangs forever.
         # No -Wait, and a bounded wait instead. A suite that blocks forever used to
         # hang the whole installer: `Start-Process -Wait` has no timeout of its own,
@@ -410,47 +408,45 @@ function Run-Tests {
         # 20 minutes is far longer than any suite legitimately needs (the phase
         # suite is the slow one, at roughly 15) and still finite.
         $suiteTimeoutSec = 1200
-        # Run via the raw Process class: Windows PowerShell 5.1 returns an empty
-        # ExitCode from Start-Process when the streams are redirected (verified
-        # cmd.exe /c exit 5 -> ExitCode empty), which made a green suite throw
-        # "failed (exit )". Redirecting through ProcessStartInfo with async
-        # stream readers preserves both the exit code and the output.
-        $psi = New-Object System.Diagnostics.ProcessStartInfo
-        $psi.FileName = $script:NodePath
-        $psi.Arguments = '"' + $path + '"'
-        $psi.UseShellExecute = $false
-        $psi.CreateNoWindow = $true
-        $psi.RedirectStandardOutput = $true
-        $psi.RedirectStandardError = $true
-        $proc = New-Object System.Diagnostics.Process
-        $proc.StartInfo = $psi
-        $out = New-Object System.Text.StringBuilder
-        $err = New-Object System.Text.StringBuilder
-        $proc.Add_OutputDataReceived({ param($s, $e) if ($null -ne $e.Data) { [void]$out.AppendLine($e.Data) } })
-        $proc.Add_ErrorDataReceived({ param($s, $e) if ($null -ne $e.Data) { [void]$err.AppendLine($e.Data) } })
-        [void]$proc.Start()
-        $proc.BeginOutputReadLine()
-        $proc.BeginErrorReadLine()
-        $timedOut = -not $proc.WaitForExit($suiteTimeoutSec * 1000)
-        # Even on a clean exit the async readers may still be draining the pipe;
-        # this second, parameterless wait returns once they have flushed so the
-        # printed output below is complete.
-        $proc.WaitForExit()
-        if ($timedOut) {
-            # Kill the tree, not just the parent: these suites spawn children (the
-            # phase suite starts `factory-phase.mjs`, which runs bd). Killing only
-            # the parent orphans them and leaves the very lock files that caused the
-            # hang behind for the next run.
-            & taskkill /PID $proc.Id /T /F 2>&1 | Out-Null
-            Write-Host "--- $t exceeded ${suiteTimeoutSec}s; it was killed. Output so far: ---"
-            Write-Host $out.ToString()
-            Write-Host $err.ToString()
+        # Run the suite inside a PowerShell job and read the job's transcript.
+        # Windows PowerShell 5.1 mishandles a native child with both redirected
+        # streams: handler-based reads collect nothing, and an ExitCode read
+        # afterward is empty — and the parameterless WaitForExit() that was
+        # meant to flush the readers hard-terminates the host with no output
+        # at all (the installer exits with no diagnostics whatsoever). The job
+        # runspace is the supported wrapper for all three: it carries a timeout,
+        # captures stdout+stderr verbatim (including "2>&1"), and forwards the
+        # child's exit code via a sentinel line. Cost if a suite truly hangs: the
+        # job is stopped and its orphaned node child may linger (Stop-Job cannot
+        # reap a native grandchild); the alternative was the whole installer
+        # hanging forever, so the bound stands.
+        $suiteScript = {
+            param($NodePath, $SuitePath)
+            & $NodePath $SuitePath 2>&1 | Out-String
+            "__EXITCODE__=$LASTEXITCODE"
+        }
+        $job = Start-Job -ScriptBlock $suiteScript -ArgumentList $script:NodePath, $path
+        $done = Wait-Job -Job $job -Timeout $suiteTimeoutSec
+        if (-not $done) {
+            Stop-Job -Job $job -Force
+            $raw = Receive-Job -Job $job | Out-String
+            Remove-Job -Job $job -Force
+            Write-Host "--- $t exceeded ${suiteTimeoutSec}s; its job was stopped. Output so far: ---"
+            Write-Host $raw
             throw "$t did not finish within ${suiteTimeoutSec}s - the selfcheck cannot be trusted. Fix it before installing."
         }
-        if ($proc.ExitCode -ne 0) {
-            Write-Host $out.ToString()
-            Write-Host $err.ToString()
-            throw "$t failed (exit $($proc.ExitCode)) - the selfcheck cannot be trusted. Fix it before installing."
+        $raw = Receive-Job -Job $job | Out-String
+        Remove-Job -Job $job -Force
+        if ($raw -match "(?m)^__EXITCODE__=(\d+)\s*$") {
+            $suiteExit = [int]$Matches[1]
+            $suiteOut = $raw -replace "(?m)^__EXITCODE__=\d+\s*$", ""
+        } else {
+            Write-Host $raw
+            throw "$t did not report an exit code - the selfcheck cannot be trusted. Fix it before installing."
+        }
+        if ($suiteExit -ne 0) {
+            Write-Host $suiteOut
+            throw "$t failed (exit $suiteExit) - the selfcheck cannot be trusted. Fix it before installing."
         }
     }
     Say 'selfcheck tests: OK (every check proven able to fail)'
