@@ -413,13 +413,11 @@ function Run-Tests {
         $suiteTimeoutSec = 1200
         $proc = Start-Process -FilePath $script:NodePath -ArgumentList $path -NoNewWindow -PassThru `
             -RedirectStandardOutput $log -RedirectStandardError $errLog
-        $deadline = (Get-Date).AddSeconds($suiteTimeoutSec)
-        $timedOut = $false
-        while (-not $proc.HasExited) {
-            if ((Get-Date) -gt $deadline) { $timedOut = $true; break }
-            Start-Sleep -Seconds 2
-            $proc.Refresh()
-        }
+        # WaitForExit, not a HasExited poll: on this installer's PowerShell the
+        # -PassThru object never populates ExitCode from a polled loop (a green
+        # suite threw "failed (exit )"). WaitForExit blocks until the process is
+        # actually done and then ExitCode is a real number.
+        $timedOut = -not $proc.WaitForExit($suiteTimeoutSec * 1000)
         if ($timedOut) {
             # Kill the tree, not just the parent: these suites spawn children (the
             # phase suite starts `factory-phase.mjs`, which runs bd). Killing only
@@ -431,10 +429,9 @@ function Run-Tests {
             Remove-Item $log, $errLog -Force -ErrorAction SilentlyContinue
             throw "$t did not finish within ${suiteTimeoutSec}s - the selfcheck cannot be trusted. Fix it before installing."
         }
-        # ExitCode stays null until a Refresh lands after the process actually
-        # exits; the wait loop's last Refresh happens before HasExited flips, so
-        # reading ExitCode here without re-asking reports "(exit )" for a passing
-        # suite and the throw below fires on a green run.
+        # WaitForExit guarantees ExitCode is populated once the process is done;
+        # the earlier polled loop left it null on a green run and the throw below
+        # fired on a passing suite.
         $proc.Refresh()
         if ($proc.ExitCode -ne 0) {
             Get-Content $log, $errLog -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
