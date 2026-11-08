@@ -206,13 +206,19 @@ function Install-Skills {
     #     instead of trusting any hand-kept list.
     #   - factory-selfcheck.mjs finds factory-skills.mjs and factory-mcp.mjs via
     #     dirname(import.meta.url), so this set only works together.
+    #   - factory-phase.mjs statically imports ./factory-manifest.mjs,
+    #     ./factory-policy.mjs, ./factory-attest.mjs and ./factory-review.mjs, so
+    #     those four are the rest of its closure. Without them the installed phase
+    #     machine exits ERR_MODULE_NOT_FOUND on load, which is the failure the
+    #     "installed phase machine runs" selfcheck check exists to catch.
     #   - factory-skills.mjs resolves its default catalog to ../skills/catalog.yaml
     #     relative to itself, so the catalog ships to <skill>/skills/catalog.yaml.
     $runtimeScripts = @(
         'factory-phase.mjs', 'factory-mcp.mjs', 'factory-plan.mjs',
         'factory-skills.mjs', 'factory-selfcheck.mjs', 'platform.mjs',
         'mcp-defmatch.mjs',
-'measure.mjs'
+'measure.mjs',
+        'factory-manifest.mjs', 'factory-policy.mjs', 'factory-attest.mjs', 'factory-review.mjs'
     )
     $srcScripts = $runtimeScripts | ForEach-Object { Join-Path $bundle "scripts\$_" }
     $dstScripts = Join-Path (Split-Path $dstSk) 'scripts'
@@ -256,7 +262,7 @@ function Install-Skills {
         else {
             New-Item -ItemType Directory -Force -Path $dstScripts | Out-Null
             Copy-Item $srcScripts $dstScripts -Force
-            Say "factory runtime scripts installed -> $dstScripts ($($runtimeScripts.Count) files: phase, mcp, plan, skills, selfcheck, platform, defmatch, measure)"
+            Say "factory runtime scripts installed -> $dstScripts ($($runtimeScripts.Count) files: phase, mcp, plan, skills, selfcheck, platform, defmatch, measure, manifest, policy, attest, review)"
         }
         if (Test-Path $srcCatalog) {
             New-Item -ItemType Directory -Force -Path (Split-Path $dstCatalog) | Out-Null
