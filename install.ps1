@@ -405,9 +405,10 @@ function Run-Tests {
         # so one stuck child (observed: a suite blocked inside bd behind a 19-day-
         # stale beads lock, using 1.97s of CPU across 17 minutes) left the installer
         # silent forever with no way to tell a slow suite from a dead one.
-        # 20 minutes is far longer than any suite legitimately needs (the phase
-        # suite is the slow one, at roughly 15) and still finite.
-        $suiteTimeoutSec = 1200
+        # 60 minutes is far longer than any suite legitimately needs (the phase
+        # suite is the slow one and this machine has taken longer than the old
+        # 20-minute cap to get through it) and still finite.
+        $suiteTimeoutSec = 3600
         # Run the suite inside a PowerShell job and read the job's transcript.
         # Windows PowerShell 5.1 mishandles a native child with both redirected
         # streams: handler-based reads collect nothing, and an ExitCode read
@@ -428,7 +429,7 @@ function Run-Tests {
         $job = Start-Job -ScriptBlock $suiteScript -ArgumentList $script:NodePath, $path
         $done = Wait-Job -Job $job -Timeout $suiteTimeoutSec
         if (-not $done) {
-            Stop-Job -Job $job -Force
+            Stop-Job -Job $job
             $raw = Receive-Job -Job $job | Out-String
             Remove-Job -Job $job -Force
             Write-Host "--- $t exceeded ${suiteTimeoutSec}s; its job was stopped. Output so far: ---"
