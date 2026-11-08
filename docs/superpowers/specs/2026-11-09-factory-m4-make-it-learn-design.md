@@ -152,18 +152,19 @@ silently breaks delivery should be caught before it ships.
 
 ### Design
 
-1. **Third seed — `testapps/orderboard-cli/`.** Node, zero runtime
+1. **Third seed — `testapps/orderboard-cli/`.** Node (>=22), zero runtime
    dependencies, no network: an `orders` CLI against a local JSON store —
-   `orders create --json <payload>`, `orders list [--status open|filled|cancelled]`.
-   Own tests in `testapps/orderboard-cli/test/`; committed; tracked.
+   `orders create --json <payload>`, `orders list [--status pending|paid|shipped|cancelled] [--json]`.
+   Statuses are `pending | paid | shipped | cancelled`, matching the two other
+   seeds. Own tests in `testapps/orderboard-cli/test/`; committed; tracked.
 
 2. **One feature request per seed** (the eval's task):
    - `orderboard` (web): a status filter on the orders list
-     (all|open|filled|cancelled, default open).
+     (all|pending|paid|shipped|cancelled, default all — today's behavior unchanged).
    - `orderboard-api` (api): `PATCH /orders/:id` enforcing the
-     open → filled|cancelled transition with 409 on illegal transition and 404
-     on unknown id.
-   - `orderboard-cli` (cli): machine-readable output — `orders list --status open --json`
+     pending → paid|cancelled and paid → shipped transitions with 409 on an
+     illegal transition, 404 on unknown id, 400 on a missing or unknown status.
+   - `orderboard-cli` (cli): machine-readable output — `orders list --status pending --json`
      and `orders create --json` with validation and a non-zero exit on bad input.
 
 3. **Hidden acceptance tests** per seed, committed under
