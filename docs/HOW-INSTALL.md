@@ -300,6 +300,32 @@ Failure output says `N check(s) failed. Re-run install.ps1/install.sh.`
 | `skills catalog deployed` FAILs | `~/.agents/skills/factory/skills/catalog.yaml` is absent. `factory-skills.mjs` resolves its default catalog to `../skills/catalog.yaml` relative to itself, so it must sit beside `scripts/`, not inside it. Re-run the installer. |
 | `installed phase machine runs` FAILs | The scripts are present but did not execute — a truncated copy, a syntax error, or a missing sibling import. The check runs the **installed** copy rather than trusting its presence, so a file that landed broken is caught here instead of at phase 1. |
 
+## Rollback / re-installing the factory
+
+The installer overwrites files in `~/.config/opencode` and `~/.agents/skills`,
+and there is no uninstaller — restore from a backup instead.
+
+- **Before re-installing**, back up `~/.config/opencode` and `~/.agents/skills`.
+  The drill does this for you: given `--backup <dir>` it copies
+  `.config/opencode` to `<dir>/opencode/` and `.agents/skills` to
+  `<dir>/agents-skills/`, and writes `<dir>/manifest.json` — a SHA256 + size
+  entry per file, keyed by root-relative path (`opencode/<path>`,
+  `agents-skills/<path>`), plus the repo HEAD that was backed up.
+- The repository has a scripted drill that takes the backup, re-installs,
+  verifies (selfcheck + install-manifest), then restores the backup and
+  verifies byte-equality: `node scripts/factory-delivery.mjs drill --backup <dir>`.
+  See `docs/factory-delivery.md`.
+- **Manual restore**: stop OpenCode sessions, copy `<dir>/opencode/` back over
+  `~/.config/opencode` and `<dir>/agents-skills/` back over `~/.agents/skills`,
+  and remove any live files under those two roots that are not in
+  `<dir>/manifest.json` — those were created by the install. Empty directories
+  left behind can be pruned; the roots themselves stay.
+- **Check your work**: `verifyRollback(home, backup)` in
+  `scripts/factory-delivery.mjs` re-hashes every live file against the backup
+  manifest and reports anything missing, modified, or not in the manifest.
+  The drill runs it for you; it is exported so a manual restore can be checked
+  the same way.
+
 ## Reference — paths
 
 Every path below is reached through `scripts/platform.mjs`, not written into a
