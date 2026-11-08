@@ -120,6 +120,9 @@ For every phase after onboard:
    then `complete <bead> <phase> --evidence "…"`. The `--reason` becomes an
    append-only event bead, so the audit survives restarts and device moves
    (Dolt) — and an illegal transition is refused outright. Completing phase 5 (verify) additionally requires `--booted "..."` — see the phase machine section for why, and for the format limits.
+   Resolve a gate through the same command, so the approval is recorded with the
+   reason the human gave rather than as a bare resolution:
+   `gate <bead> <A|B|C> --evidence "…"`.
 6. At each human gate, **report which mandatory skills ran per phase**. Any
    skipped skill forces the phase to re-run before the gate can pass.
 
@@ -419,9 +422,10 @@ for the human; nothing advances past a gate without approval.
 **They are enforced in the state layer, not just described here.** Entering
 phase `2`, `3` or `7` through the phase machine creates a real `bd` gate
 (`--type human`) that blocks the bead, so `bd ready` reports the feature as
-blocked on every device. Ask the human, then `bd gate resolve <gate-id>` — and
-only then can the next phase be entered. A word written in a document is not an
-approval; a resolved gate is.
+blocked on every device. Ask the human, then record the approval with
+`factory-phase.mjs gate <bead> <A|B|C> --evidence "…"`, which resolves the `bd`
+gate and stores the reason with it — and only then can the next phase be
+entered. A word written in a document is not an approval; a resolved gate is.
 
 - **Gate A — spec approved** (between phase 2 and phase 3): the spec doc
   exists at `docs/superpowers/specs/`, `brainstorming` (spec section) ran and
