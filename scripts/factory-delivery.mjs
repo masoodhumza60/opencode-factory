@@ -98,8 +98,10 @@ export function verifyInstall(home, manifest, { selfcheck } = {}) {
     const rel = rel0.startsWith("skills/") ? rel0.slice("skills/".length) : rel0;
     const live = join(base, rel);
     if (!existsSync(live)) { problems.push(`install-manifest file missing on disk: ${rel}`); continue; }
-    const h = sha256File(live);
-    if (h !== meta.hash) problems.push(`install-manifest hash mismatch: ${rel}`);
+    // The installer writes Get-FileHash (UPPERCASE); Node digests are lowercase.
+    // Compare case-insensitively, or a byte-perfect install reads as mismatch.
+    const h = sha256File(live).toLowerCase();
+    if (h !== String(meta.hash ?? "").toLowerCase()) problems.push(`install-manifest hash mismatch: ${rel}`);
   }
   return { ok: problems.length === 0, problems };
 }
