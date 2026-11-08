@@ -431,6 +431,11 @@ function Run-Tests {
             Remove-Item $log, $errLog -Force -ErrorAction SilentlyContinue
             throw "$t did not finish within ${suiteTimeoutSec}s - the selfcheck cannot be trusted. Fix it before installing."
         }
+        # ExitCode stays null until a Refresh lands after the process actually
+        # exits; the wait loop's last Refresh happens before HasExited flips, so
+        # reading ExitCode here without re-asking reports "(exit )" for a passing
+        # suite and the throw below fires on a green run.
+        $proc.Refresh()
         if ($proc.ExitCode -ne 0) {
             Get-Content $log, $errLog -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
             Remove-Item $log, $errLog -Force -ErrorAction SilentlyContinue
