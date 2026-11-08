@@ -396,13 +396,12 @@ function Run-Tests {
         $path = Join-Path $bundle "scripts\$t"
         if (-not (Test-Path $path)) { SayErr "warning: $path not in bundle yet; skipping."; continue }
         # Capture rather than discard: a suite that fails without showing why is
-        # almost as useless as one that cannot fail at all. Start-Process with real
-        # file redirection, because these suites run bd, and bd writes ordinary
-        # warnings to stderr - merging that into a PowerShell stream (2>&1 or *>)
-        # turns a "not a git repository" notice into a terminating error under this
-        # installer's error preferences, and the install dies on a passing suite.
-        $log = Join-Path ([IO.Path]::GetTempPath()) "factory-test-$t.log"
-        $errLog = "$log.err"
+        # almost as useless as one that cannot fail at all. bd writes ordinary
+        # warnings to stderr, and merging stderr into a PowerShell stream
+        # (2>&1 or *>) turns them into terminating errors under this installer's
+        # error preferences, so the suites are run with redirected streams the
+        # installer reads itself, never through PowerShell's streams.
+        # A bounded wait stands instead of Start-Process -Wait, which hangs forever.
         # No -Wait, and a bounded wait instead. A suite that blocks forever used to
         # hang the whole installer: `Start-Process -Wait` has no timeout of its own,
         # so one stuck child (observed: a suite blocked inside bd behind a 19-day-
@@ -411,13 +410,32 @@ function Run-Tests {
         # 20 minutes is far longer than any suite legitimately needs (the phase
         # suite is the slow one, at roughly 15) and still finite.
         $suiteTimeoutSec = 1200
-        $proc = Start-Process -FilePath $script:NodePath -ArgumentList $path -NoNewWindow -PassThru `
-            -RedirectStandardOutput $log -RedirectStandardError $errLog
-        # WaitForExit, not a HasExited poll: on this installer's PowerShell the
-        # -PassThru object never populates ExitCode from a polled loop (a green
-        # suite threw "failed (exit )"). WaitForExit blocks until the process is
-        # actually done and then ExitCode is a real number.
+        # Run via the raw Process class: Windows PowerShell 5.1 returns an empty
+        # ExitCode from Start-Process when the streams are redirected (verified
+        # cmd.exe /c exit 5 -> ExitCode empty), which made a green suite throw
+        # "failed (exit )". Redirecting through ProcessStartInfo with async
+        # stream readers preserves both the exit code and the output.
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $script:NodePath
+        $psi.Arguments = '"' + $path + '"'
+        $psi.UseShellExecute = $false
+        $psi.CreateNoWindow = $true
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $proc = New-Object System.Diagnostics.Process
+        $proc.StartInfo = $psi
+        $out = New-Object System.Text.StringBuilder
+        $err = New-Object System.Text.StringBuilder
+        $proc.Add_OutputDataReceived({ param($s, $e) if ($null -ne $e.Data) { [void]$out.AppendLine($e.Data) } })
+        $proc.Add_ErrorDataReceived({ param($s, $e) if ($null -ne $e.Data) { [void]$err.AppendLine($e.Data) } })
+        [void]$proc.Start()
+        $proc.BeginOutputReadLine()
+        $proc.BeginErrorReadLine()
         $timedOut = -not $proc.WaitForExit($suiteTimeoutSec * 1000)
+        # Even on a clean exit the async readers may still be draining the pipe;
+        # this second, parameterless wait returns once they have flushed so the
+        # printed output below is complete.
+        $proc.WaitForExit()
         if ($timedOut) {
             # Kill the tree, not just the parent: these suites spawn children (the
             # phase suite starts `factory-phase.mjs`, which runs bd). Killing only
@@ -425,20 +443,15 @@ function Run-Tests {
             # hang behind for the next run.
             & taskkill /PID $proc.Id /T /F 2>&1 | Out-Null
             Write-Host "--- $t exceeded ${suiteTimeoutSec}s; it was killed. Output so far: ---"
-            Get-Content $log, $errLog -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
-            Remove-Item $log, $errLog -Force -ErrorAction SilentlyContinue
+            Write-Host $out.ToString()
+            Write-Host $err.ToString()
             throw "$t did not finish within ${suiteTimeoutSec}s - the selfcheck cannot be trusted. Fix it before installing."
         }
-        # WaitForExit guarantees ExitCode is populated once the process is done;
-        # the earlier polled loop left it null on a green run and the throw below
-        # fired on a passing suite.
-        $proc.Refresh()
         if ($proc.ExitCode -ne 0) {
-            Get-Content $log, $errLog -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
-            Remove-Item $log, $errLog -Force -ErrorAction SilentlyContinue
+            Write-Host $out.ToString()
+            Write-Host $err.ToString()
             throw "$t failed (exit $($proc.ExitCode)) - the selfcheck cannot be trusted. Fix it before installing."
         }
-        Remove-Item $log, $errLog -Force -ErrorAction SilentlyContinue
     }
     Say 'selfcheck tests: OK (every check proven able to fail)'
 }
