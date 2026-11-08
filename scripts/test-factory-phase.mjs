@@ -1408,11 +1408,45 @@ function acceptedReview(b) {
   );
   writeFileSync(join(SANDBOX, ".factory", p7, "outcome.md"), [
     "# Outcome", "", "## What changed", "", "The feature shipped.", "",
-    "## Measured before / after", "", "p95 420ms -> 210ms.", "",
+    "## Measured before / after", "", "p95 420ms -> 210ms.", "", "Outcome: worked",
   ].join("\n"));
   const closed = phase(["complete", p7, "8", "--evidence", "the outcome is written down", "--quiet"]);
   check("closing succeeds once the outcome record exists", closed.code === 0, `${closed.code} ${closed.out.slice(0, 300)}`);
 }
+
+// The `Outcome:` verdict is part of the close's own record: what changed, how it
+// measured, and how the work landed. These five checks drive `complete 8` on a
+// bead the machine actually parked in phase 8 (the real ship flow is the only
+// legal route into close), overwriting outcome.md between runs - a refusal
+// leaves the state layer alone, so one bead serves all five checks.
+const p8 = shipBead("outcome verdict walk", "ship5.txt");
+const acc8 = acceptedReview(p8);
+if (acc8.code !== 0) throw new Error(`accept for ${p8} failed: ${acc8.out.slice(0, 300)}`);
+const shipped8 = phase(["complete", p8, "7", "--evidence", "the review passed and a human accepted it", "--quiet"]);
+if (shipped8.code !== 0) throw new Error(`ship for ${p8} failed: ${shipped8.out.slice(0, 300)}`);
+const entered8b = phase(["enter", p8, "8", "--reason", "close the run", "--quiet"]);
+if (entered8b.code !== 0) throw new Error(`enter 8 for ${p8} failed: ${entered8b.out.slice(0, 300)}`);
+
+const outVerdict = (verdictLine, notMeasurable = false) => {
+  const dir = join(SANDBOX, ".factory", p8);
+  mkdirSync(dir, { recursive: true });
+  const body = ["# Outcome", "", "## What changed", "", "The feature shipped.", ""];
+  if (notMeasurable) body.push("Not measurable: nothing was measured before");
+  else body.push("## Measured before / after", "", "Before: 12 min. After: 3 min.");
+  body.push("", verdictLine);
+  writeFileSync(join(dir, "outcome.md"), body.join("\n"));
+  return { bead: p8, r: phase(["complete", p8, "8", "--evidence", "close with a verdict", "--quiet"]) };
+};
+check("an outcome with no Outcome line REFUSES",
+  (() => { const { r } = outVerdict(""); return r.code === 1 && has(r.out, "Outcome:"); })());
+check("an Outcome line outside the four words REFUSES",
+  (() => { const { r } = outVerdict("Outcome: maybe"); return r.code === 1 && has(r.out, "maybe"); })());
+check("Outcome: not-measurable without a Not measurable line REFUSES",
+  (() => { const { r } = outVerdict("Outcome: not-measurable", false); return r.code === 1 && has(r.out, "not-measurable"); })());
+check("Outcome: worked with a Not measurable line REFUSES",
+  (() => { const { r } = outVerdict("Outcome: worked", true); return r.code === 1 && has(r.out, "worked"); })());
+check("Outcome: worked-with-changes passes",
+  (() => { const { r } = outVerdict("Outcome: worked-with-changes"); return r.code === 0; })());
 
 {
   const p7b = shipBead("ship after a late edit", "ship2.txt");

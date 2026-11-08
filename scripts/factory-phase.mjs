@@ -962,6 +962,24 @@ function outcomeProblems(root, bead) {
   if (!measured) {
     problems.push(`${rel} has no "## Measured before / after" section and no "Not measurable: <why>" line`);
   }
+  // The verdict is the close's own answer to "did it work": a closed bead must
+  // record one of the four words, and the two measurement shapes must agree.
+  // Fail closed on all three mismatches; the refusal names outcome.md and the
+  // offending verdict, so the human sees which line disagreed.
+  const verdict = /^Outcome:\s*(worked|worked-with-changes|did-not-work|not-measurable)\s*$/im.exec(text);
+  const rawVerdict = /^Outcome:/im.exec(text);
+  const notMeasurable = /^Not measurable:/im.test(text);
+  if (!rawVerdict) {
+    problems.push(`${rel} has no "Outcome:" line; expected one of: worked, worked-with-changes, did-not-work, not-measurable`);
+  } else if (!verdict) {
+    const got = /^Outcome:\s*(\S+)/im.exec(text)?.[1] ?? "(empty)";
+    problems.push(`${rel} has verdict "${got}"; expected one of: worked, worked-with-changes, did-not-work, not-measurable`);
+  } else if (verdict[1].toLowerCase() === "not-measurable") {
+    if (!notMeasurable) problems.push(`${rel} says Outcome: not-measurable but has no "Not measurable: <why>" line - the two must agree`);
+    else if (measured && /^##\s+Measured before\s*\/\s*after\s*$/im.test(text)) problems.push(`${rel} says Outcome: not-measurable but carries a "## Measured before / after" section - the two must agree`);
+  } else if (notMeasurable) {
+    problems.push(`${rel} says Outcome: ${verdict[1].toLowerCase()} but carries a "Not measurable:" line - the two must agree`);
+  }
   return problems;
 }
 
