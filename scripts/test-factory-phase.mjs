@@ -1448,6 +1448,49 @@ check("Outcome: worked with a Not measurable line REFUSES",
 check("Outcome: worked-with-changes passes",
   (() => { const { r } = outVerdict("Outcome: worked-with-changes"); return r.code === 0; })());
 
+// M4a: a close that lands appends one row to the append-only ledger. The
+// ledger is tracked (docs/outcomes.jsonl) and written before state, so an
+// unwritable ledger refuses before bd set-state - proven with a directory
+// where the file belongs. Run the refusal FIRST so the good append has no
+// leftover directory to trip on.
+const p9 = shipBead("ledger close", "ship6.txt");
+const acc9 = acceptedReview(p9);
+if (acc9.code !== 0) throw new Error(`accept for ${p9} failed: ${acc9.out.slice(0, 300)}`);
+const shipped9 = phase(["complete", p9, "7", "--evidence", "the review passed and a human accepted it", "--quiet"]);
+if (shipped9.code !== 0) throw new Error(`ship for ${p9} failed: ${shipped9.out.slice(0, 300)}`);
+const entered9 = phase(["enter", p9, "8", "--reason", "close the run", "--quiet"]);
+if (entered9.code !== 0) throw new Error(`enter 8 for ${p9} failed: ${entered9.out.slice(0, 300)}`);
+
+const outcomeBody = (verdict, learned = []) => [
+  "# Outcome", "", "## What changed", "", "The feature shipped.", "",
+  "## Measured before / after", "", "Before: 12 min. After: 3 min.", "",
+  verdict,
+  ...learned,
+].join("\n");
+
+const ledgerPath = join(SANDBOX, "docs", "outcomes.jsonl");
+mkdirSync(ledgerPath, { recursive: true }); // a directory where the file belongs
+writeFileSync(join(SANDBOX, ".factory", p9, "outcome.md"), outcomeBody("Outcome: worked"));
+const unwritable = phase(["complete", p9, "8", "--evidence", "close with a directory in the ledger's way", "--quiet"]);
+const state9 = bd(["state", p9, "phase_done"]);
+check("an unwritable ledger REFUSES before state write",
+  unwritable.code === 1 && has(unwritable.out, "outcomes.jsonl") && !has(state9.out, "8"),
+  `${unwritable.code} ${unwritable.out.slice(0, 300)} / state: ${state9.out.slice(0, 60)}`);
+rmSync(ledgerPath, { recursive: true, force: true });
+
+writeFileSync(join(SANDBOX, ".factory", p9, "outcome.md"),
+  outcomeBody("Outcome: worked", ["", "## What the factory learned", "", "Learned: hidden tests: they discriminate, run them"]));
+const landed = phase(["complete", p9, "8", "--evidence", "close with a ledger expectation", "--quiet"]);
+check("complete 8 appends one outcomes.jsonl row", (() => {
+  if (landed.code !== 0 || !existsSync(ledgerPath)) return false;
+  const rows = readFileSync(ledgerPath, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  const row = rows[rows.length - 1];
+  return row.bead === p9 && row.verdict === "worked" &&
+    row.what_changed === "The feature shipped." && typeof row.measured === "string" && row.measured.length > 0 &&
+    Array.isArray(row.learned) && row.learned.length === 1 && row.learned[0].name === "hidden tests" &&
+    typeof row.head === "string" && /^[0-9a-f]{7,40}$/.test(row.head);
+})(), `${landed.code} ${landed.out.slice(0, 300)}`);
+
 {
   const p7b = shipBead("ship after a late edit", "ship2.txt");
   const acc = acceptedReview(p7b);
