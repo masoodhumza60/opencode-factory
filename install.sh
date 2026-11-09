@@ -390,7 +390,10 @@ run_selfcheck() {
         return
     fi
     if [ -f "$selfcheck" ]; then
-        node "$selfcheck"
+        if ! node "$selfcheck"; then
+            say "factory selfcheck failed - install incomplete." >&2
+            exit 1
+        fi
         say "selfcheck: OK"
     else
         say "warning: $selfcheck not in bundle yet (selfcheck task not landed); skip for now."

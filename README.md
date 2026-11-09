@@ -39,7 +39,7 @@ Prompts: [`AI-AGENT-SETUP.md`](AI-AGENT-SETUP.md) — full machine setup ·
 git clone https://github.com/masoodhumza60/opencode-factory opencode-factory
 cd opencode-factory
 ./install.sh            # Windows: powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
-node scripts/factory-selfcheck.mjs --tokens   # health gate: 6 PASS checks
+node scripts/factory-selfcheck.mjs --tokens   # health gate: every check PASS (WARNs are informational)
 ```
 
 ## Use it in any project
@@ -50,7 +50,7 @@ Set up the machine once, then onboard each project:
 # 1) New machine (once): clone + install everything
 git clone https://github.com/masoodhumza60/opencode-factory && cd opencode-factory
 ./install.sh            # Windows: powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
-node scripts/factory-selfcheck.mjs --tokens   # 6 PASS = machine is factory-ready
+node scripts/factory-selfcheck.mjs --tokens   # every check PASS = machine is factory-ready
 
 # 2) Any project (per project): stamp state, then build
 /factory onboard              # stamp the project: beads DB + skill lockfile
