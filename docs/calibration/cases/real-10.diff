@@ -1,0 +1,12 @@
+// CALIBRATION-CASE id=real-10 corpus=real-history sha=f8a6a0c
+// security, QA and SRE are evidence kinds (M2c)
+commit f8a6a0cebd3790fe6dad9c531a2770a80db04b83
+Author: masoodhumza60 <masoodhumza60@users.noreply.github.com>
+Date:   Sat Nov 7 18:53:21 2026 +0500
+
+    feat(factory): security, QA and SRE are evidence kinds
+
+ config/factory.protected.json   | 2 +-
+ scripts/factory-policy.mjs      | 4 +++-
+ scripts/test-factory-attest.mjs | 1 +
+ 3 files changed, 5 insertions(+), 2 deletions(-)

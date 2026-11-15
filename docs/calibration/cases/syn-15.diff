@@ -1,0 +1,13 @@
+// CALIBRATION-CASE id=syn-15 corpus=synthetic class=over-broad-delete
+// Defect injected at testapps/orderboard/src/orders/OrdersPage.tsx
+--- a/testapps/orderboard/src/orders/OrdersPage.tsx
++++ b/testapps/orderboard/src/orders/OrdersPage.tsx
+@@ -61,7 +61,7 @@
+           </tr>
+         </thead>
+         <tbody>
+-          {orders.map((o) => (
++          {orders.slice(0, 1).map((o) => (
+             <tr key={o.id}>
+               <td>{o.id}</td>
+               <td>{o.customer}</td>

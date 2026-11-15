@@ -1,0 +1,12 @@
+// CALIBRATION-CASE id=syn-03 corpus=synthetic class=missing-validation
+// Defect injected at testapps/orderboard/src/orders/store.ts
+--- a/testapps/orderboard/src/orders/store.ts
++++ b/testapps/orderboard/src/orders/store.ts
+@@ -24,6 +24,6 @@
+ export const STATUSES: OrderStatus[] = ["pending", "paid", "shipped", "cancelled"];
+ 
+ export function formatMoney(cents: number, currency: string): string {
+-  return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(cents / 100);
++  return new Intl.NumberFormat("en-US").format(cents / 100);
+ }
+ 

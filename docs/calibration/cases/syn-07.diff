@@ -1,0 +1,13 @@
+// CALIBRATION-CASE id=syn-07 corpus=synthetic class=dropped-error-path
+// Defect injected at testapps/orderboard/src/orders/OrdersPage.tsx
+--- a/testapps/orderboard/src/orders/OrdersPage.tsx
++++ b/testapps/orderboard/src/orders/OrdersPage.tsx
+@@ -15,7 +15,7 @@
+         if (live) setOrders(rows);
+       })
+       .catch((e: unknown) => {
+-        if (live) setError(e instanceof Error ? e.message : "failed to load orders");
++        if (live) setOrders([]);
+       });
+     return () => {
+       live = false;

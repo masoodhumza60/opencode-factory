@@ -1,0 +1,12 @@
+// CALIBRATION-CASE id=real-05 corpus=real-history sha=c434f0e
+// per-profile check lists as data (M2a)
+commit c434f0ec9718fc4a261fc6285bf03543f8d1ba4b
+Author: masoodhumza60 <masoodhumza60@users.noreply.github.com>
+Date:   Sat Oct 31 20:08:49 2026 +0500
+
+    feat(factory): per-profile check lists as data
+
+ config/factory.policy.example.yaml | 102 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++-----
+ scripts/factory-policy.mjs         |  19 ++++++++++++++++---
+ scripts/test-factory-policy.mjs    |  62 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++---
+ 3 files changed, 172 insertions(+), 11 deletions(-)

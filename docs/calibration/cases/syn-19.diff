@@ -1,0 +1,12 @@
+// CALIBRATION-CASE id=syn-19 corpus=synthetic class=stale-comment
+// Defect injected at testapps/orderboard/src/orders/OrdersPage.tsx
+--- a/testapps/orderboard/src/orders/OrdersPage.tsx
++++ b/testapps/orderboard/src/orders/OrdersPage.tsx
+@@ -65,6 +65,7 @@
+             <tr key={o.id}>
+               <td>{o.id}</td>
+               <td>{o.customer}</td>
++              {/* ISO strings arrive UTC-normalized; no timezone handling needed */}
+               <td>{o.placedAt.slice(0, 10)}</td>
+               <td>{o.status}</td>
+               <td>{formatMoney(o.amountCents, o.currency)}</td>

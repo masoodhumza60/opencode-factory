@@ -1,0 +1,14 @@
+// CALIBRATION-CASE id=real-03 corpus=real-history sha=896cf63
+// ship requires a signed acceptance tag (M1c)
+commit 896cf63a09d3857d3797f54963cb618815ce1a14
+Author: masoodhumza60 <masoodhumza60@users.noreply.github.com>
+Date:   Thu Oct 29 23:05:25 2026 +0500
+
+    feat(factory): ship requires a signed acceptance tag and a signed baseline
+
+ config/factory.protected.json    |  4 ++--
+ scripts/factory-attest.mjs       | 28 ++++++++++++++++++++++++++++
+ scripts/factory-phase.mjs        |  4 ++--
+ scripts/test-factory-phase.mjs   | 86 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++---------
+ scripts/test-factory-protect.mjs | 76 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 5 files changed, 185 insertions(+), 13 deletions(-)

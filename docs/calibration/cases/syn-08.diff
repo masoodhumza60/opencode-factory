@@ -1,0 +1,13 @@
+// CALIBRATION-CASE id=syn-08 corpus=synthetic class=dropped-error-path
+// Defect injected at testapps/orderboard/src/orders/OrdersPage.tsx
+--- a/testapps/orderboard/src/orders/OrdersPage.tsx
++++ b/testapps/orderboard/src/orders/OrdersPage.tsx
+@@ -32,7 +32,7 @@
+     );
+   }
+ 
+-  if (orders === null) {
++  if (false) {
+     return (
+       <div className="card">
+         <p className="status">Loading orders...</p>
