@@ -376,10 +376,13 @@ its three plans, one pair each.
    (4 per seed: bare-fails/golden-passes/broken-fails/baseline), runbook
    `docs/factory-eval.md`. See plan
    `docs/superpowers/plans/2026-11-09-factory-m4b-testapp-evals.md`.
-4. **Calibrate the review model against human labels.** Planned (M4c), not
-   run: model-agnostic harness, 30 frozen diffs (20 synthetic + 10 pinned
-   history), human labels, agreement + false-accept/false-reject per reviewer;
-   100% agreement flagged as mirror-risk. See plan
+4. **Calibrate the review model against human labels.** Harness shipped at
+   `09d5e0a`; labels pending (Humza): model-agnostic, 30 frozen diffs (20
+   synthetic + 10 pinned history), `scripts/factory-calibrate.mjs`
+   (`package` / `record` / `score`, calls no model), human labels, per-split
+   agreement + false-accept/false-reject; 100% agreement flagged MIRROR-RISK;
+   report never overwrites. No agreement number exists yet; it must not be
+   fabricated. See `docs/factory-calibration.md` and plan
    `docs/superpowers/plans/2026-11-09-factory-m4c-calibration.md`.
 5. **Factory metrics — parked.** Measurement without a closed loop is
    decoration; lands after items 3/4 prove the loop.
