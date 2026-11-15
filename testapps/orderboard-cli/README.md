@@ -13,3 +13,6 @@ Zero runtime dependencies; Node >= 22.5. The store is a plain JSON array at
 
 `hidden/` contains acceptance tests for factory-internal evals. Do not read
 them when building.
+
+
+`hidden/` contains acceptance tests for factory-internal evals. Do not read them when building.
