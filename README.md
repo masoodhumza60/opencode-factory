@@ -42,6 +42,31 @@ cd opencode-factory
 node scripts/factory-selfcheck.mjs --tokens   # health gate: every check PASS (WARNs are informational)
 ```
 
+## What PASS means (and does not mean)
+
+The selfcheck prints one verdict per check, then a summary line. The summary
+line below is quoted from this machine's installs, not invented (the 2026-11-16
+verification at bundle `50fa229` printed it and exited 0):
+
+```text
+All selfchecks passed - factory is ready.
+```
+
+- `PASS` — the check's condition held. `FAIL  ` — the command exits 1 and the
+  repair is named on the line; that fail-stop is what `install.ps1`/`install.sh`
+  enforce. `WARN  ` — informational only, never affects the exit code
+  (example: `skills.lock.json` missing - run `factory discover` and commit
+  the lockfile). `skip` — inconclusive; something was absent to evaluate, and
+  an absence is neither a pass nor a failure.
+- Exit code 0 means no FAIL-termed check ran. The number of PASS lines is not
+  a fixed "6" - it grows as the bundle grows, and the machine, not this
+  document, owns it. Read the failure line when the exit code is non-zero;
+  do not count.
+- Not proven by a green selfcheck: a fresh machine (this machine only), the
+  skew of already-installed older scripts (presence is what it checks),
+  GitHub/Actions/releases, or the quality of anything it shipped. See
+  `docs/factory-ux-review.md` for exactly what has and has not been verified.
+
 ## Use it in any project
 
 Set up the machine once, then onboard each project:
