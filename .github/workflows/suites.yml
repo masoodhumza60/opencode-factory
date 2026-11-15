@@ -84,5 +84,11 @@ jobs:
           mkdir -p "$HOME/.local/bin"
           tar -xzf beads_1.3.4_linux_amd64.tar.gz -C "$HOME/.local/bin"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: git identity
+        # The suite signs real acceptance tags (git tag -s) inside its sandbox
+        # and the runner ships with no identity configured.
+        run: |
+          git config --global user.name "opencode-factory CI"
+          git config --global user.email "ci@users.noreply.github.com"
       - name: phase machine
         run: node scripts/test-factory-phase.mjs
