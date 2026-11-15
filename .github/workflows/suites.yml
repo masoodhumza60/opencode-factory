@@ -1,0 +1,72 @@
+name: suites
+
+on:
+  push:
+    branches: [master, feat/**]
+  pull_request:
+    branches: [master]
+
+# Honest scope: every job below runs a suite that is green at the ref the
+# workflow landed on. Nothing here is a badge of quality the machine has not
+# earned. `phase` is the long pole (the beads machine is real: bd walks, real
+# git signing, 180 checks); the others are fast.
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: policy
+        run: node scripts/test-factory-policy.mjs
+      - name: outcome
+        run: node scripts/test-factory-outcome.mjs
+      - name: design
+        run: node scripts/test-factory-design.mjs
+      - name: fixture
+        run: node scripts/test-factory-fixture.mjs
+      - name: manifest
+        run: node scripts/test-factory-manifest.mjs
+      - name: compliance
+        run: node scripts/test-factory-compliance.mjs
+      - name: skills
+        run: node scripts/test-factory-skills.mjs
+
+  delivery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: delivery drill suite
+        run: node scripts/test-factory-delivery.mjs
+
+  attest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: install bd
+        run: curl -fsSL https://beads.dev/install.sh | bash
+      - name: attest
+        run: node scripts/test-factory-attest.mjs
+
+  phase:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: install bd
+        run: curl -fsSL https://beads.dev/install.sh | bash
+      - name: phase machine
+        run: node scripts/test-factory-phase.mjs
