@@ -95,7 +95,7 @@ Both installers run the same steps in the same order:
 6. **Install the factory skill** — copy `skills/factory/SKILL.md` to
    `~/.agents/skills/factory/`, plus `docs/conductor.md`,
    `docs/how-factory-works.md`, `docs/plan-format.md` and `docs/discovery.md`
-    to `~/.agents/skills/factory/docs/`, plus the twelve runtime scripts
+    to `~/.agents/skills/factory/docs/`, plus the sixteen runtime scripts
     (`factory-phase.mjs`, `factory-mcp.mjs`, `factory-plan.mjs`,
     `factory-skills.mjs`, `factory-selfcheck.mjs`, `platform.mjs`,
     `mcp-defmatch.mjs`, `measure.mjs`, `factory-manifest.mjs`,
