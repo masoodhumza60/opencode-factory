@@ -1,3 +1,10 @@
 # Shell scripts are LF in the repo and stay LF on every working-tree checkout
 # (guards against checkout-time CRLF conversion on Windows).
 *.sh eol=lf
+# Every JavaScript/Node file in this repo is LF in the index and LF on every
+# checkout. The protected set pins the committed machinery's hashes; CRLF in a
+# Windows working tree made that check environment-dependent.
+*.mjs text eol=lf
+*.js text eol=lf
+config/*.json text eol=lf
+config/*.yaml text eol=lf

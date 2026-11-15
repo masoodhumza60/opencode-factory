@@ -16,7 +16,7 @@
 
 import { execFileSync } from "node:child_process";
 import { statSync, readFileSync, writeFileSync, existsSync } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { join, relative, resolve, sep, dirname } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import {
@@ -727,6 +727,25 @@ export function factoryHome() {
   return dirname(dirname(fileURLToPath(import.meta.url)));
 }
 
+// Hashing the working-tree copy is not environment-independent: on Windows with
+// autocrlf=true the same pinned script checked out as CRLF, so recording the
+// Windows working tree produced hashes that every LF checkout (CI, Linux)
+// refused. The pin records the committed blob - `git show HEAD:<file>` - because
+// that is the one byte sequence identical on every machine that can run the
+// machinery. The working tree is checked separately: it must be the HEAD bytes,
+// so a local edit (or line-ending drift) still cannot hide behind a green run.
+function sha256GitBlob(home, file) {
+  const out = execFileSync("git", ["-C", home, "show", `HEAD:${file}`], {
+    encoding: "buffer",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  return createHash("sha256").update(out).digest("hex");
+}
+
+function sha256Worktree(home, file) {
+  return sha256File(join(home, file));
+}
+
 function sameProtectedSet(a, b) {
   if (!a || !b || a.version !== b.version) return false;
   const ka = Object.keys(a.files || {}).sort();
@@ -763,7 +782,23 @@ export function protectedProblems(home = factoryHome()) {
       problems.push(`the grading machinery is missing ${file}`);
       continue;
     }
-    if (sha256File(abs) !== recorded) problems.push(`the grading machinery changed: ${file}`);
+    // The pin is a hash of the committed machinery (`HEAD:<file>`), which is
+    // the same bytes on every checkout. The working tree must be those same
+    // bytes, so a CRLF drift or an uncommitted edit is still a refusal.
+    let blob = null;
+    try {
+      blob = sha256GitBlob(home, file);
+    } catch (e) {
+      problems.push(`could not hash the committed ${file} from HEAD: ${e.message}`);
+      continue;
+    }
+    if (blob !== recorded) {
+      problems.push(`the grading machinery changed: ${file}`);
+      continue;
+    }
+    if (sha256Worktree(home, file) !== blob) {
+      problems.push(`your working copy of ${file} does not match its committed bytes (line endings?); run: git checkout -- ${file}`);
+    }
   }
   // A baseline nobody committed is a baseline only its author can see. Compare
   // parsed JSON, not bytes: git stores LF and a Windows checkout may be CRLF,
@@ -826,7 +861,16 @@ export function protect(argv, home = factoryHome()) {
   const files = {};
   const rows = [];
   for (const file of PROTECTED_FILES) {
-    const hash = sha256File(join(home, file));
+    // Hash the committed blob, never the working tree: on Windows the checkout
+    // may be CRLF, which records a hash no LF machine can ever reproduce. The
+    // writer is therefore run only when the machinery is committed, and it
+    // refuses otherwise - a baseline must describe what is in HEAD.
+    let hash = null;
+    try {
+      hash = sha256GitBlob(home, file);
+    } catch (e) {
+      throw new AttestError(`cannot record a hash for ${file}: it is not in HEAD yet. Commit the machinery first, then run protect --write${e.message ? ` (${e.message})` : ""}.`);
+    }
     files[file] = hash;
     const before = previous[file];
     rows.push(`${before === undefined ? "new    " : before === hash ? "ok     " : "changed"} ${file}`);
