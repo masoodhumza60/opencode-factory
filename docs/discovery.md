@@ -144,6 +144,13 @@ thing.
 
 ## 4. Rank
 
+0. **Prior outcomes demote, they never promote.** Before ranking a candidate,
+   consult `node scripts/factory-outcome.mjs lookup <name>`. A `did-not-work`
+   entry is a strike against the candidate for this project; it is not a
+   refusal, and the ledger's `worked` rows never lift a weak candidate above
+   an official one. Official origin, fit, and use still order the list; the
+   ledger only breaks ties downward. A candidate with no ledger history is
+   unremarkable — the absence of a record is not evidence.
 1. Official/verified origin (above).
 2. Best fit for the **actual** work — read the candidate's `SKILL.md` and match
    the verbs in the feature, not its title.
