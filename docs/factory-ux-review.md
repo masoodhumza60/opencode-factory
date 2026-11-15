@@ -1,6 +1,6 @@
 # opencode-factory — UX and deployability review
 
-Date: 2026-11-09 · Reviewer: opencode (in-session) · Branch: feat/m4-make-it-learn · Repo: masoodhumza60/opencode-factory
+Date: 2026-11-09 · Revised 2026-11-15 (applied an in-review read: F1 retitled — the selfcheck was loud at run time; the gap is that nothing schedules a re-check. F6 rewritten to evidence only. F5 names its consequence. Coverage section added below.) · Reviewer: opencode (in-session) · Branch: feat/m4-make-it-learn · Repo: masoodhumza60/opencode-factory
 
 Scope: the whole factory as a *user-facing product* — installer, docs, CLIs, the selfcheck, the `factory` skill, the seed apps — not the test harness. The request was a report, fixes, and a deployable state. This file is the report; the fixes are committed; the ceilings are stated, not hidden.
 
@@ -10,9 +10,9 @@ Clean. Zero open and zero closed issues; zero PRs; default branch `master` (`314
 
 ## Findings, and what was done about them
 
-### F1 — The live machine was undeployable, silently (Critical, fixed)
+### F1 — The deployed bundle drifted from this repo; a hand-run selfcheck caught it (Critical, fixed surgically)
 
-`node scripts/factory-selfcheck.mjs` on this machine printed `FAIL factory runtime scripts deployed — missing from the install: factory-manifest.mjs, factory-policy.mjs, factory-attest.mjs, factory-review.mjs — the installed docs reference them (re-run install.ps1/install.sh)` and exited 1. The repo's installers ship the full 12-script set (install.ps1, `$runtimeScripts` at line ~216; install.sh likewise) — the user-level install at `~/.agents/skills/factory/scripts/` was an old 8-script bundle that never received the M1a/M2c scripts, and nothing told the machine it had drifted until the selfcheck refused it.
+`node scripts/factory-selfcheck.mjs` on this machine printed `FAIL factory runtime scripts deployed — missing from the install: factory-manifest.mjs, factory-policy.mjs, factory-attest.mjs, factory-review.mjs — the installed docs reference them (re-run install.ps1/install.sh)` and exited 1. The failure was **loud at the moment it ran** — this check exists because of exactly this drift (see F7). The gap that let it persist for weeks was not silence inside the check; it is that *nothing schedules a re-check*, so drift is only ever caught by a human remembering to run one. The repo's installers ship the full 12-script set (install.ps1, `$runtimeScripts` at line ~216; install.sh likewise) — the user-level install at `~/.agents/skills/factory/scripts/` was an old 8-script bundle that never received the M1a/M2c scripts.
 
 Fix applied surgically, not silently: the four missing scripts were copied from this repo into `~/.agents/skills/factory/scripts/` (nothing else touched). Re-run: `All selfchecks passed`, exit 0.
 
@@ -34,10 +34,11 @@ Phase 5 requires `--ran "<command> -> <observed result> at <ISO-8601>" --artifac
 
 - The `install.ps1` `__EXITCODE__` sentinel change (suites could not feed a fake exit code to the suite gate) is committed and parse-checked but **never exercised by a live install**.
 - `install.sh` has no wall-clock timeout on its test-suite loop (PS1 enforces a 60-minute bounded job; portable bash has no such primitive). A hang there still hangs the installer. Documented trade-off; use `timeout(1)` on Unix if you need the bound.
+- One consequence worth naming: the installer re-run recommended below is also the **first live exercise** of these F5 code paths. If it fails there, the cause may be the new PowerShell code rather than the old bundle — which is itself useful evidence, but should be expected, not a surprise.
 
 ### F6 — The phase suite is UNVERIFIED on this branch (Medium, open, honest)
 
-Two background launches of `node scripts/test-factory-phase.mjs` exceeded the 50-minute tool timeout with zero output (the second broke the never-concurrent rule by overlapping the first). A third run, launched with unlimited timeout writing full raw output to a log, had produced ~10.8 KB of output but no exit verdict at the time this review was written — the suite passes its checks invisibly to the file redirect because bd's noise is buffered, and this machine's bd has a known-illusory staleness issue ("beads.role not configured (GH#2950)" warnings throughout). **No claim is made that the suite passes at commit `195c810`/`9f4e8b6`.** It must be run once, cleanly, to a file, with the verdict read from the tail, before the phase suite's documented counts are restated. attest and phase must never run concurrently; neither is settled.
+Evidence, with nothing more claimed than the evidence supports: two background launches of `node scripts/test-factory-phase.mjs` hit the 50-minute tool timeout with zero bytes of output (the second overlapping the first, which broke the never-concurrent rule for attest/phase); a third, launched with unlimited timeout writing full raw output to `%TEMP%\phase-suite-raw.log`, was killed by a server restart before finishing — the log reached 18,796 bytes with its last writes inside the `status` staleness block, and no exit verdict ever existed. No mechanism for the stall was diagnosed; anything more specific here would be invented. attest has not been run this session either. **No claim is made that either suite passes at commits `195c810`/`9f4e8b6`.** The suite must complete once, cleanly, to a file, with the verdict read from the tail, before any suite count is restated. attest and phase must never run concurrently; neither is settled.
 
 ### F7 — Honest ceilings that persist (by design, stated)
 
@@ -47,6 +48,14 @@ Two background launches of `node scripts/test-factory-phase.mjs` exceeded the 50
 - The `--booted` → `--ran` rename means any book paraphernalia outside the repo (screenshots, videos, talks) referring to `--booted` is stale; this repo cannot fix those.
 - Seed apps: `orderboard`/`orderboard-api`/`orderboard-cli` still contain a plaintext auth pattern deliberately (documented in tests as the thing the factory is meant to harden). They are teaching material, not production code; do not copy their security posture.
 - Citation policy: claims in this file came from `Select-String`/source reads at review time; suite counts shown in roadmap/README may drift between milestones and are re-stated at each close.
+
+## What this review did not check (honest coverage)
+
+- `commands/factory/*.md` (feature, onboard, selfcheck) were never read line-by-line; `skills/factory/SKILL.md` beyond the installed-presence check; `agents/beads-task-agent.md`, `plugins/`, `executables/`, `skills/catalog.yaml` — none audited here.
+- The seed apps were surveyed only for the M4 milestone, not re-reviewed for this report.
+- GitHub was checked for issues, PRs and branches only — not releases/tags, Actions, branch protection, or README CI badges.
+- Suite ledger at the time of this revision: phase UNVERIFIED (see F6); attest NOT RUN this session; policy, review, delivery, manifest, protect, skills, fixture, design, capture, compliance, fake-ship suites NOT RUN this session. No suite counts are restated here or in the roadmap as of this commit; the roadmap's counts remain whatever milestone last restated them.
+- The report's suite counts claim ("nothing green claimed") is deliberate: this review closes doc and installer defects, not milestone verification.
 
 ## What "deployable again" means, and what this review verified
 
