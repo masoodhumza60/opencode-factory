@@ -1,0 +1,16 @@
+{
+  "name": "orderboard-cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Orders at a terminal: a zero-dependency CLI against a local JSON store.",
+  "engines": {
+    "node": ">=22.5"
+  },
+  "bin": {
+    "orders": "./src/cli.js"
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.js\""
+  }
+}

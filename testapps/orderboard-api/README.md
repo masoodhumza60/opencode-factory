@@ -26,3 +26,6 @@ held in memory. There is no third dependency to install: `node:http`,
 ## What is deliberately NOT here
 
 There is no CSV export. That is the feature a run builds.
+
+
+`hidden/` contains acceptance tests for factory-internal evals. Do not read them when building.
