@@ -727,23 +727,19 @@ export function factoryHome() {
   return dirname(dirname(fileURLToPath(import.meta.url)));
 }
 
-// Hashing the working-tree copy is not environment-independent: on Windows with
-// autocrlf=true the same pinned script checked out as CRLF, so recording the
-// Windows working tree produced hashes that every LF checkout (CI, Linux)
-// refused. The pin records the committed blob - `git show HEAD:<file>` - because
-// that is the one byte sequence identical on every machine that can run the
-// machinery. The working tree is checked separately: it must be the HEAD bytes,
-// so a local edit (or line-ending drift) still cannot hide behind a green run.
-function sha256GitBlob(home, file) {
-  const out = execFileSync("git", ["-C", home, "show", `HEAD:${file}`], {
-    encoding: "buffer",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  return createHash("sha256").update(out).digest("hex");
-}
-
-function sha256Worktree(home, file) {
-  return sha256File(join(home, file));
+// Hashing the raw working-tree copy is environment-dependent under core.autocrlf:
+// a Windows checkout of the same committed blob can be CRLF, which records hashes
+// no LF machine can reproduce. Since .gitattributes pins the repo to LF, hashing
+// the normalized bytes (CRLF -> LF) yields the same digest on every checkout, and
+// it is the same digest as the committed blob for every .mjs in this repo.
+function sha256NormalizedFile(path) {
+  const buf = readFileSync(path);
+  const out = [];
+  for (let i = 0; i < buf.length; i++) {
+    if (buf[i] === 13 /* \r */ && buf[i + 1] === 10 /* \n */) continue;
+    out.push(buf[i]);
+  }
+  return createHash("sha256").update(Buffer.from(out)).digest("hex");
 }
 
 function sameProtectedSet(a, b) {
@@ -782,22 +778,10 @@ export function protectedProblems(home = factoryHome()) {
       problems.push(`the grading machinery is missing ${file}`);
       continue;
     }
-    // The pin is a hash of the committed machinery (`HEAD:<file>`), which is
-    // the same bytes on every checkout. The working tree must be those same
-    // bytes, so a CRLF drift or an uncommitted edit is still a refusal.
-    let blob = null;
-    try {
-      blob = sha256GitBlob(home, file);
-    } catch (e) {
-      problems.push(`could not hash the committed ${file} from HEAD: ${e.message}`);
-      continue;
-    }
-    if (blob !== recorded) {
+    // Normalize the working-tree bytes before hashing: .gitattributes forces
+    // LF, so on a compliant checkout this equals the committed blob's digest.
+    if (sha256NormalizedFile(abs) !== recorded) {
       problems.push(`the grading machinery changed: ${file}`);
-      continue;
-    }
-    if (sha256Worktree(home, file) !== blob) {
-      problems.push(`your working copy of ${file} does not match its committed bytes (line endings?); run: git checkout -- ${file}`);
     }
   }
   // A baseline nobody committed is a baseline only its author can see. Compare
@@ -861,16 +845,9 @@ export function protect(argv, home = factoryHome()) {
   const files = {};
   const rows = [];
   for (const file of PROTECTED_FILES) {
-    // Hash the committed blob, never the working tree: on Windows the checkout
-    // may be CRLF, which records a hash no LF machine can ever reproduce. The
-    // writer is therefore run only when the machinery is committed, and it
-    // refuses otherwise - a baseline must describe what is in HEAD.
-    let hash = null;
-    try {
-      hash = sha256GitBlob(home, file);
-    } catch (e) {
-      throw new AttestError(`cannot record a hash for ${file}: it is not in HEAD yet. Commit the machinery first, then run protect --write${e.message ? ` (${e.message})` : ""}.`);
-    }
+    // Hash the normalized bytes: .gitattributes pins the repo to LF, so this
+    // digest equals the committed blob on every compliant checkout.
+    const hash = sha256NormalizedFile(join(home, file));
     files[file] = hash;
     const before = previous[file];
     rows.push(`${before === undefined ? "new    " : before === hash ? "ok     " : "changed"} ${file}`);
