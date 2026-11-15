@@ -1469,7 +1469,14 @@ const outcomeBody = (verdict, learned = []) => [
 ].join("\n");
 
 const ledgerPath = join(SANDBOX, "docs", "outcomes.jsonl");
-mkdirSync(ledgerPath, { recursive: true }); // a directory where the file belongs
+// Earlier blocks in this suite already appended rows to SANDBOX/docs/outcomes.jsonl
+// (every successful complete 8 appends one), so the file cannot be mkdir'd
+// over. Back its bytes up, make a directory where the file belongs, prove the
+// refusal, then restore - the good-append check counts rows either way.
+const priorLedger = existsSync(ledgerPath) ? readFileSync(ledgerPath) : null;
+const priorRowCount = priorLedger ? priorLedger.toString("utf8").trim().split("\n").filter(Boolean).length : 0;
+rmSync(ledgerPath, { force: true });
+mkdirSync(ledgerPath); // a directory where the file belongs
 writeFileSync(join(SANDBOX, ".factory", p9, "outcome.md"), outcomeBody("Outcome: worked"));
 const unwritable = phase(["complete", p9, "8", "--evidence", "close with a directory in the ledger's way", "--quiet"]);
 const state9 = bd(["state", p9, "phase_done"]);
@@ -1477,6 +1484,7 @@ check("an unwritable ledger REFUSES before state write",
   unwritable.code === 1 && has(unwritable.out, "outcomes.jsonl") && !has(state9.out, "8"),
   `${unwritable.code} ${unwritable.out.slice(0, 300)} / state: ${state9.out.slice(0, 60)}`);
 rmSync(ledgerPath, { recursive: true, force: true });
+if (priorLedger) writeFileSync(ledgerPath, priorLedger); // restore the real ledger
 
 writeFileSync(join(SANDBOX, ".factory", p9, "outcome.md"),
   outcomeBody("Outcome: worked", ["", "## What the factory learned", "", "Learned: hidden tests: they discriminate, run them"]));
@@ -1485,7 +1493,8 @@ check("complete 8 appends one outcomes.jsonl row", (() => {
   if (landed.code !== 0 || !existsSync(ledgerPath)) return false;
   const rows = readFileSync(ledgerPath, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
   const row = rows[rows.length - 1];
-  return row.bead === p9 && row.verdict === "worked" &&
+  return rows.length === priorRowCount + 1 &&
+    row.bead === p9 && row.verdict === "worked" &&
     row.what_changed === "The feature shipped." && typeof row.measured === "string" && row.measured.length > 0 &&
     Array.isArray(row.learned) && row.learned.length === 1 && row.learned[0].name === "hidden tests" &&
     typeof row.head === "string" && /^[0-9a-f]{7,40}$/.test(row.head);
