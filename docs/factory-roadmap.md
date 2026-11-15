@@ -112,12 +112,13 @@ node scripts/test-factory-attest.mjs    # 112/112 attest tests passed.
 node scripts/test-factory-review.mjs    # 83/83 review tests passed.
 node scripts/test-factory-protect.mjs   # 17/17 protect tests passed.
 node scripts/test-factory-delivery.mjs   # delivery tests passed.
+node scripts/test-factory-eval.mjs    # 9/9 eval tests passed.
 node scripts/test-factory-outcome.mjs   # 9/9 outcome tests passed.
 ```
 
 The capture suite prints `SKIPPED: no browser` and exits 1 if no browser is available; a skip is not a pass.
 
-The counts are kept current with the last shipped milestone (M4a); each suite's
+The counts are kept current with the last shipped milestone (M4b); each suite's
 number only ever grows, so a stale count here is a doc bug, not a weaker claim.
 
 ### M1b — review and independence (shipped)
@@ -370,11 +371,15 @@ its three plans, one pair each.
    consults `factory-outcome.mjs lookup` for a candidate's prior outcomes, as
    an **advisory demotion only** — never a promotion. The feedback loop into
    the eval suite is items 3/4; not yet landed.
-3. **End-to-end evals on `testapps/`.** Planned (M4b), not run: third seed
+3. **End-to-end evals on `testapps/`.** — M4b shipped the harness. Third seed
    (`orderboard-cli`), hidden acceptance tests under `testapps/<seed>/hidden/`,
-   golden+broken reference patches, `factory-eval.mjs` with 12 proofs
-   (4 per seed: bare-fails/golden-passes/broken-fails/baseline), runbook
-   `docs/factory-eval.md`. See plan
+   golden+broken reference patches, `scripts/factory-eval.mjs` (12 proofs —
+   4 per web/api seed: own passes / bare hidden-tests fail / golden hidden-tests pass /
+   broken hidden-tests fail; the cli seed ships its feature, so its three
+   discrimination proofs are NOT APPLICABLE), runbook
+   `docs/factory-eval.md`. The cheap half of item 3 is done; the expensive
+   half (a human-run full pipeline scored by hidden tests per seed) is not.
+   See plan
    `docs/superpowers/plans/2026-11-09-factory-m4b-testapp-evals.md`.
 4. **Calibrate the review model against human labels.** Harness shipped at
    `09d5e0a`; labels pending (Humza): model-agnostic, 30 frozen diffs (20
@@ -389,8 +394,9 @@ its three plans, one pair each.
 
 **Exit:** changing a factory rule can lower the eval pass rate, and the change is caught before it
 ships. **Not yet met.** M1c met the outcome gate's existence half; M4a met the loop's ledger half
-(rows appended, drafts quarantined, discovery advisory). The eval half of the exit criterion waits
-on item 3, and the calibration half on item 4.
+(rows appended, drafts quarantined, discovery advisory). The cheap half of item 3 is met (M4b:
+seeds discriminate; a factory change that breaks the seed gates is caught before it ships). The
+human-scored eval half of item 3, and the calibration half of item 4, wait on a human run.
 
 ### M5 - Distribution and trust (1 week, parallel)
 
