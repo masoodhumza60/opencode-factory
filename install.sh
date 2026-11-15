@@ -202,12 +202,12 @@ install_skills() {
     #     "installed phase machine runs" selfcheck check exists to catch.
     #   - factory-skills.mjs resolves its default catalog to ../skills/catalog.yaml
     #     relative to itself, so the catalog ships to <skill>/skills/catalog.yaml.
-    local runtime=(factory-phase.mjs factory-mcp.mjs factory-plan.mjs factory-skills.mjs factory-selfcheck.mjs platform.mjs mcp-defmatch.mjs measure.mjs factory-manifest.mjs factory-policy.mjs factory-attest.mjs factory-review.mjs)
+    local runtime=(factory-phase.mjs factory-mcp.mjs factory-plan.mjs factory-skills.mjs factory-selfcheck.mjs platform.mjs mcp-defmatch.mjs measure.mjs factory-manifest.mjs factory-policy.mjs factory-attest.mjs factory-review.mjs factory-outcome.mjs factory-design.mjs factory-capture.mjs factory-compliance.mjs)
     if [ "$DRY_RUN" = 1 ]; then
         dry "cp \"$src_sk\" \"$agents_skills/factory/\""
         dry "cp \"$bundle/skills/verify-app/SKILL.md\" \"$agents_skills/verify-app/\""
         dry "cp \"$bundle/docs/conductor.md\" \"$bundle/docs/how-factory-works.md\" \"$bundle/docs/plan-format.md\" \"$bundle/docs/discovery.md\" \"$bundle/docs/mcp-judging.md\" \"$agents_skills/factory/docs/\""
-        dry "cp \"$bundle/scripts/{factory-phase,factory-mcp,factory-plan,factory-skills,factory-selfcheck,platform,mcp-defmatch,measure,factory-manifest,factory-policy,factory-attest,factory-review}.mjs\" \"$agents_skills/factory/scripts/\""
+        dry "cp \"$bundle/scripts/{factory-phase,factory-mcp,factory-plan,factory-skills,factory-selfcheck,platform,mcp-defmatch,measure,factory-manifest,factory-policy,factory-attest,factory-review,factory-outcome,factory-design,factory-capture,factory-compliance}.mjs\" \"$agents_skills/factory/scripts/\""
         dry "cp \"$bundle/skills/catalog.yaml\" \"$agents_skills/factory/skills/\""
         dry "cp \"$bundle/config/mcp-requirements.json\" \"$agents_skills/factory/config/\""
         return
@@ -231,7 +231,7 @@ install_skills() {
         else
             mkdir -p "$agents_skills/factory/scripts"
             for s in "${runtime[@]}"; do cp "$bundle/scripts/$s" "$agents_skills/factory/scripts/"; done
-            say "factory runtime scripts installed -> $agents_skills/factory/scripts/ (${#runtime[@]} files: phase, mcp, plan, skills, selfcheck, platform, defmatch, measure, manifest, policy, attest, review)"
+            say "factory runtime scripts installed -> $agents_skills/factory/scripts/ (${#runtime[@]} files: phase, mcp, plan, skills, selfcheck, platform, defmatch, measure, manifest, policy, attest, review, outcome, design, capture, compliance)"
         fi
         if [ -f "$bundle/skills/catalog.yaml" ]; then
             mkdir -p "$agents_skills/factory/skills"
@@ -390,7 +390,10 @@ run_selfcheck() {
         return
     fi
     if [ -f "$selfcheck" ]; then
-        node "$selfcheck"
+        if ! node "$selfcheck"; then
+            say "factory selfcheck failed - install incomplete." >&2
+            exit 1
+        fi
         say "selfcheck: OK"
     else
         say "warning: $selfcheck not in bundle yet (selfcheck task not landed); skip for now."

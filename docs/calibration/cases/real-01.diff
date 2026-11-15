@@ -1,0 +1,14 @@
+// CALIBRATION-CASE id=real-01 corpus=real-history sha=a432cf6
+// gates are named G1-G3, old letters still work (M1c)
+commit a432cf6c0be35dbe37548393464cce27de69b401
+Author: masoodhumza60 <masoodhumza60@users.noreply.github.com>
+Date:   Tue Oct 27 02:10:34 2026 +0500
+
+    feat(factory): gates are named G1-G3, old letters still work
+
+ config/factory.protected.json   |   2 +-
+ scripts/factory-phase.mjs       | 126 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++-------------------------------------------------
+ scripts/test-factory-attest.mjs |   9 +++++++--
+ scripts/test-factory-phase.mjs  | 188 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++---------------------------------
+ scripts/test-fake-ship.mjs      |  13 ++++++++++---
+ 5 files changed, 250 insertions(+), 88 deletions(-)

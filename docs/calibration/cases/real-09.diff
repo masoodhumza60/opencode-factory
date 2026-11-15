@@ -1,0 +1,11 @@
+// CALIBRATION-CASE id=real-09 corpus=real-history sha=41fd16d
+// capture every state at every width, or fail loud (M2b)
+commit 41fd16d9f5d3728d0a1684b807f7044522bc1aec
+Author: masoodhumza60 <masoodhumza60@users.noreply.github.com>
+Date:   Wed Nov 4 19:11:51 2026 +0500
+
+    feat(factory): capture every state at every width, or fail loud
+
+ scripts/factory-capture.mjs      | 211 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ scripts/test-factory-capture.mjs |  87 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 298 insertions(+)

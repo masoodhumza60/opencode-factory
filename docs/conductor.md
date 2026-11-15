@@ -119,7 +119,10 @@ For every phase after onboard:
    `node <bundle>/scripts/factory-phase.mjs enter <bead> <phase> --reason "…"`
    then `complete <bead> <phase> --evidence "…"`. The `--reason` becomes an
    append-only event bead, so the audit survives restarts and device moves
-   (Dolt) — and an illegal transition is refused outright. Completing phase 5 (verify) additionally requires `--booted "..."` — see the phase machine section for why, and for the format limits.
+   (Dolt) — and an illegal transition is refused outright. Completing phase 5 (verify) additionally requires `--ran "<command> -> <observed result> at <ISO-8601>" --artifact <path>` - see the phase machine section for why, and for the format limits.
+   Resolve a gate through the same command, so the approval is recorded with the
+   reason the human gave rather than as a bare resolution:
+   `gate <bead> <A|B|C> --evidence "…"`.
 6. At each human gate, **report which mandatory skills ran per phase**. Any
    skipped skill forces the phase to re-run before the gate can pass.
 
@@ -137,7 +140,7 @@ the source of truth, and this document deliberately does not restate it.** The
 one form worth repeating here is the one with a flag that is easy to miss:
 
 ```
-node <bundle>/scripts/factory-phase.mjs complete <bead> 5 --evidence "…" --booted "…"
+node <bundle>/scripts/factory-phase.mjs complete <bead> 5 --evidence "…" --ran "npm run dev -> 200 OK on GET /health at 2026-10-20T10:00:00Z" --artifact boot.log
 ```
 
 Exit codes: **0** ok · **1** illegal transition or error · **2** blocked, a
@@ -153,19 +156,17 @@ Seven properties worth relying on:
 - **`--evidence` is mandatory on complete.** Completion has to be checkable
   rather than asserted, which is the difference MAST's "not recognizing
   completion" failures actually turn on.
-- **`--booted` is mandatory on completing phase 5 (verify).** A green test suite
+- **`--ran` is mandatory on completing phase 5 (verify).** A green test suite
   is not a running app, and a real run reached 22 tasks with every gate passing
   while nobody had ever started the thing. The `verify-app` skill generates the
   per-project, committed way to drive it (a feature map plus Launch / Doctor /
   Drive / Evidence / Cleanup); run it at phase 1 and its claim here becomes
   checkable instead of asserted. Record what you started, what you drove, and
-  where the evidence is: `--booted "verify-app: drove export, evidence at
-  .verify/2026-10-09.md"`. It is
+  where the evidence is: `--ran "npm run dev -> 200 OK on GET /health at 2026-10-20T10:00:00Z" --artifact boot.log`. It is
   written to the state layer *before* `phase_done`, so a claim that cannot be
   recorded leaves the machine correctly refusing to advance. Under 255
-  characters, no double quotes (bd's argument parser splits on them); the script
-  refuses rather than truncating, because half a boot claim is worse than none.
-- **The `verify-app` skill makes that claim re-checkable.** `--booted` proves the
+  characters, exactly one `->`, an ISO-8601 timestamp after the word `at`, no double quotes (bd's argument parser splits on them); the script refuses rather than truncating, because half a run claim is worse than none. (`--booted` is a deprecated alias for `--ran` and is accepted for one release.)
+- **The `verify-app` skill makes that claim re-checkable.** `--ran` proves the
   app answered once. `verify-app` writes a per-project skill - committed, so every
   person and every agent drives the app the same way - naming the launch command,
   the selectors, the features, and where evidence lands. Generate it at phase 1,
@@ -419,9 +420,10 @@ for the human; nothing advances past a gate without approval.
 **They are enforced in the state layer, not just described here.** Entering
 phase `2`, `3` or `7` through the phase machine creates a real `bd` gate
 (`--type human`) that blocks the bead, so `bd ready` reports the feature as
-blocked on every device. Ask the human, then `bd gate resolve <gate-id>` — and
-only then can the next phase be entered. A word written in a document is not an
-approval; a resolved gate is.
+blocked on every device. Ask the human, then record the approval with
+`factory-phase.mjs gate <bead> <A|B|C> --evidence "…"`, which resolves the `bd`
+gate and stores the reason with it — and only then can the next phase be
+entered. A word written in a document is not an approval; a resolved gate is.
 
 - **Gate A — spec approved** (between phase 2 and phase 3): the spec doc
   exists at `docs/superpowers/specs/`, `brainstorming` (spec section) ran and
@@ -451,7 +453,7 @@ approval; a resolved gate is.
 
 ### What the human must actually see at a gate
 
-`--booted` proves the app answered once. `verify-app` makes that claim
+`--ran` proves the app answered once. `verify-app` makes that claim
 re-checkable. Neither proves **a human looked at it and was satisfied** — so
 without the rule below a gate is satisfied by the machine's evidence while the
 human's attention is spent somewhere else entirely.

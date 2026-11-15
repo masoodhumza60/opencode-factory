@@ -16,7 +16,7 @@
 
 import { execFileSync } from "node:child_process";
 import { statSync, readFileSync, writeFileSync, existsSync } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { join, relative, resolve, sep, dirname } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import {
@@ -727,6 +727,21 @@ export function factoryHome() {
   return dirname(dirname(fileURLToPath(import.meta.url)));
 }
 
+// Hashing the raw working-tree copy is environment-dependent under core.autocrlf:
+// a Windows checkout of the same committed blob can be CRLF, which records hashes
+// no LF machine can reproduce. Since .gitattributes pins the repo to LF, hashing
+// the normalized bytes (CRLF -> LF) yields the same digest on every checkout, and
+// it is the same digest as the committed blob for every .mjs in this repo.
+function sha256NormalizedFile(path) {
+  const buf = readFileSync(path);
+  const out = [];
+  for (let i = 0; i < buf.length; i++) {
+    if (buf[i] === 13 /* \r */ && buf[i + 1] === 10 /* \n */) continue;
+    out.push(buf[i]);
+  }
+  return createHash("sha256").update(Buffer.from(out)).digest("hex");
+}
+
 function sameProtectedSet(a, b) {
   if (!a || !b || a.version !== b.version) return false;
   const ka = Object.keys(a.files || {}).sort();
@@ -763,7 +778,11 @@ export function protectedProblems(home = factoryHome()) {
       problems.push(`the grading machinery is missing ${file}`);
       continue;
     }
-    if (sha256File(abs) !== recorded) problems.push(`the grading machinery changed: ${file}`);
+    // Normalize the working-tree bytes before hashing: .gitattributes forces
+    // LF, so on a compliant checkout this equals the committed blob's digest.
+    if (sha256NormalizedFile(abs) !== recorded) {
+      problems.push(`the grading machinery changed: ${file}`);
+    }
   }
   // A baseline nobody committed is a baseline only its author can see. Compare
   // parsed JSON, not bytes: git stores LF and a Windows checkout may be CRLF,
@@ -826,7 +845,9 @@ export function protect(argv, home = factoryHome()) {
   const files = {};
   const rows = [];
   for (const file of PROTECTED_FILES) {
-    const hash = sha256File(join(home, file));
+    // Hash the normalized bytes: .gitattributes pins the repo to LF, so this
+    // digest equals the committed blob on every compliant checkout.
+    const hash = sha256NormalizedFile(join(home, file));
     files[file] = hash;
     const before = previous[file];
     rows.push(`${before === undefined ? "new    " : before === hash ? "ok     " : "changed"} ${file}`);

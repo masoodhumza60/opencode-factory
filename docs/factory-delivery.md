@@ -12,22 +12,26 @@ instead of a promise. It does not deploy software; it delivers the factory.
    subdirectories, plus a SHA256 manifest of every backed-up file at
    `<dir>/manifest.json`, keyed by root-relative path.
 2. Re-installs from this repo (`install.ps1`, run via PowerShell).
-3. Verifies the install: the installed `factory-selfcheck.mjs` must exit 0, and
+3. Verifies the install: the installed `factory-selfcheck.mjs` must run and
+   exit 0 (a missing or crashing selfcheck refuses the install, not only a
+   non-zero one), and
    `~/.agents/skills/factory/install-manifest.json` must parse, name this repo's
    HEAD as its `bundle_commit`, and hash-match every file it lists.
 4. Rolls the machine back to the backup: every backed-up file is restored
    byte-identically, and files that exist after install but are not in the
    backup manifest are deleted. Your own files taken before the backup survive;
    only files the install itself added are removed.
-5. Verifies the rollback by re-hashing every live file against the backup
-   manifest.
+5. Verifies the rollback: every backed-up file is re-hashed and size-checked
+   against the backup manifest, and any file under the install roots that the
+   manifest does not name is reported as unmanifested.
 6. Writes a transcript to `out/delivery/<timestamp>-drill.md`.
 
-Any failure before the rollback step completes restores the machine
-automatically from the backup before exiting non-zero. `--no-auto-rollback`
-disables that. A failure in the rollback verification itself means the
-restore ran but did not verify; the transcript records exactly which files
-missing, modified, or unmanifested caused it.
+Any failure after the backup completes restores the machine automatically from
+the backup before exiting non-zero; a failure before the backup completes means
+the drill never modified the machine, so there is nothing to restore.
+`--no-auto-rollback` disables the automatic restore. A failure in the rollback
+verification itself means the restore ran but did not verify; the transcript
+records exactly which files missing, modified, or unmanifested caused it.
 
 Useful flags: `--no-auto-rollback` (skip the automatic restore on failure) and
 `--home <dir>` (run every step against a sandboxed home instead of your real

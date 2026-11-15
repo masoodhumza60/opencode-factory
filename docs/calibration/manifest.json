@@ -1,0 +1,185 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "real-01",
+      "corpus": "real-history",
+      "class": "real-history",
+      "sha256": "f7f379b7f97861cf1b97a1d0b02f84733ea1b7875881582711a9513de68e5045"
+    },
+    {
+      "id": "real-02",
+      "corpus": "real-history",
+      "class": "real-history",
+      "sha256": "3edbf4706c9837964139739449b480ab2c10586d8689063562b5d5f54a9869f3"
+    },
+    {
+      "id": "real-03",
+      "corpus": "real-history",
+      "class": "real-history",
+      "sha256": "f27ba36aac29fdbc6c5ea53e590f051703bf6e16876b6cd81e9db500fb7c2362"
+    },
+    {
+      "id": "real-04",
+      "corpus": "real-history",
+      "class": "real-history",
+      "sha256": "ad4624fde3a36ab7b3a8bf12c348214049dafda5f157547ba69ea3dbd22e6618"
+    },
+    {
+      "id": "real-05",
+      "corpus": "real-history",
+      "class": "real-history",
+      "sha256": "f9b6c78db5070010aa2973200261087ff410cb058d05aeb2e42253c3cebf3f8a"
+    },
+    {
+      "id": "real-06",
+      "corpus": "real-history",
+      "class": "real-history",
+      "sha256": "a4a470853c0d9c4813e8b4e3a47f3c252e88f8abc9c65049cfbb0f9e543dca22"
+    },
+    {
+      "id": "real-07",
+      "corpus": "real-history",
+      "class": "real-history",
+      "sha256": "0478b4d1f4055c12cad123144d5fed2dbe7e3bd7d4f438b49e3ff44793763578"
+    },
+    {
+      "id": "real-08",
+      "corpus": "real-history",
+      "class": "real-history",
+      "sha256": "c0049ab572fbf20c0fe736ec465be11bbd38cde56de901bc5ab04999630a8443"
+    },
+    {
+      "id": "real-09",
+      "corpus": "real-history",
+      "class": "real-history",
+      "sha256": "35d12ab126572e7b0a7578c09fbe71fc0fda22487ecdb41b5d6eaa1b79ea03eb"
+    },
+    {
+      "id": "real-10",
+      "corpus": "real-history",
+      "class": "real-history",
+      "sha256": "b6f082c12c33bcddec160f089f8b171cb21c8211cf221f0e33f22164a0800c61"
+    },
+    {
+      "id": "syn-01",
+      "corpus": "synthetic",
+      "class": "wrong-condition",
+      "sha256": "83f075f139031de2548f1179a27c4708de1931b1102635657f99886c1532caf7"
+    },
+    {
+      "id": "syn-02",
+      "corpus": "synthetic",
+      "class": "wrong-condition",
+      "sha256": "69340b2f403d10c74bc4debc34bdfb24a21cd20957fdbeac0e4628c7ef0b9503"
+    },
+    {
+      "id": "syn-03",
+      "corpus": "synthetic",
+      "class": "missing-validation",
+      "sha256": "49de235868b5bbedcdcde0db0454596006b07bc7506908925476bd9700f0a1a7"
+    },
+    {
+      "id": "syn-04",
+      "corpus": "synthetic",
+      "class": "missing-validation",
+      "sha256": "e79e77fd94e36cb0bd5e445a6988435073504c8e76a62273a59acc5149dac6fd"
+    },
+    {
+      "id": "syn-05",
+      "corpus": "synthetic",
+      "class": "contract-break",
+      "sha256": "9c67801d2c894d2557f1be7fde18a0f40cd7ff53a4974cafa599f3251909134e"
+    },
+    {
+      "id": "syn-06",
+      "corpus": "synthetic",
+      "class": "contract-break",
+      "sha256": "f623bd024126b19f74edd9d08db500e9f38db8a6afdff91f761a02f9ae4b211c"
+    },
+    {
+      "id": "syn-07",
+      "corpus": "synthetic",
+      "class": "dropped-error-path",
+      "sha256": "412902594dfdbee1a999cbb7928cf5ff7e204577dbddf82674eb59c150ea2297"
+    },
+    {
+      "id": "syn-08",
+      "corpus": "synthetic",
+      "class": "dropped-error-path",
+      "sha256": "3f8a05698c949d513af3363ab0cc7593ebe0018fab4be0239b8cb4d7a43db24d"
+    },
+    {
+      "id": "syn-09",
+      "corpus": "synthetic",
+      "class": "off-by-one",
+      "sha256": "6c9382bb49d2012c3005d3fd29926c9395829d877fa4ae0d3ec3d5cb53790eb2"
+    },
+    {
+      "id": "syn-10",
+      "corpus": "synthetic",
+      "class": "off-by-one",
+      "sha256": "6e082c39cb7d4309c93e1d16cc79dc4573ebaf3e139894eee4b61f2a8d46c25e"
+    },
+    {
+      "id": "syn-11",
+      "corpus": "synthetic",
+      "class": "off-by-one",
+      "sha256": "ff31e3a1fb30f1b47d50c0502352ec2fa563328d861bb6f2d3767595b0c11997"
+    },
+    {
+      "id": "syn-12",
+      "corpus": "synthetic",
+      "class": "silent-swallow",
+      "sha256": "ed7e222551b3dccade00edf36e137925d7e88e83491358a510c10aca89519a72"
+    },
+    {
+      "id": "syn-13",
+      "corpus": "synthetic",
+      "class": "silent-swallow",
+      "sha256": "19d115fb59852b03b415051b8fffd63b68a3026fe41fdbcea3f5fbbed6c2cb6a"
+    },
+    {
+      "id": "syn-14",
+      "corpus": "synthetic",
+      "class": "silent-swallow",
+      "sha256": "e2783a7a62a3458886c9ea2d777e82e6ae4d6779162137694316b06b4025bb6e"
+    },
+    {
+      "id": "syn-15",
+      "corpus": "synthetic",
+      "class": "over-broad-delete",
+      "sha256": "aded0c00c4406dff8c9bb797e2ddab9e3f0ac6b36d207563b46882f4cb462069"
+    },
+    {
+      "id": "syn-16",
+      "corpus": "synthetic",
+      "class": "over-broad-delete",
+      "sha256": "92454342461cfeb2279a75d6c50050513f7bf6fc8f2b6a6978f04b6f757ed0b1"
+    },
+    {
+      "id": "syn-17",
+      "corpus": "synthetic",
+      "class": "over-broad-delete",
+      "sha256": "8533bb578720763642919b3a3359bc75a2a4a9003f71ce5c931fee9bbbd9fe2d"
+    },
+    {
+      "id": "syn-18",
+      "corpus": "synthetic",
+      "class": "stale-comment",
+      "sha256": "1abc862ce095e2ee4a3bc77e1a557eaae8178147760cbdbea1fadcf28c32e356"
+    },
+    {
+      "id": "syn-19",
+      "corpus": "synthetic",
+      "class": "stale-comment",
+      "sha256": "8dc8dbaac73be49bec0f061ad5a2fbaa2b291fa04cdd1c18185ea602e5f01195"
+    },
+    {
+      "id": "syn-20",
+      "corpus": "synthetic",
+      "class": "stale-comment",
+      "sha256": "96eda2238745314a08a44c37e13062ae5cf37aebb782fff7f6016c1724c83270"
+    }
+  ]
+}

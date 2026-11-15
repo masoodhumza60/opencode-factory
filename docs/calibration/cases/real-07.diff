@@ -1,0 +1,14 @@
+// CALIBRATION-CASE id=real-07 corpus=real-history sha=0ff2b13
+// a screenshot cannot stand in for a transcript (M2a)
+commit 0ff2b130c932bb80ba80996af09bd1cb298dfd46
+Author: masoodhumza60 <masoodhumza60@users.noreply.github.com>
+Date:   Mon Nov 2 22:43:52 2026 +0500
+
+    feat(factory): a screenshot cannot stand in for a transcript
+
+ config/factory.protected.json   |  4 ++--
+ scripts/factory-attest.mjs      | 46 ++++++++++++++++++++++++++++++----------------
+ scripts/factory-policy.mjs      | 16 ++++++++++------
+ scripts/test-factory-attest.mjs | 81 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++-----
+ scripts/test-factory-policy.mjs | 22 ++++++++++++++++++++++
+ 5 files changed, 140 insertions(+), 29 deletions(-)

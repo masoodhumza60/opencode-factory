@@ -3,10 +3,10 @@
 // act, not a promise. This script backs up the live install, re-installs from
 // this repo, proves the install, and rolls the machine back either way. It is
 // unpinned on purpose: it orchestrates, it does not grade. It never attests.
-import { existsSync, statSync, mkdirSync, cpSync, readdirSync, readFileSync, createReadStream, writeFileSync, rmSync, truncateSync } from "node:fs";
+import { existsSync, statSync, mkdirSync, cpSync, readdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { join, relative, dirname, isAbsolute } from "node:path";
 import { createHash } from "node:crypto";
-import { homedir, userInfo } from "node:os";
+import { homedir } from "node:os";
 import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
@@ -259,9 +259,21 @@ export function drill({ home = homedir(), backup, noAutoRollback = false, selfch
     writeFileSync(transcriptPath, lines.join("\n") + "\n", "utf8");
     return { ok, code, transcript: transcriptPath };
   };
+  let backupWritten = false;
   const restoreAndReport = (reason) => {
     if (noAutoRollback) {
       return finish(false, 1, [`FAILURE: ${reason}`, "auto-rollback disabled (--no-auto-rollback); restore manually from the backup."]);
+    }
+    // Two different no-backup situations, two honest messages:
+    // - the drill died inside backupRoots, so no backup ever existed and the
+    //   machine was never modified by the drill — nothing to restore;
+    // - a backup was written but is missing or unreadable at restore time
+    //   (the install deleted it) — the machine holds the install's changes,
+    //   and saying otherwise would be a lie.
+    if (!existsSync(join(backup, "manifest.json"))) {
+      return finish(false, 1, backupWritten
+        ? [`FAILURE: ${reason}`, "AUTO-ROLLBACK FAILED: the backup was written but is now missing or unreadable — the machine holds the install's changes; if a copy of the backup exists, restore from it by hand; otherwise repair the install by hand"]
+        : [`FAILURE: ${reason}`, "no backup was written — the drill stopped before it backed the machine up; the drill did not modify the machine, so there is nothing to restore"]);
     }
     try {
       const r = restoreBackup(home, backup);
@@ -271,7 +283,12 @@ export function drill({ home = homedir(), backup, noAutoRollback = false, selfch
       return finish(false, 1, [`FAILURE: ${reason}`, `AUTO-ROLLBACK FAILED: ${e.message}`, "the machine may be in a half-restored state; restore from the backup by hand"]);
     }
   };
-  if (!backup) return finish(false, 1, ["usage: no --backup directory given"]);
+  if (!backup) {
+    // No drill ran, so no transcript is written: usage errors print to the
+    // console, never to out/delivery/.
+    console.error("usage: no --backup directory given\n" + USAGE);
+    return { ok: false, code: 1, transcript: null };
+  }
   // Pre-flight: refuse a badly placed or reused backup before writing anything
   // — no transcript, no directory, no mutation.
   const placement = checkBackupPlacement(home, backup);
@@ -289,6 +306,7 @@ export function drill({ home = homedir(), backup, noAutoRollback = false, selfch
     log(`home: ${home}`);
     log("step 2: backup …");
     const manifest = backupRoots(home, backup, resolvedHead);
+    backupWritten = true;
     log(`backup written: ${Object.keys(manifest.files).length} files -> ${backup}`);
     log("step 3: install …");
     let installOut = "";

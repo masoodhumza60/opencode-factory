@@ -1,0 +1,13 @@
+// CALIBRATION-CASE id=syn-06 corpus=synthetic class=contract-break
+// Defect injected at testapps/orderboard/src/orders/OrdersPage.tsx
+--- a/testapps/orderboard/src/orders/OrdersPage.tsx
++++ b/testapps/orderboard/src/orders/OrdersPage.tsx
+@@ -62,7 +62,7 @@
+         </thead>
+         <tbody>
+           {orders.map((o) => (
+-            <tr key={o.id}>
++            <tr key={o.customer}>
+               <td>{o.id}</td>
+               <td>{o.customer}</td>
+               <td>{o.placedAt.slice(0, 10)}</td>

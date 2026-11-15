@@ -1,0 +1,16 @@
+// CALIBRATION-CASE id=real-06 corpus=real-history sha=1229e7f
+// hidden acceptance tests are the orchestrator's (M2a)
+commit 1229e7f93c6dd5883903cc510f83d3a69ff4f605
+Author: masoodhumza60 <masoodhumza60@users.noreply.github.com>
+Date:   Mon Nov 2 14:47:44 2026 +0500
+
+    feat(factory): hidden acceptance tests are the orchestrator's
+
+ config/factory.protected.json   |  8 ++++----
+ scripts/factory-attest.mjs      | 54 ++++++++++++++++++++++++++++++++++++++++++++++++------
+ scripts/factory-phase.mjs       | 43 +++++++++++++++++++++++++++++++++++++++++--
+ scripts/factory-review.mjs      | 10 ++++++++--
+ scripts/test-factory-attest.mjs | 69 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++---
+ scripts/test-factory-phase.mjs  | 61 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++--
+ scripts/test-factory-review.mjs | 17 +++++++++++++++--
+ 7 files changed, 241 insertions(+), 21 deletions(-)

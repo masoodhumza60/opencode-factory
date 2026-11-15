@@ -95,7 +95,7 @@ Both installers run the same steps in the same order:
 6. **Install the factory skill** — copy `skills/factory/SKILL.md` to
    `~/.agents/skills/factory/`, plus `docs/conductor.md`,
    `docs/how-factory-works.md`, `docs/plan-format.md` and `docs/discovery.md`
-    to `~/.agents/skills/factory/docs/`, plus the twelve runtime scripts
+    to `~/.agents/skills/factory/docs/`, plus the sixteen runtime scripts
     (`factory-phase.mjs`, `factory-mcp.mjs`, `factory-plan.mjs`,
     `factory-skills.mjs`, `factory-selfcheck.mjs`, `platform.mjs`,
     `mcp-defmatch.mjs`, `measure.mjs`, `factory-manifest.mjs`,
@@ -123,7 +123,7 @@ Both installers run the same steps in the same order:
 
    The `verify-app` skill ships alongside it at `~/.agents/skills/verify-app/`
    and the selfcheck FAILS without it, because it is what makes the phase-5
-   `--booted` claim checkable rather than merely asserted.
+   `--ran` claim checkable rather than merely asserted.
 7. **Install the mandatory hard skills** — run
    `node scripts/factory-skills.mjs install`, which installs the `mandatory`
    section of `skills/catalog.yaml` into `~/.agents/skills/` via
@@ -166,7 +166,7 @@ Both installers run the same steps in the same order:
    phases, entering a phase while its human gate is still pending, completing a
    phase you are not in, and reading a state that cannot be parsed. That suite
    is the proof the pipeline's enforcement can actually say no. It also covers
-    the boot condition on phase 5 (`--booted` required, a double-quoted or
+    the phase-5 `--ran` condition (`--ran` required, a double-quoted or
     over-long value refused rather than truncated), the artifact check on phase 2
     (a spec cannot rest on a brainstorm nobody wrote), the `status` staleness
     report (`idle_days`, `stale`) and the `repair_done_stale` coherence flag. Those
@@ -297,7 +297,7 @@ Failure output says `N check(s) failed. Re-run install.ps1/install.sh.`
 | Selfcheck keeps failing on the plugin checks | Look at the log the selfcheck reads: `%USERPROFILE%\.local\share\opencode\log\opencode.log` (Windows) / `~/.local/share/opencode/log/opencode.log` (Unix). |
 | Want a preview before touching anything | Re-run with `-DryRun` — prints every step, changes nothing, exits 0. |
 | `mandatory skills: present` FAILs | A hard skill is missing or half-installed. Run `node scripts/factory-skills.mjs install`, then re-check with `node scripts/factory-skills.mjs check`. If the install itself failed, the printed command is the one that failed - usually no network for `npx skills add`. |
-| `verify-app skill deployed` FAILs | `~/.agents/skills/verify-app/SKILL.md` is absent. Re-run the installer (`install.ps1` / `install.sh`). It ships with the bundle; nothing downloads it. Without it, phase 5 can accept a `--booted` claim that nothing ever re-checks. |
+| `verify-app skill deployed` FAILs | `~/.agents/skills/verify-app/SKILL.md` is absent. Re-run the installer (`install.ps1` / `install.sh`). It ships with the bundle; nothing downloads it. Without it, phase 5 can accept a `--ran` claim that nothing ever re-checks. |
 | `factory runtime scripts deployed` FAILs | The installed docs name commands the install does not contain. Re-run the installer. This check exists because the absence was invisible: the old install shipped `SKILL.md` + `docs/` only, and every one of those documents tells the agent to run `factory-phase.mjs`. |
 | `skills catalog deployed` FAILs | `~/.agents/skills/factory/skills/catalog.yaml` is absent. `factory-skills.mjs` resolves its default catalog to `../skills/catalog.yaml` relative to itself, so it must sit beside `scripts/`, not inside it. Re-run the installer. |
 | `installed phase machine runs` FAILs | The scripts are present but did not execute — a truncated copy, a syntax error, or a missing sibling import. The check runs the **installed** copy rather than trusting its presence, so a file that landed broken is caught here instead of at phase 1. |
@@ -322,11 +322,12 @@ and there is no uninstaller — restore from a backup instead.
   and remove any live files under those two roots that are not in
   `<dir>/manifest.json` — those were created by the install. Empty directories
   left behind can be pruned; the roots themselves stay.
-- **Check your work**: `verifyRollback(home, backup)` in
-  `scripts/factory-delivery.mjs` re-hashes every live file against the backup
-  manifest and reports anything missing, modified, or not in the manifest.
-  The drill runs it for you; it is exported so a manual restore can be checked
-  the same way.
+- **Check your work**: the drill's last step verifies the restore by hashing
+  every backed-up file, checking sizes, and reporting any live file the backup
+  manifest does not name (`verifyRollback` in `scripts/factory-delivery.mjs`).
+  It is a library export the drill calls, not a command you can run — there is
+  deliberately no CLI for it. After a manual restore there is no automated
+  check; `<dir>/manifest.json` is the reference to compare against by hand.
 
 ## Reference — paths
 

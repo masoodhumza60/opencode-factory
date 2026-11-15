@@ -99,7 +99,7 @@ on different roots; pointing `BEADS_DIR` at a directory with no database is refu
 Prove the exit criterion with:
 
 ```bash
-node scripts/test-factory-phase.mjs     # 173/173 phase-machine tests passed.
+node scripts/test-factory-phase.mjs     # 180/180 phase-machine tests passed.
 node scripts/test-factory-fixture.mjs   # 20/20 fixture tests passed.
 node scripts/test-factory-design.mjs    # 12/12 design tests passed.
 node scripts/test-factory-capture.mjs   # 24/24 capture tests passed.
@@ -112,11 +112,12 @@ node scripts/test-factory-attest.mjs    # 112/112 attest tests passed.
 node scripts/test-factory-review.mjs    # 83/83 review tests passed.
 node scripts/test-factory-protect.mjs   # 17/17 protect tests passed.
 node scripts/test-factory-delivery.mjs   # delivery tests passed.
+node scripts/test-factory-outcome.mjs   # 9/9 outcome tests passed.
 ```
 
 The capture suite prints `SKIPPED: no browser` and exits 1 if no browser is available; a skip is not a pass.
 
-The counts are kept current with the last shipped milestone (M3); each suite's
+The counts are kept current with the last shipped milestone (M4a); each suite's
 number only ever grows, so a stale count here is a doc bug, not a weaker claim.
 
 ### M1b — review and independence (shipped)
@@ -345,19 +346,51 @@ bundle. They are the product projection of this milestone, not the bundle, and
 they are not built. The ship gate does not require a deployed URL; it requires
 nothing new from M3.
 
-### M4 - Make it learn (2 weeks)
+### M4 - Make it learn (2 weeks) - **in progress; M4a shipped 2026-11-09**
 
-1. **G4 outcome gate.** Record the metric before and after, defects found after ship, recovery time,
-   and rework. G4 blocks `complete 8` on the **existence** of an outcome record (what changed, measured before and after, or an explicit "not measurable, here is why"). The record's content is judged by a human later; a missing record is a refusal, not a warning.
-2. Feed G4 into `negative-results.md`, discovery ranking, and the eval suite.
-3. **End-to-end evals** on `testapps/`: the whole pipeline runs against a seed app with hidden
-   acceptance tests, so the factory itself has a regression suite.
-4. Calibrate the review model against human labels; record agreement; an LLM judge is a finding
-   generator, never the sole sign-off.
-5. Factory metrics: lead time, change failure rate, recovery time, rework rate.
+Item 1 is M1c's (the M4 gate as built); items 2, 3 and 4 are the M4 spec and
+its three plans, one pair each.
+
+1. **G4 outcome gate.** `complete 8` refuses to close a bead with no
+   `outcome.md`, an empty one, no `## What changed`, or no `## Measured
+   before / after` — and since M4a, no **Outcome line** (`Outcome: worked
+   | worked-with-changes | did-not-work | not-measurable`; a `not-measurable`
+   verdict must reconcile with the `Not measurable:` line, and a `## Measured`
+   section that claims measurability contradicts it — both are refusals). The
+   verdict regex is deliberately case-insensitive, as is consistent with the
+   rest of the M1c gate.
+2. **Feed G4 into the machine. — M4a shipped the mechanism.** Every observed
+   close now appends one JSON row to `docs/outcomes.jsonl` (tracked,
+   append-only, written before the state write — an unwritable ledger refuses
+   the close). `node scripts/factory-outcome.mjs list | report | lookup |
+   draft` reads it; `draft` regenerates `docs/negative-results.draft.md`
+   byte-deterministically (every `did-not-work` row, plus any `Learned:` that
+   repeated across 2+ beads) as a quarantine the machine never promotes from —
+   `negative-results.md` stays human-curated. Discovery's Rank step now
+   consults `factory-outcome.mjs lookup` for a candidate's prior outcomes, as
+   an **advisory demotion only** — never a promotion. The feedback loop into
+   the eval suite is items 3/4; not yet landed.
+3. **End-to-end evals on `testapps/`.** Planned (M4b), not run: third seed
+   (`orderboard-cli`), hidden acceptance tests under `testapps/<seed>/hidden/`,
+   golden+broken reference patches, `factory-eval.mjs` with 12 proofs
+   (4 per seed: bare-fails/golden-passes/broken-fails/baseline), runbook
+   `docs/factory-eval.md`. See plan
+   `docs/superpowers/plans/2026-11-09-factory-m4b-testapp-evals.md`.
+4. **Calibrate the review model against human labels.** Harness shipped at
+   `09d5e0a`; labels pending (Humza): model-agnostic, 30 frozen diffs (20
+   synthetic + 10 pinned history), `scripts/factory-calibrate.mjs`
+   (`package` / `record` / `score`, calls no model), human labels, per-split
+   agreement + false-accept/false-reject; 100% agreement flagged MIRROR-RISK;
+   report never overwrites. No agreement number exists yet; it must not be
+   fabricated. See `docs/factory-calibration.md` and plan
+   `docs/superpowers/plans/2026-11-09-factory-m4c-calibration.md`.
+5. **Factory metrics — parked.** Measurement without a closed loop is
+   decoration; lands after items 3/4 prove the loop.
 
 **Exit:** changing a factory rule can lower the eval pass rate, and the change is caught before it
-ships.
+ships. **Not yet met.** M1c met the outcome gate's existence half; M4a met the loop's ledger half
+(rows appended, drafts quarantined, discovery advisory). The eval half of the exit criterion waits
+on item 3, and the calibration half on item 4.
 
 ### M5 - Distribution and trust (1 week, parallel)
 

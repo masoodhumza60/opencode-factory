@@ -1,0 +1,13 @@
+// CALIBRATION-CASE id=syn-10 corpus=synthetic class=off-by-one
+// Defect injected at testapps/orderboard/src/orders/OrdersPage.tsx
+--- a/testapps/orderboard/src/orders/OrdersPage.tsx
++++ b/testapps/orderboard/src/orders/OrdersPage.tsx
+@@ -65,7 +65,7 @@
+             <tr key={o.id}>
+               <td>{o.id}</td>
+               <td>{o.customer}</td>
+-              <td>{o.placedAt.slice(0, 10)}</td>
++              <td>{o.placedAt.slice(0, 11)}</td>
+               <td>{o.status}</td>
+               <td>{formatMoney(o.amountCents, o.currency)}</td>
+             </tr>

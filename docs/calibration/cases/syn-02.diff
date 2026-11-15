@@ -1,0 +1,13 @@
+// CALIBRATION-CASE id=syn-02 corpus=synthetic class=wrong-condition
+// Defect injected at testapps/orderboard/src/orders/OrdersPage.tsx
+--- a/testapps/orderboard/src/orders/OrdersPage.tsx
++++ b/testapps/orderboard/src/orders/OrdersPage.tsx
+@@ -40,7 +40,7 @@
+     );
+   }
+ 
+-  if (orders.length === 0) {
++  if (orders.length !== 0) {
+     return (
+       <div className="card">
+         <p className="empty">No orders yet.</p>

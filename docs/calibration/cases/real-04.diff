@@ -1,0 +1,12 @@
+// CALIBRATION-CASE id=real-04 corpus=real-history sha=90d42c6
+// resolve project skills into a pinned lockfile (M2a)
+commit 90d42c6d1a536006d2cdc021692416b6ea54fa9c
+Author: masoodhumza60 <masoodhumza60@users.noreply.github.com>
+Date:   Fri Oct 30 09:08:57 2026 +0500
+
+    feat(factory): resolve project skills into a pinned lockfile
+
+ scripts/factory-skills.mjs      | 271 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++---
+ scripts/test-factory-skills.mjs | 249 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++--
+ skills/catalog.yaml             |  10 ++++++++++
+ 3 files changed, 525 insertions(+), 5 deletions(-)

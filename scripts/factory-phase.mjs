@@ -23,7 +23,7 @@
 // start implementing.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync, mkdirSync, appendFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 // The mechanical half of completion. factory-manifest and factory-policy import
 // nothing from this file, so there is no cycle: the phase machine is free to
@@ -962,7 +962,96 @@ function outcomeProblems(root, bead) {
   if (!measured) {
     problems.push(`${rel} has no "## Measured before / after" section and no "Not measurable: <why>" line`);
   }
+  // The verdict is the close's own answer to "did it work": a closed bead must
+  // record one of the four words, and the two measurement shapes must agree.
+  // Fail closed on all three mismatches; the refusal names outcome.md and the
+  // offending verdict, so the human sees which line disagreed.
+  const verdict = /^Outcome:\s*(worked|worked-with-changes|did-not-work|not-measurable)\s*$/im.exec(text);
+  const rawVerdict = /^Outcome:/im.exec(text);
+  const notMeasurable = /^Not measurable:/im.test(text);
+  if (!rawVerdict) {
+    problems.push(`${rel} has no "Outcome:" line; expected one of: worked, worked-with-changes, did-not-work, not-measurable`);
+  } else if (!verdict) {
+    const got = /^Outcome:\s*(\S+)/im.exec(text)?.[1] ?? "(empty)";
+    problems.push(`${rel} has verdict "${got}"; expected one of: worked, worked-with-changes, did-not-work, not-measurable`);
+  } else if (verdict[1].toLowerCase() === "not-measurable") {
+    if (!notMeasurable) problems.push(`${rel} says Outcome: not-measurable but has no "Not measurable: <why>" line - the two must agree`);
+    else if (measured && /^##\s+Measured before\s*\/\s*after\s*$/im.test(text)) problems.push(`${rel} says Outcome: not-measurable but carries a "## Measured before / after" section - the two must agree`);
+  } else if (notMeasurable) {
+    problems.push(`${rel} says Outcome: ${verdict[1].toLowerCase()} but carries a "Not measurable:" line - the two must agree`);
+  }
   return problems;
+}
+
+// The ledger is the outcome verdict's durable record, written by the same
+// transaction that completes the close. parseOutcome() is the reader; it
+// trusts the same closed vocabulary outcomeProblems() just verified, and it
+// returns null rather than a half-parsed row, so a bug fails loud instead of
+// logging a phantom "worked".
+function parseOutcome(text) {
+  const verdictMatch = /^Outcome:\s*(worked|worked-with-changes|did-not-work|not-measurable)\s*$/im.exec(text);
+  if (!verdictMatch) return null;
+  const verdict = verdictMatch[1].toLowerCase();
+  const sections = new Map();
+  for (const part of text.split(/^##\s+/m).slice(1)) {
+    const nl = part.indexOf("\n");
+    const name = part.slice(0, nl === -1 ? part.length : nl).trim();
+    sections.set(name, part.slice(nl === -1 ? 0 : nl + 1).trim());
+  }
+  const whatChanged = sections.get("What changed") ?? "";
+  const measuredBeforeAfter = sections.get("Measured before / after") ?? "";
+  const notMeasurable = /^Not measurable:\s*(.+)$/im.exec(text)?.[1]?.trim() ?? "";
+  const measured = measuredBeforeAfter || notMeasurable;
+  if (!whatChanged || !measured) return null;
+  const learned = [];
+  for (const m of text.matchAll(/^\s*(?:[-*]\s+)?Learned:\s*([^:]+):\s*(.+)$/gim)) {
+    const name = m[1].trim();
+    const line = m[2].trim();
+    if (name && line) learned.push({ name, line });
+  }
+  return { verdict, whatChanged, measured, learned };
+}
+
+function shortHead(root) {
+  try {
+    const head = execFileSync("git", ["rev-parse", "--short", "HEAD"], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    return /^[0-9a-f]{7,40}$/.test(head) ? head : null;
+  } catch {
+    return null;
+  }
+}
+
+// Appends exactly one row. Called only after outcomeProblems() has passed for
+// target="8"; the append happens before any state is written, so a failure
+// refuses the close and leaves phase_done untouched. The failure message
+// names the ledger path and says so explicitly.
+function appendOutcomeLedger(root, bead) {
+  const path = join(root, "docs", "outcomes.jsonl");
+  const rel = `.factory/${bead}/outcome.md`;
+  let parsed;
+  try {
+    parsed = parseOutcome(readFileSync(join(root, rel), "utf8"));
+  } catch (e) {
+    throw new Illegal(`outcomes.jsonl could not be appended: ${path}: outcome.md could not be read (${e.message}). The refusal left phase_done untouched; fix the file and re-run complete 8.`);
+  }
+  if (!parsed) {
+    throw new Illegal(`outcomes.jsonl could not be appended: ${path}: outcome.md did not parse the way complete 8 just verified it - this is a bug in outcomeProblems()/parseOutcome(), not in your file.`);
+  }
+  const row = {
+    at: new Date().toISOString(),
+    bead,
+    head: shortHead(root),
+    verdict: parsed.verdict,
+    what_changed: parsed.whatChanged,
+    measured: parsed.measured,
+    learned: parsed.learned,
+  };
+  try {
+    mkdirSync(join(root, "docs"), { recursive: true });
+    appendFileSync(path, JSON.stringify(row) + "\n");
+  } catch (e) {
+    throw new Illegal(`outcomes.jsonl could not be appended: ${path}: ${e.message}. The refusal left phase_done untouched; fix the ledger path and re-run complete 8.`);
+  }
 }
 
 function cmdComplete(bead, target, evidence, ranArg, artifactArg) {
@@ -1125,6 +1214,7 @@ function cmdComplete(bead, target, evidence, ranArg, artifactArg) {
             `\nWrite what changed and what it measured, before and after.`
       );
     }
+    if (target === "8") appendOutcomeLedger(policyRoot, bead);
   }
   bd(["set-state", bead, `${dim}=${target}`, "--reason", `completed ${target} (${byId.get(target).name}): ${evidence}`]);
   // The success event lands only AFTER bd set-state returned: the trail must not

@@ -1,0 +1,12 @@
+// CALIBRATION-CASE id=real-02 corpus=real-history sha=2fe689b
+// acceptance is a signed tag, not a JSON file (M1c)
+commit 2fe689b766eee2187dd6c1a4d3e48142ba21a5b7
+Author: masoodhumza60 <masoodhumza60@users.noreply.github.com>
+Date:   Thu Oct 29 22:57:32 2026 +0500
+
+    feat(factory): acceptance is a signed tag, not a JSON file
+
+ config/factory.protected.json   |   2 +-
+ scripts/factory-review.mjs      | 267 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++-------------------------------------------------------------------------------
+ scripts/test-factory-review.mjs | 208 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++-------------------------------------------------------
+ 3 files changed, 342 insertions(+), 135 deletions(-)

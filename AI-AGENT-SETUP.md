@@ -54,9 +54,11 @@ PART 1 — install (once; safe to re-run)
 PART 2 — check the install
 4. Run:
      node scripts/factory-selfcheck.mjs --tokens
-5. Every check must print PASS (lines that print WARN are informational —
-   ignore them). If any line prints FAIL, follow the repair instruction it
-   names and run this check again until all PASS.
+5. Every check must print PASS and the command must exit 0. Lines that print
+   WARN are informational and never fail the run on their own — if the command
+   exits non-zero, a check FAILed: follow the repair instruction it names and
+   run this check again until the exit code is 0. Do not treat a non-zero exit
+   as informational.
 
 PART 3 — why the new commands are not visible here
 6. This install adds three OpenCode commands that appear as /factory onboard,
@@ -68,7 +70,7 @@ PART 3 — why the new commands are not visible here
 PART 4 — report back
 8. Tell me, in plain words:
    - the installer finished without errors (or paste the exact failure)
-   - the 6 PASS lines from the check
+   - the check's output and its exit code (0 = factory-ready)
    - that /factory only appears in fresh sessions, so nothing else needs
      testing here
    - anything you could not finish, with the exact command I need to run.
@@ -80,7 +82,7 @@ PART 4 — report back
 |---|---|
 | 1 | Agent checks Node >= 20 and runs the platform installer |
 | 2 | Installer puts everything in place once (commands, tools, skill) |
-| 3 | Agent runs the 6-check health gate — all PASS |
+| 3 | Agent runs the selfcheck health gate — all PASS, exit 0 |
 | 4 | You start a fresh session — `/factory` commands now exist |
 | 5 | You paste `AI-AGENT-PROJECT.md` in any project to build features |
 

@@ -218,7 +218,8 @@ function Install-Skills {
         'factory-skills.mjs', 'factory-selfcheck.mjs', 'platform.mjs',
         'mcp-defmatch.mjs',
 'measure.mjs',
-        'factory-manifest.mjs', 'factory-policy.mjs', 'factory-attest.mjs', 'factory-review.mjs'
+        'factory-manifest.mjs', 'factory-policy.mjs', 'factory-attest.mjs', 'factory-review.mjs',
+        'factory-outcome.mjs', 'factory-design.mjs', 'factory-capture.mjs', 'factory-compliance.mjs'
     )
     $srcScripts = $runtimeScripts | ForEach-Object { Join-Path $bundle "scripts\$_" }
     $dstScripts = Join-Path (Split-Path $dstSk) 'scripts'
@@ -262,7 +263,7 @@ function Install-Skills {
         else {
             New-Item -ItemType Directory -Force -Path $dstScripts | Out-Null
             Copy-Item $srcScripts $dstScripts -Force
-            Say "factory runtime scripts installed -> $dstScripts ($($runtimeScripts.Count) files: phase, mcp, plan, skills, selfcheck, platform, defmatch, measure, manifest, policy, attest, review)"
+            Say "factory runtime scripts installed -> $dstScripts ($($runtimeScripts.Count) files: phase, mcp, plan, skills, selfcheck, platform, defmatch, measure, manifest, policy, attest, review, outcome, design, capture, compliance)"
         }
         if (Test-Path $srcCatalog) {
             New-Item -ItemType Directory -Force -Path (Split-Path $dstCatalog) | Out-Null
@@ -438,8 +439,12 @@ function Run-Tests {
         }
         $raw = Receive-Job -Job $job | Out-String
         Remove-Job -Job $job -Force
-        if ($raw -match "(?m)^__EXITCODE__=(\d+)\s*$") {
-            $suiteExit = [int]$Matches[1]
+        # The suite's own output can contain a line starting with the sentinel
+        # prefix (a fixture printing it, a log line echoing it). The job writes
+        # its sentinel LAST, so the exit code is the LAST match, not the first.
+        $exitMatches = [regex]::Matches($raw, '(?m)^__EXITCODE__=(\d+)\s*$')
+        if ($exitMatches.Count -gt 0) {
+            $suiteExit = [int]$exitMatches[$exitMatches.Count - 1].Groups[1].Value
             $suiteOut = $raw -replace "(?m)^__EXITCODE__=\d+\s*$", ""
         } else {
             Write-Host $raw
