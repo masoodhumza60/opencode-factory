@@ -1,6 +1,6 @@
-MISS: repo at ` 9f4e8b6` installs MISS: **A full ` install.ps1` re-run is the only consistent repair; it is re MISS: at 9f4e8b6 installs MISS: The **green** path (all six suites passing, selfcheck comple # opencode-factory â€” UX and deployability review
+# opencode-factory - UX and deployability review
 
-Date: 2026-11-09 Â· Revised 2026-11-15 (applied an in-review read: F1 retitled â€” the selfcheck was loud at run time; the gap is that nothing schedules a re-check. F6 rewritten to evidence only. F5 names its consequence. Coverage section added below.) · Revised again 2026-11-15 (the installer re-run on d7adea1 failed its final selfcheck - the installed docs named four scripts the bundle never shipped; fixed in 50fa229 as a 16-script bundle; verification re-run launched; see F5 and 'the one thing to do next'.) Â· Reviewer: opencode (in-session) Â· Branch: feat/m4-make-it-learn Â· Repo: masoodhumza60/opencode-factory
+Date: 2026-11-09 Â· Revised 2026-11-15 (applied an in-review read: F1 retitled â€” the selfcheck was loud at run time; the gap is that nothing schedules a re-check. F6 rewritten to evidence only. F5 names its consequence. Coverage section added below.) · Revised again 2026-11-15 (the installer re-run on d7adea1 failed its final selfcheck - the installed docs named four scripts the bundle never shipped; fixed in 50fa229 as a 16-script bundle; verification re-run launched; see F5 and the verification verdict below.) | Revised 2026-11-16 (verification re-run at 50fa229: six suite gates green, final selfcheck exit 0; F1 and F5 closed) Â· Reviewer: opencode (in-session) Â· Branch: feat/m4-make-it-learn Â· Repo: masoodhumza60/opencode-factory
 
 Scope: the whole factory as a *user-facing product* â€” installer, docs, CLIs, the selfcheck, the `factory` skill, the seed apps â€” not the test harness. The request was a report, fixes, and a deployable state. This file is the report; the fixes are committed; the ceilings are stated, not hidden.
 
@@ -16,7 +16,7 @@ Clean. Zero open and zero closed issues; zero PRs; default branch `master` (`314
 
 Fix applied surgically, not silently: the four missing scripts were copied from this repo into `~/.agents/skills/factory/scripts/` (nothing else touched). Re-run: `All selfchecks passed`, exit 0.
 
-Remaining honest gap: the other installed scripts (including `factory-phase.mjs`, which enforces phase 8's outcome gate on this branch) were the old versions deployed at the M4a close. The selfcheck cannot see version skew - presence is what it checks. The full re-run happened 2026-11-15 14:12 (bundle `d7adea1`): everything passed - bd, config, mandatory skills, DCP, and all six suite gates including the phase suite - until the FINAL selfcheck, which FAILED naming exactly the four scripts the bundle list missed (`factory-outcome.mjs`, `factory-design.mjs`, `factory-capture.mjs`, `factory-compliance.mjs`). The failure was introduced by this milestone. Fix `50fa229` ships all four (bundle now 16 scripts); the verification re-run was launched after it.
+Remaining honest gap: the other installed scripts (including `factory-phase.mjs`, which enforces phase 8's outcome gate on this branch) were the old versions deployed at the M4a close. The selfcheck cannot see version skew - presence is what it checks. The full re-run happened 2026-11-15 14:12 (bundle `d7adea1`): everything passed - bd, config, mandatory skills, DCP, and all six suite gates including the phase suite - until the FINAL selfcheck, which FAILED naming exactly the four scripts the bundle list missed (`factory-outcome.mjs`, `factory-design.mjs`, `factory-capture.mjs`, `factory-compliance.mjs`). The failure was introduced by this milestone. Fix `50fa229` ships all four (bundle now 16 scripts); Verification re-run on 2026-11-16: the 16-script bundle deployed, all six suite gates passed, and the final selfcheck printed `All selfchecks passed — factory is ready` (exit 0). F1 is closed.
 
 ### F2 â€” The Unix installer never failed the install (High, fixed in `9f4e8b6`)
 
@@ -35,7 +35,7 @@ Phase 5 requires `--ran "<command> -> <observed result> at <ISO-8601>" --artifac
 - The `install.ps1` `__EXITCODE__` sentinel change (suites could not feed a fake exit code to the suite gate) is committed and parse-checked but **never exercised by a live install**.
 - `install.sh` has no wall-clock timeout on its test-suite loop (PS1 enforces a 60-minute bounded job; portable bash has no such primitive). A hang there still hangs the installer. Documented trade-off; use `timeout(1)` on Unix if you need the bound.
 - One consequence worth naming: the installer re-run recommended below is also the **first live exercise** of these F5 code paths. If it fails there, the cause may be the new PowerShell code rather than the old bundle â€” which is itself useful evidence, but should be expected, not a surprise.
-- **Live exercise (partial), 2026-11-15:** the first full re-run executed the Run-Tests gate end-to-end and the installer **fail-stopped loudly** at the phase suite â€” `test-factory-phase.mjs failed (exit 1)` â†’ exit 1, `Run-Selfcheck` never ran, no false PASS. That verified the F5 failure branch on a real machine. The **green** path (all six suites passing, selfcheck completing, exit 0) remains unverified live and is folded into the M4a milestone close (see F1); `install.sh`'s missing timeout remains a documented trade-off.
+- **Live exercise (partial), 2026-11-15:** the first full re-run executed the Run-Tests gate end-to-end and the installer **fail-stopped loudly** at the phase suite â€” `test-factory-phase.mjs failed (exit 1)` â†’ exit 1, `Run-Selfcheck` never ran, no false PASS. That verified the F5 failure branch on a real machine. The **green** path is now verified live: the 2026-11-16 verification re-run at bundle `50fa229` deployed all 16 runtime scripts, every suite gate passed, and the final selfcheck completed with exit 0. F5's green path is closed; `install.sh`'s missing timeout remains a documented trade-off.
 
 ### F6 â€” The phase suite â€” **CLOSED 2026-11-15**
 
@@ -60,19 +60,13 @@ Evidence: two background launches hit the 50-minute tool timeout with zero outpu
 
 ## What "deployable again" means, and what this review verified
 
-- **This machine**: selfcheck red â†’ repaired surgically â†’ `All selfchecks passed`, exit 0. Deployable as of this review.
-- **A fresh machine**: `install.ps1` / `install.sh` from the repo at `50fa229` installs the 16-script set, enforces all steps fail-stop (both platforms), and ends in a green selfcheck or a named failure. Not exercised end-to-end this session - a full install with real `npx skills add` is a live action that was not taken without approval.
-- **Consistency**: everything in this file is committed or explicitly flagged as open (F1 deferred to the M4a milestone close by user decision, 2026-11-15; F5's green path likewise). F6 is closed (180/180, see F6). Nothing pushed to GitHub.
+- **This machine**: selfcheck red â†’ repaired surgically â†’ `All selfchecks passed`, exit 0. Deployable, verified against bundle `50fa229`.
+- **A fresh machine**: `install.ps1` / `install.sh` from the repo at `50fa229` installs the 16-script set, enforces all steps fail-stop (both platforms), and ends in a green selfcheck or a named failure. Verified end-to-end on 2026-11-16: full install at `50fa229`, 6/6 suite gates passed, final selfcheck green (exit 0).
+- **Consistency**: everything in this file is committed or explicitly flagged as open: F1, F5 and F6 are all closed with evidence. `50fa229`, `bc14d30` and later doc-only commits are not pushed; nothing moved on the remote.
 
-## The one thing to do next - record the verification verdict
+## Verification verdict - 2026-11-16
 
-The re-run the review deferred happened on 2026-11-15 (14:12, bundle d7adea1) and **failed** at
-the final selfcheck: the installed docs named actory-outcome.mjs, actory-design.mjs,
-actory-capture.mjs and actory-compliance.mjs, and the bundle never shipped them (the twelve-file
-bundle list was never extended for the M2b/M2c tools or this milestone's outcome tool). The failure was
-introduced by this milestone and caught by the fail-stop selfcheck - exactly the mechanism working.
+The verification re-run happened at bundle `50fa229` (launch failed twice on the way - one parameter binding error, one transcript lock; neither ran any install step). It completed end-to-end: bd verified, config merged, factory skill deployed, 16 runtime scripts deployed (including factory-outcome.mjs, factory-design.mjs, factory-capture.mjs, factory-compliance.mjs), install manifest written (25 files, bundle 50fa229), mandatory skills 2/2, DCP prompts unchanged, all six suite gates passed ("selfcheck tests: OK"), and the final `factory-selfcheck.mjs` printed all PASS with "All selfchecks passed - factory is ready." (exit 0).
 
-Fix 50fa229 ships all four (install.ps1 $runtimeScripts and install.sh untime both now carry 16
-scripts; HOW-INSTALL l.98 updated). A verification re-run was launched after the fix; until it prints
-actory is ready the machine is **not** verified-green and F1/F5 remain open. 50fa229 has not been
-pushed. The verification verdict lands in this file and in the M4 ledger once the run finishes.
+F1 and F5 are CLOSED. `50fa229` and `bc14d30` are not pushed; master is untouched (3141ab2). The remaining WARNs on the machine are informational by design (skills.lock.json). The `dcp prompt` persistence caveat noted in the installer output applies to this same session and is inherited from the pre-existing DCP gap, not introduced here.
+
