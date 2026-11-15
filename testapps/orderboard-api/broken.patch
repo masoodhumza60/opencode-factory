@@ -1,0 +1,106 @@
+diff --git a/testapps/orderboard-api/src/auth.js b/testapps/orderboard-api/src/auth.js
+index c57bc41..e596176 100644
+--- a/testapps/orderboard-api/src/auth.js
++++ b/testapps/orderboard-api/src/auth.js
+@@ -1,9 +1,12 @@
+ // Two roles, one permission table. The page decides what to render; the routes
+ // decide what is allowed. Both ask this module, so a permission cannot be
+ // enforced in one place and forgotten in the other.
++// orders.write goes to every role that holds orders.read (spec Phase B): a
++// viewer can change an order's status, not only an admin. Export stays an
++// admin capability.
+ const ROLE_PERMISSIONS = {
+   admin: ["orders.read", "orders.write", "orders.export"],
+-  viewer: ["orders.read"],
++  viewer: ["orders.read", "orders.write"],
+ };
+ 
+ // An absent session is NOT the same answer as a session with no permissions.
+diff --git a/testapps/orderboard-api/src/routes/orders.js b/testapps/orderboard-api/src/routes/orders.js
+index dd6740c..cb7ffb1 100644
+--- a/testapps/orderboard-api/src/routes/orders.js
++++ b/testapps/orderboard-api/src/routes/orders.js
+@@ -1,6 +1,20 @@
+ import { sendJson } from "../http.js";
+ import { can } from "../auth.js";
+ 
++// Local copy of the request-body reader the POST routes hand-roll in
++// routes/auth.js: buffered chunks, JSON-parsed, plain error on bad input.
++function readJsonBody(req) {
++  return new Promise((resolve, reject) => {
++    const chunks = [];
++    req.on("data", (c) => chunks.push(c));
++    req.on("end", () => {
++      try { resolve(chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {}); }
++      catch (e) { reject(e); }
++    });
++    req.on("error", reject);
++  });
++}
++
+ const SELECT =
+   "SELECT o.id, c.name AS customer, o.placed_at AS placedAt, o.status," +
+   " o.amount_cents AS amountCents, o.currency" +
+@@ -12,6 +26,39 @@ export function listOrders(db, req, res, session) {
+   return sendJson(res, 200, { orders });
+ }
+ 
++const LEGAL_TRANSITIONS = {
++  pending: ["paid", "cancelled"],
++  paid: ["shipped"],
++};
++const ALL_STATUSES = new Set(["pending", "paid", "shipped", "cancelled"]);
++
++// PATCH /api/orders/:id ?????? the status transition machine. Board moves an order:
++// pending -> paid | cancelled, paid -> shipped. Anything else is 409, an
++// unknown id is 404, a missing/unknown status is 400, and the caller needs
++// orders.write (same roles that hold orders.read, per the spec).
++export async function patchOrder(db, req, res, session, id) {
++  if (!can(session, "orders.write")) {
++    return sendJson(res, 401, { error: "sign in required" });
++  }
++  const row = db.prepare(SELECT + " WHERE o.id = ?").get(id);
++  if (!row) return sendJson(res, 404, { error: "no such order" });
++  let body = {};
++  try {
++    body = await readJsonBody(req);
++  } catch {
++    return sendJson(res, 400, { error: "body must be JSON" });
++  }
++  const next = body && typeof body.status === "string" ? body.status : null;
++  if (next === null || !ALL_STATUSES.has(next)) {
++    return sendJson(res, 400, { error: "status is required", expected: ["pending", "paid", "shipped", "cancelled"] });
++  }
++  const allowed = LEGAL_TRANSITIONS[row.status] ?? [];
++  if (!allowed.includes(next)) {
++    return sendJson(res, 409, { error: `illegal transition: ${row.status} -> ${next}` });
++  }
++  return sendJson(res, 200, { ok: true });
++}
++
+ export function getOrder(db, req, res, session, id) {
+   if (!can(session, "orders.read")) return sendJson(res, 401, { error: "sign in required" });
+   const order = db.prepare(SELECT + " WHERE o.id = ?").get(id);
+diff --git a/testapps/orderboard-api/src/server.js b/testapps/orderboard-api/src/server.js
+index 0a3f8a4..08114bf 100644
+--- a/testapps/orderboard-api/src/server.js
++++ b/testapps/orderboard-api/src/server.js
+@@ -9,7 +9,7 @@ import { openDb, migrate } from "./db.js";
+ import { config, ROOT } from "./config.js";
+ import { makeSessions, sessionForToken, can } from "./auth.js";
+ import { sendJson, serveStatic } from "./http.js";
+-import { listOrders, getOrder } from "./routes/orders.js";
++import { listOrders, getOrder, patchOrder } from "./routes/orders.js";
+ import { signIn } from "./routes/auth.js";
+ 
+ const WEB = join(ROOT, "src", "web");
+@@ -31,6 +31,9 @@ export function createApp({ db, auth = makeSessions() }) {
+     }
+     if (p === "/api/session" && req.method === "POST") return signIn(auth, req, res);
+     if (p === "/api/orders" && req.method === "GET") return listOrders(db, req, res, session);
++    if (p.startsWith("/api/orders/") && req.method === "PATCH") {
++      return patchOrder(db, req, res, session, decodeURIComponent(p.slice("/api/orders/".length)));
++    }
+     if (p.startsWith("/api/orders/") && req.method === "GET") {
+       return getOrder(db, req, res, session, decodeURIComponent(p.slice("/api/orders/".length)));
+     }

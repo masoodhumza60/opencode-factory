@@ -1,0 +1,52 @@
+diff --git a/testapps/orderboard/src/orders/OrdersPage.tsx b/testapps/orderboard/src/orders/OrdersPage.tsx
+index d104486..ff95efd 100644
+--- a/testapps/orderboard/src/orders/OrdersPage.tsx
++++ b/testapps/orderboard/src/orders/OrdersPage.tsx
+@@ -1,11 +1,15 @@
+ import { useEffect, useState } from "react";
+ import type { Order } from "./types";
++import { STATUSES } from "./store";
+ import type { OrderStore } from "./store";
+ import { formatMoney } from "./store";
+ 
++type Filter = Order["status"] | "all";
++
+ export function OrdersPage({ store }: { store: OrderStore }) {
+   const [orders, setOrders] = useState<Order[] | null>(null);
+   const [error, setError] = useState<string | null>(null);
++  const [filter, setFilter] = useState<Filter>("paid");
+ 
+   useEffect(() => {
+     let live = true;
+@@ -48,8 +52,22 @@ export function OrdersPage({ store }: { store: OrderStore }) {
+     );
+   }
+ 
++  const shown = filter === "all" ? orders : orders.filter((o) => o.status === filter);
++
+   return (
+     <div className="card">
++      <label htmlFor="status-filter">Filter by status</label>
++      <select
++        id="status-filter"
++        aria-label="Filter by status"
++        value={filter}
++        onChange={(e) => setFilter(e.target.value as Filter)}
++      >
++        <option value="all">All</option>
++        {STATUSES.map((s) => (
++          <option key={s} value={s}>{s}</option>
++        ))}
++      </select>
+       <table>
+         <thead>
+           <tr>
+@@ -61,7 +79,7 @@ export function OrdersPage({ store }: { store: OrderStore }) {
+           </tr>
+         </thead>
+         <tbody>
+-          {orders.map((o) => (
++          {shown.map((o) => (
+             <tr key={o.id}>
+               <td>{o.id}</td>
+               <td>{o.customer}</td>
