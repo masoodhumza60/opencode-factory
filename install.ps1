@@ -474,7 +474,8 @@ function Run-Selfcheck {
 }
 
 # --- main ---
-Say "opencode-factory install (bundle: $bundle)"
+$pkgVersion = (Get-Content (Join-Path $bundle 'package.json') -Raw | ConvertFrom-Json).version
+Say "opencode-factory install (bundle: $bundle) version $pkgVersion"
 Ensure-Dirs
 if (-not $SkipBd)     { Install-Bd }
 Install-Plugins

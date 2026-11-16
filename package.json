@@ -1,7 +1,7 @@
 {
   "name": "opencode-factory",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
   "description": "The factory's own toolchain: capture and design checks that the grading scripts call.",
   "scripts": {
