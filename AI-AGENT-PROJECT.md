@@ -12,8 +12,9 @@ made available, in order, and follows what they tell it.
 
 1. The machine must already have the factory installed (once per device).
    If it does not, do that first:
-   `git clone https://github.com/masoodhumza60/opencode-factory` and paste the
-   prompt in `AI-AGENT-SETUP.md`.
+   `git clone https://github.com/masoodhumza60/opencode-factory` and check out
+   the release tag `v1` (`git checkout v1`), then paste the prompt in
+   `AI-AGENT-SETUP.md`.
 2. Open a new OpenCode session **in the project folder** you want the feature in.
 3. Paste the prompt below.
 4. The factory runs in phases and **stops to ask for your approval** at spec,

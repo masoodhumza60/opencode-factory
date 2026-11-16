@@ -8,6 +8,10 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { homedir, tmpdir } from "node:os";
 
+// The bundle carries its version in package.json; the selfcheck prints it so a
+// transcript always shows which release it judged.
+const pkgVersion = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "package.json"), "utf8")).version;
+console.log(`factory-selfcheck: opencode-factory bundle version ${pkgVersion}`);
 
 const checks = [];
 const ok = (name, pass, extra = "") => {
