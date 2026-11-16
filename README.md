@@ -26,8 +26,8 @@ Paste this into an AI coding agent (OpenCode) running on the new machine:
 
 ```
 Install opencode-factory on this machine:
-1. git clone https://github.com/masoodhumza60/opencode-factory && cd opencode-factory
-2. Read https://raw.githubusercontent.com/masoodhumza60/opencode-factory/master/AI-AGENT-SETUP.md and follow it end-to-end.
+1. git clone https://github.com/masoodhumza60/opencode-factory && cd opencode-factory && git checkout v1
+2. Read https://raw.githubusercontent.com/masoodhumza60/opencode-factory/v1/AI-AGENT-SETUP.md and follow it end-to-end.
 ```
 
 Prompts: [`AI-AGENT-SETUP.md`](AI-AGENT-SETUP.md) — full machine setup ·
@@ -38,6 +38,7 @@ Prompts: [`AI-AGENT-SETUP.md`](AI-AGENT-SETUP.md) — full machine setup ·
 ```bash
 git clone https://github.com/masoodhumza60/opencode-factory opencode-factory
 cd opencode-factory
+git checkout v1         # the release tag; the tag is the release
 ./install.sh            # Windows: powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
 node scripts/factory-selfcheck.mjs --tokens   # health gate: every check PASS (WARNs are informational)
 ```
@@ -67,13 +68,22 @@ All selfchecks passed - factory is ready.
   GitHub/Actions/releases, or the quality of anything it shipped. See
   `docs/factory-ux-review.md` for exactly what has and has not been verified.
 
+## Verifying a release
+
+The git tag is the release: `v1` points at the exact tree this README and
+`install.sh` / `install.ps1` install. Checksums are not published; verify a
+release by checking out the tag (not `master`), reading
+[`CHANGELOG.md`](CHANGELOG.md) for what the tag contains, and running
+`node scripts/factory-selfcheck.mjs --tokens` after install. The `v1` tag is
+created at milestone close; until then, `master` is the development branch.
+
 ## Use it in any project
 
 Set up the machine once, then onboard each project:
 
 ```
 # 1) New machine (once): clone + install everything
-git clone https://github.com/masoodhumza60/opencode-factory && cd opencode-factory
+git clone https://github.com/masoodhumza60/opencode-factory && cd opencode-factory && git checkout v1
 ./install.sh            # Windows: powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
 node scripts/factory-selfcheck.mjs --tokens   # every check PASS = machine is factory-ready
 
