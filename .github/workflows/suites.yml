@@ -92,3 +92,30 @@ jobs:
           git config --global user.email "ci@users.noreply.github.com"
       - name: phase machine
         run: node scripts/test-factory-phase.mjs
+
+  install-ubuntu:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: node present
+        run: node --version && bash --version | head -1
+      - name: real install
+        run: bash ./install.sh
+      - name: selfcheck
+        run: |
+          mkdir -p out
+          node scripts/factory-selfcheck.mjs --tokens | tee out/selfcheck-ubuntu.txt && ! grep -E '^FAIL' out/selfcheck-ubuntu.txt
+  install-windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: node present
+        run: node --version
+      - name: real install
+        run: powershell -ExecutionPolicy Bypass -File .\install.ps1
+      - name: selfcheck
+        run: |
+          New-Item -ItemType Directory -Force out | Out-Null
+          node scripts\factory-selfcheck.mjs --tokens | Tee-Object -FilePath out\selfcheck-windows.txt; if ((Get-Content out\selfcheck-windows.txt -Raw) -match '(?m)^FAIL') { exit 1 }
