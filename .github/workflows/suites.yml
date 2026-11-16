@@ -98,6 +98,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: node present
         run: node --version && bash --version | head -1
       - name: install bd
@@ -124,6 +126,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: node present
         run: node --version
       - name: install bd
