@@ -1,591 +1,171 @@
 # conductor.md — the opencode-factory conductor (authoritative how-to)
 
-This is the operating manual for the `factory` skill. The skill's `SKILL.md` is
-intentionally thin (description only); the conductor's actual logic lives here,
-read on demand. Everything below is transcribed from the factory's own design
-spec (§4–§8), kept in the bundle repo at
-`docs/superpowers/specs/2026-09-22-opencode-factory-design.md` as build
-reference — it is not installed on machines. When this file and that spec
-disagree, the spec wins; settle the disagreement in the bundle repo.
+This doc routes; the machines enforce. Read it first when a feature starts
+(`docs/conductor.md`; `docs/how-factory-works.md` is the architecture map).
+When this file and the design spec
+(`docs/superpowers/specs/2026-09-22-opencode-factory-design.md`) disagree, the
+spec wins; settle it in the bundle repo.
 
 ## Roles (spec §4)
 
-Four layers, each with one clear job:
-
-| Layer | Component | Job |
-|---|---|---|
-| **Conductor** | `factory` skill (thin) | Phase machine + gates + skill enforcement |
-| **Phase engines** | superpowers skills (reused) | Phase procedures (brainstorm, plan, TDD, debug, verify, review, ship) |
-| **State** | beads (`bd` CLI + Dolt DB) | One issue per feature; phase stored on the issue; audit log; durable across sessions/devices |
-| **Context** | none (no MCP required) | The bundle depends on no MCP server; a bundle that needs nothing must leave the operator's servers untouched |
-
-Role boundaries:
-
-- The conductor is **thin**: a small `SKILL.md` (description only) plus bundled
-  docs it reads while running. It does not reimplement any phase procedure.
-- beads is the **source of truth for phase state**, not a to-do list — one
-  issue per feature, `phase:<name>` stored on the issue, `bd prime` output
-  pushed into every model call by the opencode-beads plugin.
-- the bundle declares **no** MCP requirement. `config/mcp-requirements.json` is
-  empty on purpose: an empty list means *need nothing*, never *disable
-  everything*. `scope` with no `--allow` and an empty declaration leaves every
-  configured server exactly as the operator has it.
+Conductor (`factory` skill, thin) → Phase engines (superpowers skills, reused) → State (`bd`, one issue per feature, phase on the issue) → Context (none, no MCP). Beads is the source of truth for phase state, per spec §5.2. The bundle declares no MCP; an empty `--allow` list touches nothing.
 
 ## The pipeline (spec §5.1)
 
-| # | Phase | MUST invoke skill | Gate |
+| # | Phase | Skill invoked | Gate |
 |---|---|---|---|
-| 0 | onboard (per repo, auto-offered) | — | — |
+| 0 | onboard (per repo) | — | — |
 | 1 | brainstorm | `brainstorming` | — |
-| 2 | spec | `brainstorming` (spec section) | **A — human** |
-| 3 | plan | `writing-plans` | **B — human** |
-| 4 | implement | `executing-plans` *or* `subagent-driven-development` (method chosen at B) + `test-driven-development` per feature/bug | — |
+| 2 | spec | `brainstorming` (spec section) | A — human |
+| 3 | plan | `writing-plans` | B — human |
+| 4 | implement | `executing-plans` or `subagent-driven-development` (method chosen at B) + `test-driven-development` | — |
 | 4' | debug (as needed) | `systematic-debugging` | — |
 | 5 | verify | `verification-before-completion` | — |
 | 6 | review | `requesting-code-review` → `receiving-code-review` | — |
-| 7 | ship | `finishing-a-development-branch` + `commit-work` | **C — human** |
+| 7 | ship | `finishing-a-development-branch` + `commit-work` | C — human |
 | 8 | close | session-close protocol | — |
 
-4' is not a separate command — the conductor routes any bug/test failure into
-the debug phase with `systematic-debugging` before fixes are allowed (no
-ad-hoc fixes).
-
-### Bounded work still writes a spec - a short one
-
-The `brainstorming` skill says bounded work gets "the in-chat design/probe"
-and "no spec file". This pipeline says phase 2 always produces one, and the
-phase machine **refuses** to enter phase 2 without it. Both are right about
-different things, and an agent left to work that out mid-phase will guess.
-
-- **The conductor and the phase machine own the pipeline.** A spec artifact is
-  required to enter phase 2. That is machine-enforced, not a matter of taste:
-  `ARTIFACTS` refuses the entry and names the file and directory it looked in.
-- **The skill owns the conversation.** It decides how much design happens
-  before anything gets written down.
-
-So classify out loud, and let the classification change the spec's **length**,
-never its existence.
-
-- **Architectural** - the full written spec, reviewed at Gate A, as the skill
-  describes.
-- **Bounded** - discuss the short design in chat, get the human's approval
-  there, then write a brief spec recording what was agreed: the behaviour, the
-  decisions, and the shape of the tests. If that is under a page, that is
-  correct output, not a spec that failed to get written.
-
-A phase-2 agent in a real run resolved this by inventing the phrase "bounded
-in substance, spec in form" and reporting it in its reply instead of writing
-it down, so the next agent has to re-derive it. That is the cost of leaving
-the contradiction in place: it is not wrong enough to fail a check, which is
-exactly why nothing caught it.
+4' is not a separate command: the conductor routes failures to debug. Details (the
+spec-required "bounded work still writes a spec", and the artifact requirements per
+phase): see [docs/negative-results.md](negative-results.md).
 
 ## Journey (spec §5.3)
 
-```
-factory <feature-name>            # create beads issue, start phase 1
-  → 1 brainstorm                   # brainstorming skill: vision questions + own research
-  → 2 spec                         # spec doc → docs/superpowers/specs/
-  → GATE A                         # human approves spec  ── STOP, wait
-  → 3 plan                         # writing-plans → plan doc + task breakdown
-                                   #   + <plan>.plan.json (the machine graph)
-  → GATE B                         # human approves plan + execution method ── STOP, wait
-  → 4 implement                    # TDD; beads-task-agent subagents
-  → 4' debug (routed on failure)   # systematic-debugging
-  → 5 verify                       # verification-before-completion (evidence gate)
-  → 6 review                       # requesting/receiving code review
-  → 7 ship                         # finishing-a-development-branch + commit-work
-  → GATE C                         # human approves ship  ── STOP, wait
-  → 8 close                        # bd update, session-close protocol
-```
+`factory <feature-name>` → 1 brainstorm → 2 spec → GATE A → 3 plan → GATE B →
+4 implement → 4' debug → 5 verify → 6 review → 7 ship → GATE C → 8 close.
+(The per-phase mapping and the 4' detour: spec §5.3 and §5.4; see the phase
+table at the top of this doc and the `status`/`next` commands.)
 
-## Phase entry protocol and enforcement (spec §5.2)
+## Phase entry protocol and enforcement
 
-For every phase after onboard:
+Every phase: `bd show <id>` or `node <bundle>/scripts/factory-phase.mjs status <bead>`
+at entry; the phase machine is the source of truth for state (beads are, per spec §5.2 item 2, so a restarted session resumes where it left off).
 
-1. **Read phase state from beads first**: `bd show <id>` at every entry, so a
-   restarted session or a different device resumes where it left off. Better:
-   `node <bundle>/scripts/factory-phase.mjs status <bead>` reads the recorded
-   phase *and* the pending gates in one call. For *choosing* what to work on
-   next use `bd ready`, never `bd list` — the difference is load-bearing, see
-   "Cost discipline" below.
-2. **Verify the prerequisite gate** (A before 3, B before 4, C before 8). This
-   is enforced, not remembered — see "The phase machine" below.
-3. **Load the mandatory skill's content in-session.** Each phase begins with
-   the literal instruction: *"Invoke skill X now and follow it."* A phase
-   cannot be marked complete until skill X's content was loaded in-session —
-   verify the model actually has the skill content, not just the name.
-4. **Run the skill's procedure** for this phase.
-5. **Record the transition with the phase machine**, not with free-text notes:
-   `node <bundle>/scripts/factory-phase.mjs enter <bead> <phase> --reason "…"`
-   then `complete <bead> <phase> --evidence "…"`. The `--reason` becomes an
-   append-only event bead, so the audit survives restarts and device moves
-   (Dolt) — and an illegal transition is refused outright. Completing phase 5 (verify) additionally requires `--ran "<command> -> <observed result> at <ISO-8601>" --artifact <path>` - see the phase machine section for why, and for the format limits.
-   Resolve a gate through the same command, so the approval is recorded with the
-   reason the human gave rather than as a bare resolution:
-   `gate <bead> <A|B|C> --evidence "…"`.
-6. At each human gate, **report which mandatory skills ran per phase**. Any
-   skipped skill forces the phase to re-run before the gate can pass.
+1. Read phase state from beads.
+2. Verify the prerequisite gate is resolved (A before 3, B before 4, C before 8).
+3. Load the mandatory skill for the phase: its SKILL.md content in-session.
+4. Run the phase procedure.
+5. Record the transition: `factory-phase.mjs enter <bead> <phase> --reason "…"`
+   then `complete <phase> --evidence "…"` (phase 5 adds mandatory
+   `--ran "<cmd> -> <observed result> at <ISO-8601>" --artifact <path>`).
+   Gates resolve with `gate <bead> <A|B|C> --evidence "…"` (spec §5.2 item 5).
+6. At each human gate, report the mandatory skills that ran in the phases.
+
+`--evidence` is mandatory on complete. Completing phase 5 additionally requires `--ran` and `--artifact` (see the phase machine section). Run the script with no arguments to see its full surface.
 
 ## The phase machine - rules that refuse to be talked out of
 
-`scripts/factory-phase.mjs` is the pipeline's enforcement. It reads the same
-phase table documented above, and it **fails closed**: an unreadable state, an
-unknown phase, or a gate it cannot evaluate means STOP. That is deliberate. The
-gaps it closes were not hypothetical - a session once read the words
-"GATE A approved" out of a plan file and began implementing on the strength of
-prose, and bd reported no gates at all afterwards.
-
-**Run the script with no arguments to see its command surface; that output is
-the source of truth, and this document deliberately does not restate it.** The
-one form worth repeating here is the one with a flag that is easy to miss:
-
-```
-node <bundle>/scripts/factory-phase.mjs complete <bead> 5 --evidence "…" --ran "npm run dev -> 200 OK on GET /health at 2026-10-20T10:00:00Z" --artifact boot.log
-```
-
-Exit codes: **0** ok · **1** illegal transition or error · **2** blocked, a
-human gate is still pending.
-
-Seven properties worth relying on:
-
-- **Legality is checked on every transition, including the first.** A bead with
-  no recorded phase may enter `0` or `1`; it may not jump to `5`.
-- **Entering a gate-bearing phase creates that gate** in bd and records its id
-  on the bead, so `bd ready` withholds the next phase from every other session
-  on every device. The gate is no longer a sentence in a document.
-- **`--evidence` is mandatory on complete.** Completion has to be checkable
-  rather than asserted, which is the difference MAST's "not recognizing
-  completion" failures actually turn on.
-- **`--ran` is mandatory on completing phase 5 (verify).** A green test suite
-  is not a running app, and a real run reached 22 tasks with every gate passing
-  while nobody had ever started the thing. The `verify-app` skill generates the
-  per-project, committed way to drive it (a feature map plus Launch / Doctor /
-  Drive / Evidence / Cleanup); run it at phase 1 and its claim here becomes
-  checkable instead of asserted. Record what you started, what you drove, and
-  where the evidence is: `--ran "npm run dev -> 200 OK on GET /health at 2026-10-20T10:00:00Z" --artifact boot.log`. It is
-  written to the state layer *before* `phase_done`, so a claim that cannot be
-  recorded leaves the machine correctly refusing to advance. Under 255
-  characters, exactly one `->`, an ISO-8601 timestamp after the word `at`, no double quotes (bd's argument parser splits on them); the script refuses rather than truncating, because half a run claim is worse than none. (`--booted` is a deprecated alias for `--ran` and is accepted for one release.)
-- **The `verify-app` skill makes that claim re-checkable.** `--ran` proves the
-  app answered once. `verify-app` writes a per-project skill - committed, so every
-  person and every agent drives the app the same way - naming the launch command,
-  the selectors, the features, and where evidence lands. Generate it at phase 1,
-  before there is anything to verify.
-  The machine cannot tell whether the claim is *honest* - that stays a human
-  judgement at Gate C - but it does make the claim impossible to skip.
-- **Entering phase 2 (spec) requires a brainstorm to exist.** A real run produced
-  no brainstorm at all - the string appears nowhere in the project - and the spec
-  was written anyway, resting on nothing. `ARTIFACTS` in the script maps a phase
-  to the artifact it depends on; entering a phase whose artifact is missing is
-  refused and the refusal names the file and the directory it looked in.
-- **`status` reports staleness.** It reads the issue's own `updated_at` and
-  reports `idle:` days, flagging a run as stale at 3 days idle while its current
-  phase is unfinished. This is a REPORTING threshold, never an enforced one - it
-  can only change what you see, never stop you - which is why a number belongs
-  here and did not belong on the handoff rule. It exists because a machine that
-  only speaks when spoken to cannot notice it has been abandoned: one real run
-  sat in implement for ten days with every guard in this file still working and
-  nobody having asked any of them a question. Run `factory-phase.mjs status
-  <bead>` before you trust that a run is moving.
-- **`status` flags a `repair_done` record that outlived its phase.** bd 1.3.0
-  offers no way to unset a dimension, so a completed debug detour can still read
-  as standing state after the run has returned to implement. It is reported as
-  incoherent rather than cleared, and it does not block anything.
-
-- **An unfinished ship phase still offers the repair detour.** Verify and
-  review are branching phases: they exist to find defects, so they must have
-  somewhere to go and fix them. Ship was deliberately left out of that set,
-  because a shipped run has nothing left to reject - a completed phase 7 offers
-  no detour, and that is intended. But the gate at ship is *machine-enforced*:
-  resolving Gate C unblocks `complete 7`, so a human who rejects the work at
-  Gate C is left with exactly two moves - ship the thing they just rejected, or
-  go nowhere. Found by a real run where the reviewer found a defect, the human
-  ruled "do not ship, fix it", and `enter <bead> 4p` was refused as an illegal
-  transition. Phase 7 while *incomplete* now offers the detour alongside the
-  blocked advance, and `next` reports both facts at once: the advance is
-  blocked, and the detour is available. Walking back out costs 4 -> 5 -> 6 -> 7,
-  so a rejection costs a re-run rather than a bypass.
-If the script refuses you, that is the gate working, not a bug to route
-around. Fix the state or ask the human — do not start writing files anyway.
-
+`scripts/factory-phase.mjs` is the pipeline's enforcement and fails closed:
+an unreadable state, unknown phase, or unresolvable gate means STOP. Exit codes: 0 ok, 1 illegal transition/error, 2 blocked.
+Key properties: legality on every transition; entering gate phases creates the
+bd gates; `--evidence` mandatory on complete; `--ran` mandatory on phase 5;
+phase 2 entry requires a brainstorm artifact; the script says "if the script
+refuses you, that is the gate working, not a bug: fix the state or ask the human."
+The one flag worth repeating: `complete <bead> 5 --evidence "…" --ran "<cmd> -> <observed> at <ISO-8601>" --artifact <path>`.
+Run the script with no args for the full surface; it is the source of truth.
 ## Before measuring anything: seed a known app
 
-Every number this factory produces is a comparison, and a comparison needs
-both sides. The historical baseline was one run of this factory; the current
-one is `testapps/orderboard`, seeded from the factory repository by its
-seed script. That script and the template it copies are repository tooling and
-are **not** in an install. Naming them here as installed paths was a defect the
-selfcheck could not see; the installed-doc check added on 2026-10-11 now
-fails on any script an installed doc names that the install does not carry, so
-the fix is to stop writing them as paths rather than to teach the check to
-ignore the sentence that says they are absent.
-
-Use the same app each time. A different app each time measures the app, not
-the factory. Its feature is absent by construction - the seed refuses if the
-template ever contains it - so "did the factory build this" stays answerable.
+Every number this factory produces is a comparison; use one stable app each time
+(seed script in `testapps/`). Numbers measure the app, not the factory — the
+feature is absent by construction.
 
 ## A check is finished when you have watched it fail
 
-A validator that cannot fail is decoration, and one that cannot be shown
-failing is unproven. Before calling any check done here, run it four times in
-this order and watch what happens:
-
-1. **Pass.** Clean input. It must pass.
-2. **Fail.** Break one thing it claims to catch. It must fail, and name the
-   thing.
-3. **Correct.** Undo the break. It must pass again.
-4. **Say what you saw.** The invocation and its output, in the commit or the
-   bead. Not "verified" - the output.
-
-This has already caught real defects here: four in the phase machine that its
-own 31-test suite could not see, and a mutation that no test could reach because
-the suite deliberately never asserted a positive verdict. A check shipped
-without its step 2 is unfinished, however green it looks.
-
-Two traps worth naming, because both cost real time:
-
-- **A clean fixture proves nothing.** If your "broken" input was written with a
-  tool that emits a BOM, the check may be failing on the BOM rather than the
-  defect you meant. Write fixtures with the same tool that reads them.
-- **Assert the verdict, not the exit code.** A suite's exit code is global and
-  contaminated by unrelated checks; the line you are testing is the verdict.
+A check that cannot fail is decoration. Run 1 (pass), 2 (break it, it must fail naming the thing), 3 (undo, pass), 4 (record the invocation and output in the commit/bead). This has caught real defects in the phase machine itself. Trap: a clean fixture proves nothing (write with the same tool that reads).
 
 ## Which servers this project runs
 
-On **start** and on **resume**, before anything else, run `scope` with
-every server this kind of app needs kept on:
-
-    node <bundle>/scripts/factory-mcp.mjs scope --allow <server>[,<more>]
-
-**Decide that allowlist now, not when a later phase needs it.** `/mcps` connects a
-server live but does not persist it; the config write is what survives a
-restart. Whether the *running* session picks up a config edit without one is
-not documented either way, so `enable` reports `liveReload: "unverified"`
-rather than telling you either "fine" or "restart". If a turn-on appears to do
-nothing, restart and try again. Ask what kind of app this is first, then:
-
-| This project has | Keep |
-|---|---|
-| a web page a person uses | `--allow chrome-devtools` |
-| an HTTP API or a CLI only | `--allow` (nothing) |
-
-**Run `scope` with no `--allow` only when the project genuinely needs no MCP
-server.** That is a real case, and it is the one this bundle is in: it declares
-nothing, so with no `--allow` it touches nothing. The moment you pass any
-server, the allowlist becomes the whole truth — every server you did not name
-is switched off for this project. That asymmetry has already cost a run its
-verification path: a project with a web page named an allowlist, the start
-step turned off `chrome-devtools`, and phase 5 found it disabled three phases
-later. The agent built a fallback driver instead, and the fallback worked, so
-the run read clean. Nothing failed - the run was quietly half verified.
-
-It turns off every other configured MCP server for **this project only** and
-records the ones you keep, so the set is stated rather than inherited. Run it
-again when the project gains a server you want, or drops one.
-
-Why per-project rather than per-machine: a global MCP toggle changes every
-project on the laptop, including the ones you are not working on. This writes
-`opencode.json` in the project root - opencode merges project config over
-global, so the override wins here and nowhere else. The global file is never
-read for writing and never touched.
-
-**When the work genuinely needs a server, turn it on for this project:**
-
-    node <bundle>/scripts/factory-mcp.mjs enable <server>
-
-`enable` and `disable` are the ONLY sanctioned way to change MCP state. Never
-hand-edit a config file to do it. That is not a style rule: hand-editing the
-global file once turned on three servers across two unrelated sessions that
-were open at the time, and the undo was a manual restore of a file I had just
-made worse. `enable` refuses rather than guess, writes an override rather than a
-definition, reads the file back, and rolls back if it cannot confirm what it
-wrote.
-
-`scope` records the servers it keeps as well as the ones it turns off, so the
-project's server set is stated rather than inherited from whatever global
-happens to say today - a global change cannot silently change this project.
-A typo in `--allow` is a refusal, because the quiet failure is that it disables
-the very server the flag was meant to protect.
-
-Note the limit honestly: this is scoped per **directory**, not per session. Two
-sessions in the same project share the override. Different projects are fully
-isolated.
+On start and resume, before anything else, decide the allowlist now — the list
+is "the whole truth": every server you do not name is switched off for this
+project, and the cost of a wrong pick is a run quietly half-verified. Default:
+the project genuinely needs nothing, so run `scope` with no `--allow`. A
+web-page project keeps `chrome-devtools`; an API/CLI keeps `--allow` (nothing).
+`scope` turns off other servers only for this project and records what was
+kept, and `factory-mcp.mjs enable`/`disable <server>` are the only sanctioned
+ways to change the state afterwards.
 
 ## Cost discipline — the three rules that keep a session affordable
 
-A real factory run produced **78.3M tokens in a single session**: 955 turns,
-~63 hours, context climbing 39k → 113k and peaking at 191k, never once dropping.
-The work it did was good. The session shape was the failure. Three rules prevent
-it, and none of them is "be more careful" — each is mechanical, and each exists
-because the softer version was already tried and did not hold.
+Cost is driven by **turn count**; a session that keeps going pays quadratically.
+The rule instead: **hand off when the next step needs something you cannot see**
+- a decision you are not authorised to make, a value only the human has, or a
+large file where reading it is itself the cost. Measure spend with
+`node <bundle>/scripts/measure.mjs` and judge it.
 
-### 1. A mandatory handoff, with no turn count attached
+**1. A mandatory handoff.** On handoff: record where things stand
+(`factory-phase.mjs handoff <bead> --next "<action>"`), leave the next unit of
+work in beads (`bd update <id> --append-notes "next: <action>"`), tell the human
+in one line, stop. Corollary: work out of beads, never out of your own
+scrollback.
 
-Cost is driven by **turn count**, not by how much any single turn says. Turn N
-re-sends every turn before it, so a session that simply keeps going pays
-quadratically. That is why the 78M run's context never came back down.
+**2. Query `bd ready`, never `bd list`** — gated work reads as ready otherwise
+(see [docs/negative-results.md](negative-results.md)).
 
-**There is deliberately no turn number here.** An earlier version said 100, then
-30; both were guesses from a single observed run, and a number like that gets
-treated as a threshold whether or not it is one. A budget set too low causes
-*premature handoff* - a failure mode the factory did not otherwise have - so
-trading a real risk for a precise-looking fiction is a bad trade. The rule is
-instead: **hand off when the next step needs something you cannot see** - a
-decision you are not authorised to make, a value only the human has, a file large
-enough that reading it is itself the cost. Measure your own spend with
-`node <bundle>/scripts/measure.mjs` and judge it. Reaching that point is not a
-suggestion to push on. It is a handoff:
-
-1. Record where things stand — `node <bundle>/scripts/factory-phase.mjs handoff <bead> --next "<action>"`
-   (which writes `bd set-state` and the next action for you).
-2. Leave the next action **in beads, not in your context** — create or update the
-   next unit of work and `bd update <id> --append-notes "next: <action>"`.
-3. Tell the human in one line: what is done, what is next, what is blocked.
-4. Stop.
-
-A fresh session resumes with roughly 20k of context instead of 190k. The budget is
-soft in one direction only: **hand off early at a phase boundary even if you are
-well under it**, because a handoff is where the state becomes durable rather than
-merely remembered. A session that is stuck should also hand off early and say
-what it is stuck on — a stuck session that keeps talking is precisely the failure
-this rule exists to stop.
-
-Corollary: **work out of beads, never out of your own scrollback.** The next
-session has no memory of this one, so anything that matters must already be in
-beads before you stop.
-
-**A claim is the mechanism, so a runaway cannot hide.** When you start work on a
-bead, `bd update <id> --claim` takes a lease on it, and `bd heartbeat <id>`
-keeps that lease alive. Two properties make this worth the two commands:
-
-- A session that dies — crashes, closes its laptop, gets killed — simply stops
-  heartbeating. Its lease goes stale, and `bd reclaim` returns the bead to
-  ready. **The runaway is then detectable without reading a single token
-  count**, which is the whole point: you cannot see cost from inside a session
-  that is happily spending it.
-- `bd heartbeat` on a reclaimed bead *fails*, so a session that has been
-  overtaken learns to stop instead of continuing to write.
-
-So a handoff is a release: `bd unclaim <id>` (or closing the bead) tells the
-next session the work is genuinely free, rather than leaving the previous
-owner holding it until a lease expires.
-
-### 2. Query `bd ready`, never `bd list`
-
-When choosing what to work on next — next task, next feature, what is unblocked —
-use **`bd ready`**.
-
-**`bd list` will hand you gated work.** It does not render the blocked state: a
-gated issue still shows up as ordinary open work. `bd ready` is the only query
-that respects gates. Verified on bd 1.3.0 — create a gate and `bd ready` reports
-*"No ready work found (all issues have blocking dependencies)"*; resolve the gate
-and the work appears. A conductor that selects work with `bd list` will cheerfully
-start a feature whose Gate A is still waiting on a human.
-
-### 3. Subagents return reports, never transcripts
-
-Every `task` (subagent) and `skill` (skill load) output is **protected from
-context pruning** — it is kept, in summary form, for the remainder of the
-session. So the more the factory delegates, the more unprunable content it
-carries, and every bit of it is re-sent on every subsequent turn.
-
-Therefore: **keep a subagent's report, not its output.** The subagent writes up
-findings, changed files, verification evidence and open questions; the
-orchestrator reads that report. Do not ask a subagent to re-emit its transcript,
-and do not go back and re-read a subagent's raw output to double-check it — the
-report *is* the contract, and treating it as a summary to be second-guessed is how
-a cheap delegation turns into permanent context tax.
-
-This is the same lever as delegation itself: a fresh subagent context is ~20k, a
-saturated orchestrator is ~190k, and the difference is paid on every turn after.
-
-### What context pruning does and does not do for you
-
-Automatic pruning on the machine is real and it does help — it removes repeated
-tool results and the oversized payloads of failed builds and failed test runs,
-none of which need anyone's cooperation. But it is a **nudge channel, not a
-budget**: it can only ask the model to compress stale context, and on the 78M run
-it asked five times and was ignored five times. Pruning cannot remove the fact
-that turn N re-sends turn N−1.
-
-So pruning sits **under** these three rules as a safety net, never as a
-substitute for them. If it is not visibly working, say so out loud — never let it
-become the reason a session is allowed to run long.
+**3. Subagents return reports, never transcripts.** Delegation trades
+probabilities; keep only their contract. Full rules in the
+[docs/negative-results.md](negative-results.md) section "Subagent reports".
 
 ## Gates A / B / C — HARD STOPS (spec §5.3)
 
-Gates are genuine stops in the pipeline, not checkboxes. The conductor waits
-for the human; nothing advances past a gate without approval.
+Gates are stops; the conductor waits for the human and nothing advances past a
+gate without approval. **They are enforced in the state layer**: entering phases
+`2`, `3` or `7` through the phase machine creates a real `bd` gate that blocks
+the bead, so `bd ready` reports the feature blocked on every device. Record the
+approval with `factory-phase.mjs gate <bead> <A|B|C> --evidence "…"`. A word in
+a document is not an approval; a resolved gate is.
 
-**They are enforced in the state layer, not just described here.** Entering
-phase `2`, `3` or `7` through the phase machine creates a real `bd` gate
-(`--type human`) that blocks the bead, so `bd ready` reports the feature as
-blocked on every device. Ask the human, then record the approval with
-`factory-phase.mjs gate <bead> <A|B|C> --evidence "…"`, which resolves the `bd`
-gate and stores the reason with it — and only then can the next phase be
-entered. A word written in a document is not an approval; a resolved gate is.
+- **Gate A — spec approved** (between phases 2 and 3): spec doc exists at
+  `docs/superpowers/specs/`; discovery ran (`factory discover`) and was
+  reported; the agent human approves.
+- **Gate B — plan approved** (between phases 3 and 4): the markdown plan plus
+  task breakdown were produced with `writing-plans` and the human approves both
+  plan and execution method (`executing-plans` or `subagent-driven-development`).
+  Before phase 4 begins, the plan graph is compiled: `factory-plan.mjs
+  validate <name>.plan.json`, then `factory-plan.mjs graph <name>.plan.json
+  --issue <bead>` so `bd ready` honours the breakdown.
+- **Gate C — ship approved** (between phases 7 and 8): verification passed,
+  review completed, the branch finished with `finishing-a-development-branch`,
+  and commits are made with `commit-work`.
 
-- **Gate A — spec approved** (between phase 2 and phase 3): the spec doc
-  exists at `docs/superpowers/specs/`, `brainstorming` (spec section) ran and
-  is reported, the technology-discovery sub-step of phase 1 completed and was
-  reported, and the human approves the spec. If skipped skills were
-  reported at the gate, the spec phase re-runs first.
-  **Gate A re-opens if the stack changes.** A spec approved against a stack
-  that discovery later contradicts — a library the human approved is not
-  maintained, the chosen approach is no longer supported, or phase 3 turns
-  up a dependency the spec never mentioned — is no longer the spec that was
-  approved. Re-open A, re-run discovery, and get the change re-approved rather
-  than quietly implementing around it. The cost of a re-opened gate is one
-  conversation; the cost of skipping it is a feature built on a premise the
-  human already rejected.
-- **Gate B — plan approved** (between phase 3 and phase 4): the plan doc and
-  task breakdown were produced with `writing-plans`, the execution method was
-  chosen (B decides between `executing-plans` and
-  `subagent-driven-development`), and the human approves plan + method. After B,
-  apply the plan graph so the approved task breakdown becomes the ledger (see
-  "The plan ledger" below) — before entering phase 4.
-- **Gate C — ship approved** (between phase 7 and phase 8): the ship criteria
-  are met — verification passed (`verification-before-completion`, the
-  evidence gate), review completed (`requesting-code-review` then
-  `receiving-code-review`), the branch was finished with
-  `finishing-a-development-branch`, and the commits were made with
-  `commit-work` — and the human approves the ship.
+**What the human must actually see at a gate** — before asking: the decisions
+(1), what the project commits to (2), what remains open (3). A gate nobody
+read is a gate that was never really there (see
+[docs/negative-results.md](negative-results.md)).
 
-### What the human must actually see at a gate
-
-`--ran` proves the app answered once. `verify-app` makes that claim
-re-checkable. Neither proves **a human looked at it and was satisfied** — so
-without the rule below a gate is satisfied by the machine's evidence while the
-human's attention is spent somewhere else entirely.
-
-**Present the artifact inline, at every gate, before asking for approval:**
-
-1. **What it says** — the decisions themselves, in prose, not a file listing.
-2. **What it commits the project to** — stack, shape and scope, in words the
-   human can disagree with.
-3. **What it leaves open** — every question it did not answer, named out loud.
-
-Then give the path. **Never request approval of a path alone.** An approval
-given without having seen the content is not an approval — record it in the run
-report as what it was, never as "Gate A satisfied".
-
-The state layer cannot enforce any of this; it can only check that a gate was
-resolved. That gap is deliberate and it is yours to close with your attention,
-which is the entire reason a human stands at this gate. A gate nobody read is a
-gate that was never really there.
-
-### Gate C also rules on the running app
-
-Green tests are not evidence the product is finished. They are evidence the
-claims made in code hold, which is a strictly smaller claim. Before Gate C can
-resolve, for anything with a user-facing surface:
-
-1. **Run it, and say how** — report the URL and the exact command.
-2. **Show it** — screenshots of the real thing at real viewport sizes, not a
-   description of what it does.
-3. **Answer two questions in prose first.** These are the questions a checklist
-   cannot hold, which is exactly why they belong here and not in the ledger:
-   - *"If a user opened this for the first time and left inside ten seconds,
-     what did they think it was?"*
-   - *"What would you do differently with two more days, and what would each
-     of those changes be worth to a user?"*
-
-   Neither has a verifiable answer. An agent that answers either with a spec
-   reference, a task count or a test count has not answered it.
-4. **Then ask the human to rule on what they saw.**
-
-**Measured, in the `bio-link` run.** Every gate passed and the suite was green
-— 72 commits, 41 test files — while the app shipped a stock framework palette,
-hand-rolled inputs sitting beside Nuxt UI buttons, and an exception thrown every
-time the landing page embedded the demo. Three of the seven questions the agent
-asked the human were things this file should have answered, one of them *"What
-should this factory run actually produce by Gate C?"* A green run that nobody
-looked at is not a finished product, and no quantity of machine evidence says
-otherwise.
-
-**No implementation files before spec AND plan approval.** Gates A and B are
-hard human gates before any implementation; the plan is shared mutable state
-between human and agent.
+**Gate C also rules on the running app** — run it, report the URL and command,
+show it at real viewports, answer the two provenance questions in prose
+("what did they think it was?", "what would two more days be worth?"), then
+ask the human to rule.
 
 ## The plan ledger — markdown for humans, JSON for beads
 
-A plan has two halves and neither replaces the other. The markdown plan
-(`docs/superpowers/plans/`) is the human record you read in a review. The
-companion `*.plan.json` is the machine graph, and it is the half beads can
-enforce: dependencies, acceptance criteria, `bd lint` completeness.
-
-**The factory never parses the markdown.** Headings get reworded mid-review and
-tables get reformatted, so a markdown parser loses tasks quietly — a plan that
-still reads perfectly to a human while phase 4 finds three of its tasks have
-disappeared.
-
-Once Gate B is resolved, compile the graph before entering phase 4:
-`factory-plan.mjs validate <name>.plan.json`, then
-`factory-plan.mjs graph <name>.plan.json --issue <feature-bead>`. Run the
-script with no arguments for its full surface.
-
-This is what stops beads being decoration. A feature that leaves phase 3 with
-two issues against a 7,476-line plan has a progress nobody can query. With the
-graph applied, `bd ready` answers "what can I work on right now" with
-dependencies honoured, and every task carries its own acceptance criteria.
-
-The compiler refuses two things on your behalf. A field bd would **silently**
-drop — a task whose acceptance criteria quietly vanish is how work ships
-undefined. And a re-apply, because `bd create --graph` is not idempotent: the
-plan is fingerprinted and a second application exits `2` rather than creating a
-second set of issues. The format, every field bd accepts and the ones it drops,
-is in `docs/plan-format.md`.
+The markdown plan (`docs/superpowers/plans/`) is the human record; the
+companion `*.plan.json` is the machine graph beads enforce. The factory never
+parses the markdown: when Gate B is resolved, compile with
+`factory-plan.mjs validate <name>.plan.json` then `factory-plan.mjs graph <name>.plan.json --issue <feature-bead>`,
+so `bd ready` honours the breakdown. (Format: `docs/plan-format.md`.)
 
 ## Hard skills - the non-negotiable ones
 
-Most skills are *optional*: discovery may install them if a feature fits, and
-the run is still correct if none are found. Hard skills are different. They are
-required for the pipeline to work at all, they are declared as data in
-`skills/catalog.yaml`, the installer puts them on the machine, and **the
-selfcheck FAILs when one is missing** — not warns. A hard skill reported as a
-WARN is just a suggestion wearing a warning's clothing, and this bundle has
-already shipped that defect once.
+Most skills are optional; a run is still correct if discovery finds none. Hard
+skills are required for the pipeline: declared as data in
+`skills/catalog.yaml`, the installer puts them on the machine, and the selfcheck
+FAILs when one is missing (exit 0 when all present, 1 otherwise).
 
-`factory-skills.mjs` has four commands — `check` (exit 0 when every mandatory
-skill is on disk, 1 when one is missing or the catalog is unreadable),
-`install`, and `record`. Run it with no arguments for its surface.
+`factory-skills.mjs` has four commands — `check`, `install`, `record`, plus
+no-args surfaces; details in `docs/discovery.md`.
 
-`record` is the one worth remembering: it takes the decision record on stdin
-(`factory-skills.mjs record < record.json`) and **refuses anything
-incomplete**, which is what makes "discovery ran and found nothing" a recorded
-answer rather than a silence.
-
-Two ship today, both from `softaworks/agent-toolkit`:
+Two ship today, both from softaworks/agent-toolkit:
 
 | Skill | Phase | Why it is hard |
 |---|---|---|
-| `commit-work` | **7 ship** | The commit is the artifact a reviewer reads first. Splitting it properly and writing a message that says what changed and why is not something to be improvised at the end of a long session, and a rushed squash-commit hides exactly the logical unit the human is approving at Gate C. It runs beside `finishing-a-development-branch`. |
-| `skill-judge` | discovery | A third-party skill is executable instructions from a stranger. Grading it against a rubric — before it is trusted with a phase — is the only check that is not "it looked fine in the description". |
+| `commit-work` | ship | A reverted squash commit hides the logical unit a reviewer approves. |
+| `skill-judge` | discovery | Third-party skills are executable instructions from strangers; grading them before trust is the only non-description check. |
 
-**Official-origin-first.** When a mandatory skill exists from the vendor who
-owns the thing it teaches, that one is used and a community equivalent is
-rejected with a recorded reason. A maintained upstream skill gets security
-fixes and breaking-change notes; a fork does not. Prefer the boring canonical
-source over the cleverer copy.
-
-**A candidate below grade C is rejected, not installed.** `skill-judge` scores
-120 points across 8 dimensions. Anything under **C (70/120)** does not get
-installed, and the score plus the reason go into the project record. This is a
-floor, not a ranking: a 70 that is *the only* option is still a no, because a
-mediocre instruction set is worse than none — the phase engine already covers
-the competent case, and a weak skill actively misdirects.
-
-The catalog is **data, and it never installs anything by being read**. The
-parser is deliberately strict — it throws on an unknown version, an unknown
-top-level key, a mis-indented entry or anything else it does not understand,
-because a permissive parser turns a typo into a silently empty list, and an
-empty mandatory list means "nothing is required", which is the most dangerous
-possible failure for this file.
-
-Verify from disk, never from an installer's exit code: the CLI printing a
-success banner is not evidence, the `SKILL.md` being on disk is. That is why
-`check` looks for a real `SKILL.md` file rather than trusting a directory name
-(an interrupted install can leave a directory behind and look complete).
+`record` is the one worth remembering: it takes the decision record on stdin and
+refuses anything incomplete — "discovery ran and found nothing" is a recorded
+answer, never silence. Verify from disk (real SKILL.md on disk), never an
+installer's exit code. Details: [docs/negative-results.md](negative-results.md).
 
 ## Brainstorm: vision questions + self-research (spec §5.4) + self-research (spec §5.4)
 
@@ -668,109 +248,32 @@ and kept with the design brief for the spec phase.
 
 ## Phase state machine rules (spec §5.4)
 
-- Phase transitions are **monotonic forward** (with `debug` as an in-implement
-  loop).
-- Each transition verifies the prerequisite gate (A before 3, B before 4, C
-  before 8).
-- The conductor reads phase state from beads (`bd show <id>`) at every entry,
-  so a restarted session or a different device resumes where it left off.
+- Transitions are **monotonic forward** (debug is the in-implement loop);
+  each phase verifies the prerequisites (A before 3, B before 4, C before 8).
+- Entry reads phase state from beads at every entry, so a restarted session
+  or a different device resumes where it left off.
 
 ## Code navigation (no MCP required)
 
-This bundle used to require `graft`, a code-graph MCP server, and to carry a
-whole freshness protocol for it. **That requirement is gone.** The bundle
-declares no MCP server, and nothing in the factory calls one.
-
-It was removed because three independent instruments measured it as
-generated-once-never-read, not because it was judged useless in principle:
-
-- **Tool-call history**: across 40,467 recorded calls there was **one** graft
-  call ever, and it was in a project the factory never touched.
-- **Telemetry**: 16 events, all from a single day, with a first run 25 days
-  before and nothing in between.
-- **On-disk output**: a 1,437-card index built and last touched two seconds
-  apart, then untouched for 17 days.
-
-It was genuinely good at one thing — "where is X used?", measured at 98%
-smaller than reading the files whole — and worse than `ls` at the other
-("what files exist here?": 556 bytes versus 2,773, and the gap widens as a
-repo grows). Its CLI output also carried a prompt injection telling the user
-to report tokens saved.
-
-What replaces it is `grep`, `glob` and `read`. In the tool-call history
-`glob` was 5,955 of 7,156 navigation calls (83%) — the plain tools were
-already doing this work.
-
-The one lesson worth keeping is not about graft: **a bundle that depends on
-nothing must touch nothing.** An empty requirement list once meant *disable
-every configured server*, which silently cost one run its verification path.
-That is now an explicit rule, and the bundle's own MCP suite asserts it (that
-suite lives in the factory repository and is not part of this install).
-
-The full measurement is in `docs/negative-results.md`. Read the **graft**
-entry there with its correction open: this repo previously recorded that
-"the MCP is broken" and that was **our own broken test**, not a third-party
-defect - graft resolves its repository from the session's working directory,
-so every call we made had been issued from a directory holding no graph. The
-removal measurement was sound throughout; only the reason was wrong. If you
-find a *reason* here that this doc has not been re-checked against, assume it
-is stale and go measure it - that is the rule this section exists to teach.
+This doc routes; the code's own modules are the answer. The bundle carries no
+graft index and no MCP dependency; `grep`, `glob` and `read` (or the language's
+index) are the navigation tools. The full measurement of the old instrument and
+why it was removed is in [docs/negative-results.md](negative-results.md) (see
+"Code navigation (no MCP required)" below), including the one entry that moved
+with it.
 
 ## Command reference (spec §5.4, §7, §8)
 
-| Command | What it does |
-|---|---|
-| `factory <feature>` | New feature: creates the beads issue, records `phase:brainstorm`, invokes `brainstorming`. |
-| `factory phase <name>` | Advance phase, enforce the skill gate, record the transition in beads. |
-| `factory discover` | Run the skill-discovery flow (below); idempotent. |
-| `measure` (`scripts/measure.mjs`) | Token spend for a project, split into **orchestrator** vs **subagent** sessions, reported as input and cache-read separately (a cache read is roughly a tenth of a fresh input token, so collapsing the two makes a session that re-read the same context look like one that consumed it). The split exists because the cost problem lives on the orchestrator side, not the subagent side. This is a **report, not a gate** — it blocks nothing. The turn budget is a judgement you make with this number in front of you. |
-| `factory mcp audit` | Inventory the configured MCP servers: owner (bundle or the user), live or disabled, whether each needs a credential, and the context it injects into every model call. Read-only; it never edits the config. |
-| `factory mcp enable` / `disable <server>` | Connect or disconnect one server **for this project only**, writing `mcp.servers.<server>.disabled` into the project's `opencode.json`. Never the global config: a global toggle changes every project on the machine, including ones somebody is working in right now. Refuses when there is no project (no `.git` above the working directory). The write is verified by re-reading the file and rolled back if it cannot be, and the output reports `liveReload: "unverified"` rather than claiming the change is live or demanding a restart, because a toggle that appears to work and silently does not is worse than none. |
-| `factory mcp handshake` | Spawn a local stdio server and speak the real protocol, proving it answers rather than assuming it. See `docs/mcp-judging.md`. |
-| `factory onboard` | Per-repo one-time check: `bd init` if no beads DB, then `factory discover`. Auto-offered when the conductor starts in a repo without state. |
-| `factory selfcheck` | Environment health (from the spec's verification section): plugins load, `bd version` resolves, and every mandatory phase skill is discoverable. The bundle depends on no MCP server, so there is no server handshake to grade. `--tokens` adds a per-skill description-size + total loaded-footprint report — the **required** flag for keeping the loaded footprint visible, plus the current orchestrator session's own input and cache-read spend (the number the turn-budget decision in "Cost discipline" is actually made against) (spec §8). |
+The one-line router list lives here: `factory <feature>`, `factory phase`,
+`factory discover`, `factory mcp audit` / `enable` / `disable` / `handshake`,
+`factory onboard`, `factory selfcheck --tokens` (loads: it prints the loaded
+footprint per skill description size; spec §8). Details, per command, are
+elsewhere in this doc or in the specs (§5.2/§5.4); the phase machine (`status`,
+`next`) is its own section above.
 
-## Skill discovery — `factory discover` (spec §7)
+## Skill discovery — `factory discover`
 
-Pull-only, on demand, deduped, and locked. Idempotent.
-
-1. **Detect context** — read the repo stack directly: `package.json` /
-   `go.mod` / top import lines for language/ecosystem terms. Feature-request
-   keywords at `factory <feature>` time are always considered.
-2. **Find candidates** — query skills.sh for matching skills. Fallback: the
-   `find-skills` skill or web search; the same ranking applies.
-3. **Rank** — 1. best keyword fit for the *actual* work, 2. official/verified
-   origin, 3. most-used/most-liked.
-4. **Install project-locally** — `.agents/skills/<name>/`. Project-installed
-   skills are **committed to the repository** (they travel with the project).
-5. **Record the choice** —
-   `bd update <id> --append-notes "skills: <name>@<version> <source>"`.
-6. **Dedupe** — skip if already in global or project skills, below the
-   relevance threshold, or not expected to be invoked; `skills-lock.json` is
-   the dedupe authority and enables deterministic reinstalls. **Every run —
-   including one that installs nothing — must end by writing
-   `.agents/skills/skills.lock.json`** with an `installed` array and a `run`
-   record (`keywords`, `sources`, `degraded`, `degraded_reason`). Write it with
-   `factory-skills.mjs record`, which refuses an incomplete record and stamps
-   `run.at` itself; see `docs/discovery.md` for the schema.
-7. **Fail loudly** — if EVERY candidate source fails (skills.sh CLI absent,
-   API/site unreachable, search unavailable, catalog empty), the run is
-   `DISCOVERY_DEGRADED`: record it in the lockfile (`degraded: true` + reason)
-   and as `bd update <id> --append-notes "skills: DISCOVERY_DEGRADED <reason>"`.
-   Never default to "no project skill needed" as a silent fallback — that
-   verdict is only valid after a non-degraded run.
-
-Install modes:
-
-- **Full** — high-fit skill copied into the project; OpenCode lazily loads it
-  only when invoked (its SKILL.md is never in the context until then).
-- **Reference stub** — a ~5-line `SKILL.md` ("for `<topic>` load the full skill
-  at `<source>`"); content fetched only when the topic actually comes up.
-
-Skill relationships live in the data, not an engine: a flat `catalog.yaml`
-(topics → ranked candidates) maps discovery and beads tracks tasks. Neither
-stores skill relationships.
-
+On demand, idempotent, deduped, locked. Project-installed skills are committed to the repository. Record the choice with `bd update <id> --append-notes "skills: <name>@<version> <source>"`; `factory-skills.mjs record` writes the machine graph after Gate B; if every candidate source fails (no skills.sh, API/site unreachable, catalog empty) the run is `DISCOVERY_DEGRADED` — recorded, never a silent default.
 ## Context economy (spec §8) — everything is pull, never push
 
 - `catalog.yaml` and `skills.lock.json` are **never in the conversation

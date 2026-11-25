@@ -667,3 +667,44 @@ It had been right for hours. I wrote that the install was current at the bundle
 HEAD, flagged it as worth confirming rather than assuming, and then did not
 confirm it. The warning was not ignored; it was outranked by an assumption I
 had not bothered to check.
+
+## Subagent reports — transcripts vs reports (M6 moved from the conductor)
+
+Every `task`/`skill` output is context; keep only the contract. The subagent
+writes findings, changed files, verification evidence and open questions; the
+orchestrator reads the report. Do not re-emit transcripts, and do not
+re-read raw output to double-check — the report is the contract.
+
+## A bundle that depends on nothing must touch nothing
+
+One silent failure of the empty MCP declaration: it once meant "disable every
+configured server"; the explicit `--allow`-less form is the rule, and the
+bundle suite asserts it (`factory-mcp.mjs` provenance, scope, audit).
+
+## What the human must actually see at a gate
+
+Present: what it says, what it commits the project to, what remains open.
+Never ask for approval of a path alone; the machine only proves the gate was
+resolved, never that someone read it.
+
+## Gate C also rules on the running app
+
+Green tests are evidence claims hold. Before Gate C: run it (report URL and
+command), show it at real viewports, answer the provenance questions in prose,
+then let the human rule on what they saw.
+
+## Cost-discipline handoff detail (M6 moved from the conductor)
+
+Hand off when the next step needs something you cannot see: an
+authorised decision, a value only the human has, or a file worth its own read.
+Measure with `node <bundle>/scripts/measure.mjs`. Handoffs are releases
+(`bd unclaim <id>`) — the next session reads durable state, not memory.
+
+## Command reference — details beyond the router-level list
+
+The router list is in the conductor; per-command notes: `measure`
+(orchestrator vs subagent reports — the cost decision lives there), `mcp
+enable/disable` (write + rollback verified by re-reading), `mcp handshake`
+(prove-answers, `docs/mcp-judging.md`), `factory phase`/`gate`
+(spec §5.2 item 5), `plan-format.md` (the JSON graph), and `bd ready`
+vs `bd list` (blocked work reads as ready).
