@@ -461,7 +461,9 @@ try {
     mkdirSync(join(bundleDir, "scripts"), { recursive: true });
     mkdirSync(join(bundleDir, "skills", "factory"), { recursive: true });
     const bundleHas = (rel, from = rel) =>
-      writeFileSync(join(bundleDir, rel), readFileSync(join(dir, from.replace("/", "\\"))));
+      // Read with forward slashes: readFileSync accepts them on Windows and
+      // POSIX, while backslash-in-the-path is only correct on Windows.
+      writeFileSync(join(bundleDir, rel), readFileSync(join(dir, from)));
     // The installed copy and the bundle copy of SKILL.md live at different paths:
     // <skill>/SKILL.md here, skills/<skill>/SKILL.md in the bundle. The manifest
     // records the bundle one, so the fixture has to write it where the manifest

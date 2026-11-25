@@ -102,6 +102,8 @@ jobs:
           fetch-depth: 0
       - name: node present
         run: node --version && bash --version | head -1
+      - name: git identity (fresh runners have none; the phase suite signs tags)
+        run: git config --global user.name "opencode-factory install CI" && git config --global user.email "install-ci@localhost"
       - name: install bd
         # beads.dev/install.sh fails TLS from GitHub-hosted runners. The
         # release tarball on GitHub is the pinned, checksum-verified source.
@@ -130,6 +132,8 @@ jobs:
           fetch-depth: 0
       - name: node present
         run: node --version
+      - name: git identity (fresh runners have none; the phase suite signs tags)
+        run: git config --global user.name "opencode-factory install CI" && git config --global user.email "install-ci@localhost"
       - name: install bd
         # Chocolatey has no `bd` package and winget is a best-effort fallback,
         # so a fresh runner cannot install bd through the installer. The
