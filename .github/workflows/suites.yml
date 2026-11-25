@@ -119,6 +119,8 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: real install
         run: bash ./install.sh
+      - name: seed the shipped testapp database (fresh runners ship no orders.db)
+        run: node testapps/orderboard-api/scripts/start.js --migrate-only && node testapps/orderboard-api/scripts/seed.js
       - name: selfcheck
         run: |
           mkdir -p out
@@ -156,6 +158,8 @@ jobs:
           Add-Content -Path $env:GITHUB_PATH -Value $bin
       - name: real install
         run: powershell -ExecutionPolicy Bypass -File .\install.ps1
+      - name: seed the shipped testapp database (fresh runners ship no orders.db)
+        run: node testapps\orderboard-api\scripts\start.js --migrate-only && node testapps\orderboard-api\scripts\seed.js
       - name: selfcheck
         run: |
           New-Item -ItemType Directory -Force out | Out-Null
