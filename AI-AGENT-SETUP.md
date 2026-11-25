@@ -15,7 +15,7 @@ line tool (beads), the OpenCode plugins, and the
 ## How to use
 
 1. Clone this repo on the new machine:
-   `git clone https://github.com/masoodhumza60/opencode-factory && cd opencode-factory`
+   `git clone https://github.com/masoodhumza60/opencode-factory && cd opencode-factory && git checkout v1`
 2. Open a new OpenCode session in that folder.
 3. Paste the prompt below.
 4. After the agent finishes, **start a fresh OpenCode session** — the `/factory`

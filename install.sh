@@ -401,7 +401,8 @@ run_selfcheck() {
 }
 
 # --- main ---------------------------------------------------------------------------
-say "opencode-factory install (bundle: $bundle)"
+ver=$(node -p 'JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).version' "$bundle/package.json" 2>/dev/null || echo unknown)
+say "opencode-factory install (bundle: $bundle) version $ver"
 ensure_dirs
 if [ "$SKIP_BD" = 0 ]; then install_bd; fi
 install_plugins

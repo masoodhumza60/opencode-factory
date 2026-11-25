@@ -92,3 +92,75 @@ jobs:
           git config --global user.email "ci@users.noreply.github.com"
       - name: phase machine
         run: node scripts/test-factory-phase.mjs
+
+  install-ubuntu:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: node present
+        run: node --version && bash --version | head -1
+      - name: git identity (fresh runners have none; the phase suite signs tags)
+        run: git config --global user.name "opencode-factory install CI" && git config --global user.email "install-ci@localhost"
+      - name: install bd
+        # beads.dev/install.sh fails TLS from GitHub-hosted runners. The
+        # release tarball on GitHub is the pinned, checksum-verified source.
+        # bd is installed BEFORE ./install.sh because the installer fast-paths
+        # past an already-working bd; this exercises everything else the
+        # installer is responsible for in a clean runner.
+        run: |
+          curl -fsSL -o beads_1.3.4_linux_amd64.tar.gz https://github.com/gastownhall/beads/releases/download/v1.3.4/beads_1.3.4_linux_amd64.tar.gz
+          curl -fsSL -o checksums.txt https://github.com/gastownhall/beads/releases/download/v1.3.4/checksums.txt
+          grep beads_1.3.4_linux_amd64.tar.gz checksums.txt | sha256sum -c -
+          mkdir -p "$HOME/.local/bin"
+          tar -xzf beads_1.3.4_linux_amd64.tar.gz -C "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: real install
+        run: bash ./install.sh
+      - name: seed the shipped testapp database (fresh runners ship no orders.db)
+        run: node testapps/orderboard-api/scripts/start.js --migrate-only && node testapps/orderboard-api/scripts/seed.js
+      - name: selfcheck
+        run: |
+          mkdir -p out
+          node scripts/factory-selfcheck.mjs --tokens | tee out/selfcheck-ubuntu.txt && ! grep -E '^FAIL' out/selfcheck-ubuntu.txt
+  install-windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: node present
+        run: node --version
+      - name: git identity (fresh runners have none; the phase suite signs tags)
+        run: git config --global user.name "opencode-factory install CI" && git config --global user.email "install-ci@localhost"
+      - name: install bd
+        # Chocolatey has no `bd` package and winget is a best-effort fallback,
+        # so a fresh runner cannot install bd through the installer. The
+        # GitHub release zip is the pinned, checksum-verified source. bd is
+        # installed BEFORE .\install.ps1 because the installer fast-paths past
+        # an already-working bd; this exercises everything else the installer
+        # is responsible for.
+        run: |
+          $ErrorActionPreference = 'Stop'
+          curl.exe -fsSL -o beads_1.3.4_windows_amd64.zip https://github.com/gastownhall/beads/releases/download/v1.3.4/beads_1.3.4_windows_amd64.zip
+          curl.exe -fsSL -o checksums.txt https://github.com/gastownhall/beads/releases/download/v1.3.4/checksums.txt
+          $expected = $null
+          (Get-Content checksums.txt) | ForEach-Object { if ($_ -match 'beads_1\.3\.4_windows_amd64\.zip') { $expected = ($_ -split '\s+')[0].ToLower() } }
+          if (-not $expected) { throw 'checksums.txt has no line for beads_1.3.4_windows_amd64.zip' }
+          $actual = (Get-FileHash beads_1.3.4_windows_amd64.zip -Algorithm SHA256).Hash.ToLower()
+          if ($actual -ne $expected) { throw "checksum mismatch: expected $expected, got $actual" }
+          $bin = "$env:USERPROFILE\.local\bin"
+          New-Item -ItemType Directory -Force -Path $bin | Out-Null
+          Expand-Archive -Path beads_1.3.4_windows_amd64.zip -DestinationPath $bin -Force
+          Add-Content -Path $env:GITHUB_PATH -Value $bin
+      - name: real install
+        run: powershell -ExecutionPolicy Bypass -File .\install.ps1
+      - name: seed the shipped testapp database (fresh runners ship no orders.db)
+        run: node testapps\orderboard-api\scripts\start.js --migrate-only && node testapps\orderboard-api\scripts\seed.js
+      - name: selfcheck
+        run: |
+          New-Item -ItemType Directory -Force out | Out-Null
+          node scripts\factory-selfcheck.mjs --tokens | Tee-Object -FilePath out\selfcheck-windows.txt; if ((Get-Content out\selfcheck-windows.txt -Raw) -match '(?m)^FAIL') { exit 1 }
